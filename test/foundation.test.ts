@@ -87,6 +87,14 @@ describe("registry", () => {
       });
     }
   });
+  test("inaccessible or looping registered paths do not block distinct healthy vaults", () => {
+    for (const mode of ["EACCES", "ELOOP"]) {
+      const { home, vault } = fixture();
+      const result = Bun.spawnSync([process.execPath, "test/fixtures/registry-fault.ts", home, vault, mode], { stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout.toString())).toEqual({ added: "personal", duplicateRefused: true, unhealthy: true });
+    }
+  });
   test("existing writer lock refuses without modifying config or lock", () => {
     const { home, spec } = fixture();
     mkdirSync(home); const lock = join(home, "config.lock"); writeFileSync(lock, "another writer");

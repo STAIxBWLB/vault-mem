@@ -53,7 +53,7 @@ export function addVault(home: string, value: unknown): VaultSpec {
       if (v.path === vault.path) return true;
       try { return realpathSync(v.path) === vault.path; }
       catch (error) {
-        if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+        if (["ENOENT", "ENOTDIR", "EACCES", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
         throw error;
       }
     })) throw new Error("vault.path: already registered");
