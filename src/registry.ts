@@ -37,7 +37,14 @@ export function addVault(home: string, value: unknown): VaultSpec {
   if (notes !== join(vault.path, "notes")) throw new Error("vault.path: notes must not be a symlink");
   return mutate(home, config => {
     if (config.vaults.some(v => v.id === vault.id)) throw new Error("vault.id: already registered");
-    if (config.vaults.some(v => realpathSync(v.path) === vault.path)) throw new Error("vault.path: already registered");
+    if (config.vaults.some(v => {
+      if (v.path === vault.path) return true;
+      try { return realpathSync(v.path) === vault.path; }
+      catch (error) {
+        if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+        throw error;
+      }
+    })) throw new Error("vault.path: already registered");
     config.vaults.push(vault);
     return vault;
   });

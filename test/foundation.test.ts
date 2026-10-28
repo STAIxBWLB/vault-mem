@@ -12,7 +12,7 @@ function fixture() {
   const dir = root(), home = join(dir, "state"), vault = join(dir, "vault");
   mkdirSync(join(vault, "notes"), { recursive: true });
   writeFileSync(join(vault, "notes", "keep.md"), "# Keep\n");
-  return { dir, home, vault, spec: { id: "personal", path: vault, kind: "personal", write: "mcp" } };
+  return { dir, home, vault, spec: { id: "personal", path: vault, kind: "personal" as const, write: "mcp" as const } };
 }
 afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe("configuration", () => {
@@ -68,6 +68,13 @@ describe("registry", () => {
     rmSync(join(vault, "notes"), { recursive: true });
     symlinkSync(dir, join(vault, "notes"));
     expect(() => addVault(home, { ...spec, id: "other" })).toThrow("symlink");
+  });
+  test("an offline registered vault does not block a separate registration", () => {
+    const first = fixture(), second = fixture();
+    addVault(first.home, first.spec);
+    rmSync(first.vault, { recursive: true });
+    expect(addVault(first.home, { ...second.spec, id: "second" }).id).toBe("second");
+    expect(loadRegistry(first.home).vaults).toHaveLength(2);
   });
   test("existing writer lock refuses without modifying config or lock", () => {
     const { home, spec } = fixture();
