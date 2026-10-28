@@ -1,0 +1,15 @@
+{
+  "name": "@staix/vault-mem",
+  "version": "0.1.0",
+  "description": "Validated Obsidian-compatible knowledge vaults for agents and people",
+  "license": "MIT",
+  "type": "module",
+  "repository": { "type": "git", "url": "git+https://github.com/STAIxBWLB/vault-mem.git" },
+  "engines": { "bun": ">=1.4.2" },
+  "dependencies": { "@staix/agent-mem": "0.11.0" },
+  "devDependencies": { "@types/bun": "^1.3.0", "typescript": "^5.8.0" },
+  "exports": { ".": "./src/index.ts" },
+  "bin": { "vmem": "bin/vmem.js" },
+  "files": ["src/", "bin/", "README.md", "LICENSE"],
+  "scripts": { "check": "bun x tsc --noEmit && bun scripts/check-boundary.ts && bun test && npm pack --dry-run" }
+}
