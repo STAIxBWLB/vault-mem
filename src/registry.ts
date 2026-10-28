@@ -12,21 +12,33 @@ function mutate<T>(home: string, update: (config: VmemConfig) => T): T {
   const lock = join(home, "config.lock");
   const lockFd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
   let temporary: string | undefined;
+  let failed = false;
   try {
     const config = loadRegistry(home), result = update(config);
     parseConfig(config);
     const text = JSON.stringify(config, null, 2) + "\n";
     if (Buffer.byteLength(text) > MAX_CONFIG_BYTES) throw new Error("config: serialized config exceeds 64 KiB");
-    temporary = join(home, `.config-${randomUUID()}.tmp`);
-    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    const candidate = join(home, `.config-${randomUUID()}.tmp`);
+    const fd = openSync(candidate, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    temporary = candidate;
     try { writeFileSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(temporary, join(home, CONFIG_FILE));
     temporary = undefined;
     return result;
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
-    if (temporary) unlinkSync(temporary);
-    closeSync(lockFd);
-    unlinkSync(lock);
+    // Each cleanup is independent: a temp cleanup error must not strand our lock.
+    const cleanupErrors: unknown[] = [];
+    for (const cleanup of [
+      () => { if (temporary) unlinkSync(temporary); },
+      () => closeSync(lockFd),
+      () => unlinkSync(lock),
+    ]) {
+      try { cleanup(); } catch (error) { cleanupErrors.push(error); }
+    }
+    if (!failed && cleanupErrors.length) throw cleanupErrors[0];
   }
 }
 export function addVault(home: string, value: unknown): VaultSpec {

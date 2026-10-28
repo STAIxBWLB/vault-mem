@@ -76,6 +76,17 @@ describe("registry", () => {
     expect(addVault(first.home, { ...second.spec, id: "second" }).id).toBe("second");
     expect(loadRegistry(first.home).vaults).toHaveLength(2);
   });
+  test("temp creation and cleanup failures preserve the error and release the lock", () => {
+    for (const mode of ["open", "cleanup"]) {
+      const { home, vault } = fixture();
+      const result = Bun.spawnSync([process.execPath, "test/fixtures/registry-fault.ts", home, vault, mode], { stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout.toString())).toEqual({
+        message: mode === "open" ? "injected temp open failure" : "injected write failure",
+        released: true, unchanged: true, recovered: true,
+      });
+    }
+  });
   test("existing writer lock refuses without modifying config or lock", () => {
     const { home, spec } = fixture();
     mkdirSync(home); const lock = join(home, "config.lock"); writeFileSync(lock, "another writer");
