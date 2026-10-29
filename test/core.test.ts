@@ -141,3 +141,27 @@ test("CLI reads refresh cache, bound arguments and never edit notes/config", () 
   expect(readFileSync(join(home, "vmem.config.json"))).toEqual(config);
   expect(readdirSync(vault)).toEqual(["notes"]);
 });
+
+test("anchor indexes are built once for thousands of heading and block links", () => {
+  let reads = 0;
+  const body = "# Heading\nA paragraph ^block\n" + "[[#Heading]] [[#^block]]\n".repeat(4000);
+  const note = { path: "anchors.md", title: "Anchors", aliases: [], get body() { reads++; return body; } };
+  const links = resolveLinks([note]);
+  expect(links).toHaveLength(8000);
+  expect(links.every(link => link.resolved === "anchors.md" && link.reason === null)).toBe(true);
+  // One anchor-index pass and one outgoing-link pass, independent of link count.
+  expect(reads).toBe(2);
+});
+
+test("ATX closing hashes require whitespace and preserve literal heading hashes", () => {
+  const body = "# C#\n## F# ###\n### Hash#   \n# Spaced ###\n[[#C#]] [[#C]] [[#F#]] [[#F]] [[#Hash#]] [[#Hash]] [[#Spaced]]\n";
+  const links = resolveLinks([{ path: "hashes.md", title: "Hashes", aliases: [], body }]);
+  expect(links.map(link => link.reason)).toEqual([null, "missing-heading", null, "missing-heading", null, "missing-heading", null]);
+});
+
+test("multiline inline code hides wiki links with exact delimiter matching and stable lines", () => {
+  expect(extractLinks("`code\n[[hidden]]`\n[[visible]]").map(link => [link.target, link.line])).toEqual([["visible", 3]]);
+  expect(extractLinks("before ``code\r\n` [[hidden]]\r\n`` [[visible]]\r\n[[after]]").map(link => [link.target, link.line])).toEqual([["visible", 3], ["after", 4]]);
+  expect(extractLinks("unmatched ` [[literal]]\n[[also-literal]]").map(link => link.target)).toEqual(["literal", "also-literal"]);
+  expect(extractLinks("\\` [[literal]]\n`hidden [[inside]]`\n[[visible]]").map(link => [link.target, link.line])).toEqual([["literal", 1], ["visible", 3]]);
+});
