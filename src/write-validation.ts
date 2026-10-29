@@ -120,8 +120,9 @@ function noteKey(value: string): string {
 }
 function names(notes: Map<string, ParsedNote>): Map<string, Set<ParsedNote>> {
   const result = new Map<string, Set<ParsedNote>>();
-  for (const note of notes.values()) for (const name of [note.path, ...note.aliases]) {
-    const key = noteKey(name), candidates = result.get(key) ?? new Set<ParsedNote>();
+  // Path-only, matching Obsidian, lint L01 and resolveLinks.
+  for (const note of notes.values()) {
+    const key = noteKey(note.path), candidates = result.get(key) ?? new Set<ParsedNote>();
     candidates.add(note); result.set(key, candidates);
   }
   return result;

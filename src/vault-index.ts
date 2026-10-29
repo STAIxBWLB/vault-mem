@@ -175,12 +175,8 @@ export class VaultIndex {
       const live = new Set<string>(), present = new Set<string>();
       let changed = 0, analysisBytes = 0;
       const skipped: string[] = [], touched = new Set<string>(), keys = new Set<string>();
-      // Link resolution of other notes can change only through names a touched note had or now has.
-      const touch = (path: string, names?: string[]) => {
-        touched.add(path); keys.add(noteKey(path));
-        const row = this.db.query<{ aliases: string }, [string]>("SELECT aliases FROM notes WHERE path=?").get(path);
-        for (const alias of [...(row ? JSON.parse(row.aliases) as string[] : []), ...(names ?? [])]) keys.add(noteKey(alias));
-      };
+      // Links resolve by path only, so other notes re-resolve only when they target a touched path.
+      const touch = (path: string) => { touched.add(path); keys.add(noteKey(path)); };
       for (const entry of readdirSync(notesDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
         if (!entry.name.endsWith(".md") || !entry.isFile()) continue;
         const path = entry.name, file = join(notesDir, path), before = lstatSync(file);
@@ -219,7 +215,7 @@ export class VaultIndex {
           live.delete(path); skipped.push(path); continue;
         }
         const { data, body } = document;
-        touch(path, aliases(data.aliases ?? data.alias));
+        touch(path);
         this.db.query("INSERT OR REPLACE INTO notes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(path, hash, stamp,
           text(data.title) || path.slice(0, -3), text(data.description), body, text(data.type), text(data.domain), JSON.stringify(aliases(data.aliases ?? data.alias)), buffer.toString("utf8"));
         this.db.query("DELETE FROM fts WHERE path=?").run(path);

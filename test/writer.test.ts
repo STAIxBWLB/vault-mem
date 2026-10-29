@@ -83,9 +83,9 @@ test("link relations and supersession use the same pipeline with both files upda
   expect(readFileSync(join(f.notes, "next.md"), "utf8")).toContain("Supersedes [[old]]");
   expect(f.request({ op: "supersede", old: "old", next: "old" }).ok).toBe(false);
 });
-test("move previews, rejects drift and rewrites wiki/alias/heading/block/embed and frontmatter", () => {
+test("move previews, rejects drift and rewrites wiki/heading/block/embed and frontmatter, leaving alias-only links", () => {
   const f = fixture(), ref = join(f.notes, "references.md");
-  writeFileSync(ref, note("References", "[[./old]] [[old|label]] [[old#Anchor]] ![[Prior Alias#^block]]\n`[[old]]`\n```md\n[[old]]\n```", { source_ref: "[[Prior Alias]]" }));
+  writeFileSync(ref, note("References", "[[./old]] [[old|label]] [[old#Anchor]] ![[old#^block]] [[Prior Alias]]\n`[[old]]`\n```md\n[[old]]\n```", { source_ref: "[[old]]" }));
   const before = disk(f.root), op: WriteOp = { op: "move", from: "old", to: "renamed" };
   const preview = f.request(op); expect(preview.ok).toBe(true); expect(preview.preview).toBe(true); expect(disk(f.root)).toEqual(before);
   expect(f.request(op, { confirm: true }).issues.some(issue => issue.code === "V09")).toBe(true);
@@ -94,12 +94,21 @@ test("move previews, rejects drift and rewrites wiki/alias/heading/block/embed a
   const fresh = f.request(op); const moved = f.request(op, { confirm: true, fingerprint: fresh.fingerprint }); expect(moved.ok).toBe(true); expect(moved.indexUpdated).toBe(true);
   expect(existsSync(join(f.notes, "old.md"))).toBe(false); expect(existsSync(join(f.notes, "renamed.md"))).toBe(true);
   const text = readFileSync(ref, "utf8");
-  expect(text).toContain("[[renamed]] [[renamed|label]] [[renamed#Anchor]] ![[renamed#^block]]");
+  // Links resolve by path only, so an alias-only link was never resolved and is not rewritten.
+  expect(text).toContain("[[renamed]] [[renamed|label]] [[renamed#Anchor]] ![[renamed#^block]] [[Prior Alias]]");
   expect(text).toContain("`[[old]]`\n```md\n[[old]]\n```");
   expect(parseFrontmatter(text).data.source_ref).toBe("[[renamed]]");
-  const links = JSON.parse(run(["links", "test", "references"], f.env).text) as { target: string; resolved: string }[];
+  const links = JSON.parse(run(["links", "test", "references"], f.env).text) as { target: string; resolved: string | null }[];
   expect(links.filter(link => link.target === "renamed").every(link => link.resolved === "renamed.md")).toBe(true);
-  expect(links.map(link => link.resolved)).toEqual(["renamed.md", "renamed.md", "renamed.md", "renamed.md", "research.md"]);
+  expect(links.map(link => link.resolved)).toEqual(["renamed.md", "renamed.md", "renamed.md", "renamed.md", null, "research.md"]);
+});
+test("an alias-only link is refused by the writer, unresolved in links and dead in lint", () => {
+  const f = fixture(), body = "Cites [[Prior Alias]].";
+  const refused = f.request({ op: "create", path: "cites-alias", frontmatter: { title: "Cites Alias", description: "Synthetic alias citation.", type: "insight", domain: "research", topics: ["[[research]]"] }, body: `# Cites Alias\n\n${body}\n\n## Topics\n\n- [[research]]\n` });
+  expect(refused.ok).toBe(false); expect(refused.issues.some(issue => issue.code === "V03" && issue.severity === "error")).toBe(true);
+  writeFileSync(join(f.notes, "cites-alias.md"), note("Cites Alias", body));
+  expect(JSON.parse(run(["links", "test", "cites-alias"], f.env).text)[0]).toMatchObject({ target: "Prior Alias", resolved: null, reason: "missing-note" });
+  expect(JSON.parse(run(["lint", "test", "--json"], f.env).text).findings.L01.some((finding: string) => finding.includes("[[Prior Alias]]"))).toBe(true);
 });
 test("delete/tidy preview-confirm and report path/schema rules", () => {
   const f = fixture(); writeFileSync(join(f.notes, "lonely.md"), note("Lonely", "An isolated finding."));
@@ -242,11 +251,11 @@ test("move/tidy malformed YAML refusals identify the offending note without its 
     expect(JSON.stringify(result)).not.toContain("PRIVATE_SYNTHETIC");
   }
 });
-test("move preserves explicit labels while bare aliases intentionally display the new stem", () => {
-  const f = fixture(); writeFileSync(join(f.notes, "reference.md"), note("Reference", "[[Prior Alias]] [[old|Kept Label]]"));
+test("move preserves explicit labels and leaves alias-only links untouched", () => {
+  const f = fixture(); writeFileSync(join(f.notes, "reference.md"), note("Reference", "[[old]] [[old|Kept Label]] [[Prior Alias]]"));
   const op: WriteOp = { op: "move", from: "old", to: "renamed" }, preview = f.request(op);
   expect(f.request(op, { confirm: true, fingerprint: preview.fingerprint }).ok).toBe(true);
-  expect(readFileSync(join(f.notes, "reference.md"), "utf8")).toContain("[[renamed]] [[renamed|Kept Label]]");
+  expect(readFileSync(join(f.notes, "reference.md"), "utf8")).toContain("[[renamed]] [[renamed|Kept Label]] [[Prior Alias]]");
 });
 test("writer read allocation follows file size plus growth probe, and size drift still refuses", () => {
   const f = fixture();

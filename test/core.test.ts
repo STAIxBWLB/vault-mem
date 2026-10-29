@@ -24,12 +24,16 @@ test("wiki, aliases, headings, blocks, embeds, NFC and case; fences skipped", ()
   ];
   const links = resolveLinks(notes);
   expect(links).toHaveLength(6);
-  expect(links.slice(0, 3).map(v => v.resolved)).toEqual(["café.md", "café.md", "map.md"]);
+  // Path-only resolution, like Obsidian: the alias "Coffee" is not a link target.
+  expect(links.slice(0, 3).map(v => v.resolved)).toEqual(["café.md", null, "map.md"]);
+  expect(links[1]!.reason).toBe("missing-note");
   expect(links[0]!.label).toBe("label"); expect(links[1]!.embed).toBe(true);
   expect(links.slice(3).map(v => v.reason)).toEqual(["missing-heading", "missing-block", "missing-note"]);
   expect(extractLinks("   ```md\n[[x]]\n  ````\n[[y]]")).toHaveLength(1);
   expect(extractLinks("```js\n[[x]]")).toHaveLength(0);
-  expect(resolveLinks([...notes, { path: "dup.md", title: "Dup", aliases: ["Coffee"], body: "[[Coffee]]" }]).at(-1)!.reason).toBe("ambiguous-note");
+  // Paths that differ only by case or Unicode normalization are ambiguous; an alias never competes.
+  expect(resolveLinks([...notes, { path: "CAFÉ.md", title: "Dup", aliases: [], body: "[[café]]" }]).at(-1)!.reason).toBe("ambiguous-note");
+  expect(resolveLinks([...notes, { path: "dup.md", title: "Dup", aliases: ["café"], body: "[[café]]" }]).at(-1)!.resolved).toBe("café.md");
 });
 function snapshot(index: VaultIndex) {
   const db = new Database(index.file, { readonly: true });
@@ -139,7 +143,8 @@ test("CLI reads refresh cache, bound arguments and never edit notes/config", () 
   expect(JSON.parse(run(["search", "test", "synthetic", "--type", "moc", "--limit", "1"], env).text)[0].path).toBe("projects.md");
   writeFileSync(join(notes, "created.md"), "# Created\nnewword [[Atlas]]");
   expect(JSON.parse(run(["search", "test", "newword"], env).text)[0].path).toBe("created.md");
-  expect(JSON.parse(run(["links", "test", "created"], env).text)[0].resolved).toBe("projects.md");
+  // "Atlas" is only an alias of projects.md; links resolve by path, like Obsidian and lint L01.
+  expect(JSON.parse(run(["links", "test", "created"], env).text)[0].resolved).toBeNull();
   expect(JSON.parse(run(["show", "test", "created", "--max-bytes", "3"], env).text).content).toBe("# C");
   for (const args of [["search", "test"], ["rebuild", "test", "extra"], ["show", "test", "created", "--limit", "1"], ["links", "test", "created", "--limit", "501"], ["search", "test", "x", "--limit", "1e2"], ["show", "test", "x", "--json", "--json"], ["rebuild", "missing"]]) expect(() => run(args, env)).toThrow();
   expect(readFileSync(join(home, "vmem.config.json"))).toEqual(config);
