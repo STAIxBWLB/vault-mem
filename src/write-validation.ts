@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import type { VaultSpec, VmemConfig } from "./config.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { normalizeTarget, proseLines, resolveLinks, type LinkNote, type ResolvedLink } from "./links.ts";
+import { extractLinks, normalizeTarget, proseLines, resolveLinks, type LinkNote, type ResolvedLink } from "./links.ts";
 import { isDenied } from "./platform.ts";
 import type { PlannedChange, ValidationContext, WriteIssue } from "./write-types.ts";
 
@@ -85,8 +85,11 @@ function target(value: unknown, index: Map<string, Set<ParsedNote>>): ParsedNote
   const candidates = index.get(noteKey(wiki[1]!.trim()));
   return candidates?.size === 1 ? candidates.values().next().value : undefined;
 }
-function corpus(notes: Map<string, ParsedNote>): LinkNote[] {
-  return [...notes.values()].map(note => ({ ...note, body: `${note.body}\n${WIKI_FIELDS.flatMap(key => strings(note.data[key])).join("\n")}` }));
+function references(notes: Map<string, ParsedNote>): ResolvedLink[] {
+  const metadata = new Map([...notes].map(([path, note]) => [path,
+    WIKI_FIELDS.flatMap(key => strings(note.data[key]).flatMap(value => extractLinks(value))),
+  ]));
+  return resolveLinks([...notes.values()], metadata);
 }
 function linkSignature(link: ResolvedLink, source: string = link.source): string {
   return JSON.stringify([source, noteKey(link.target), link.heading ? normalizeTarget(link.heading) : null,
@@ -98,14 +101,14 @@ function changedBrokenLinks(oldNotes: Map<string, ParsedNote>, newNotes: Map<str
   const from = move ? `notes/${move.from.replace(/^notes\//, "").replace(/\.md$/, "")}.md` : "";
   const to = move ? `notes/${move.to.replace(/^notes\//, "").replace(/\.md$/, "")}.md` : "";
   const oldNames = move ? names(oldNotes) : undefined;
-  for (const link of resolveLinks(corpus(oldNotes))) if (link.reason) {
+  for (const link of references(oldNotes)) if (link.reason) {
     const candidates = oldNames?.get(noteKey(link.target));
     const renamedTarget = candidates?.size === 1 && [...candidates][0]!.path === from;
     const signature = linkSignature(renamedTarget ? { ...link, target: to } : link, link.source === from ? to : link.source);
     oldCounts.set(signature, (oldCounts.get(signature) ?? 0) + 1);
   }
   const issues: WriteIssue[] = [];
-  for (const link of resolveLinks(corpus(newNotes))) if (link.reason) {
+  for (const link of references(newNotes)) if (link.reason) {
     const signature = linkSignature(link), count = oldCounts.get(signature) ?? 0;
     if (count) oldCounts.set(signature, count - 1);
     issues.push(issue("V03", count ? "pre-existing unresolved link retained" : "new unresolved link is refused", count ? "warning" : "error", link.source));
@@ -177,7 +180,7 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
     issues.push(...schema(note), ...topicPlacement(note));
     const source = note.data.source;
     if (typeof source === "string" && isDenied(source.replaceAll("\\", "/"), context.config.denyPaths)) issues.push(issue("V06", "source is denied by the path policy", "error", change.path));
-    if (change.before === null && context.operation.op !== "check") {
+    if (change.before === null && context.operation.op === "create") {
       const stem = noteKey(change.path);
       if (context.notes.has(change.path) || [...newNotes.values()].some(other => other.path !== note.path && (noteKey(other.path) === stem || (note.h1 && other.h1 && fold(note.h1) === fold(other.h1))))) {
         issues.push(issue("V08", "a note with the same stem or normalized H1 already exists", "error", change.path));

@@ -148,3 +148,25 @@ describe("writer validation path and screening", () => {
     expect(screenContent("ordinary", { ...vault, pii: "deny" }, { ...config, piiPatterns: ["["] }).some(value => value.code === "V07")).toBe(true);
   });
 });
+
+test("frontmatter references resolve separately from unclosed body fences and against real target anchors", () => {
+  const target = "---\ntype: moc\ndescription: An independently anchored target.\n---\n# Target\n## Detail\nA paragraph ^block\n";
+  for (const suffix of ["```md\n[[hidden]]", "~~~\n[[hidden]]", "`unfinished\n[[hidden]]"]) {
+    for (const [field, value] of [
+      ["supersedes", "[[target]]"], ["superseded_by", "[[target]]"], ["project", "[[target#Detail]]"],
+      ["source_ref", "![[target#^block]]"], ["topics", ["[[target]]"]],
+    ] as const) {
+      const referrer = note({ [field]: value }, `# Referrer\n${suffix}`);
+      const ctx = context(new Map([["notes/research.md", moc], ["notes/target.md", target], ["notes/referrer.md", referrer]]), { op: "delete", path: "target" });
+      expect(errors([], ctx).filter(value => value.code === "V03")).toEqual([]);
+      expect(errors([{ path: "notes/target.md", before: target, after: null }], ctx).some(value => value.code === "V03" && value.path === "notes/referrer.md")).toBe(true);
+    }
+  }
+});
+test("moving legacy notes with an existing normalized H1 duplicate does not introduce a create duplicate", () => {
+  const old = note({}, "# Shared claim\n## Topics\n- [[research]]\n"), duplicate = note({}, "# ＳＨＡＲＥＤ claim\n## Topics\n- [[research]]\n");
+  const ctx = context(new Map([["notes/research.md", moc], ["notes/old.md", old], ["notes/legacy.md", duplicate]]), { op: "move", from: "old", to: "renamed" });
+  const changes = [{ path: "notes/old.md", before: old, after: null }, { path: "notes/renamed.md", before: null, after: old }];
+  expect(errors(changes, ctx)).toEqual([]);
+  expect(errors([create(old, "notes/third.md")], { ...ctx, operation: { op: "create", path: "third", frontmatter: {} } }).some(value => value.code === "V08")).toBe(true);
+});

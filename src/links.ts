@@ -109,7 +109,8 @@ function anchorIndex(body: string): { headings: Set<string>; blocks: Set<string>
   }
   return { headings, blocks };
 }
-export function resolveLinks(notes: LinkNote[]): ResolvedLink[] {
+/** Additional outgoing links share the real target anchor index but never the body code state. */
+export function resolveLinks(notes: LinkNote[], additionalLinks?: ReadonlyMap<string, readonly Link[]>): ResolvedLink[] {
   const names = new Map<string, Set<LinkNote>>();
   const anchors = new Map<LinkNote, ReturnType<typeof anchorIndex>>();
   for (const note of notes) {
@@ -120,7 +121,7 @@ export function resolveLinks(notes: LinkNote[]): ResolvedLink[] {
     }
   }
   const result: ResolvedLink[] = [];
-  for (const note of notes) for (const link of extractLinks(note.body)) {
+  for (const note of notes) for (const link of [...extractLinks(note.body), ...(additionalLinks?.get(note.path) ?? [])]) {
     const candidates = link.target ? [...(names.get(noteKey(link.target)) ?? [])] : [note];
     const target = candidates.length === 1 ? candidates[0]! : undefined;
     let reason: ResolvedLink["reason"] = candidates.length > 1 ? "ambiguous-note" : target ? null : "missing-note";

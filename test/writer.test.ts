@@ -252,3 +252,22 @@ test("writer read allocation follows file size plus growth probe, and size drift
     expect(readFileSync(join(fresh.notes, "old.md"), "utf8")).toContain("Original text."); expect(existsSync(join(fresh.vault, MUTATION_LOCK))).toBe(false);
   }
 });
+
+test("delete preview and confirm cannot break metadata references hidden behind an unclosed body fence", () => {
+  const f = fixture(), referrer = join(f.notes, "referrer.md"), beforeTarget = readFileSync(join(f.notes, "old.md"), "utf8");
+  const source = note("Referrer", "```md\nUnclosed code fence.", { supersedes: "[[old]]" }); writeFileSync(referrer, source);
+  const op: WriteOp = { op: "delete", path: "old" }, preview = f.request(op);
+  expect(preview.ok).toBe(false); expect(preview.issues.some(issue => issue.code === "V03" && issue.path === "notes/referrer.md")).toBe(true);
+  const confirm = f.request(op, { confirm: true, fingerprint: preview.fingerprint });
+  expect(confirm.ok).toBe(false); expect(confirm.issues.some(issue => issue.code === "V03" && issue.severity === "error")).toBe(true);
+  expect(readFileSync(join(f.notes, "old.md"), "utf8")).toBe(beforeTarget); expect(readFileSync(referrer, "utf8")).toBe(source);
+});
+test("move preview-confirm accepts legacy duplicate H1 while create still refuses a new duplicate", () => {
+  const f = fixture(), legacy = note("Old Finding", "A distinct legacy note with the same H1."); writeFileSync(join(f.notes, "legacy.md"), legacy);
+  const op: WriteOp = { op: "move", from: "old", to: "renamed" }, preview = f.request(op);
+  expect(preview.ok).toBe(true); expect(preview.issues.some(issue => issue.code === "V08")).toBe(false);
+  const confirmed = f.request(op, { confirm: true, fingerprint: preview.fingerprint }); expect(confirmed.ok).toBe(true);
+  expect(existsSync(join(f.notes, "old.md"))).toBe(false); expect(existsSync(join(f.notes, "renamed.md"))).toBe(true); expect(readFileSync(join(f.notes, "legacy.md"), "utf8")).toBe(legacy);
+  const creation = f.request({ op: "create", path: "third", frontmatter: { title: "Old Finding", description: "A supporting duplicate detection fixture.", type: "insight", domain: "research", topics: ["[[research]]"] } });
+  expect(creation.ok).toBe(false); expect(creation.issues.some(issue => issue.code === "V08")).toBe(true);
+});
