@@ -25,3 +25,11 @@ export type { CompletionDefinition } from "./commands-table.ts";
 export { promoteFromAmem, listPromotionCandidates, draftNote, stemFor, logProjectFor } from "./promote.ts";
 export type { PromoteRequest, PromoteResult, PromoteMetadata, SeamFactory } from "./promote.ts";
 export type { AmemSeam, AmemCandidate, AmemOptions } from "./amem/seam.ts";
+
+
+export { lintVault } from "./vault-lint.ts";
+export { buildGraph, graphNeighbors, graphReport } from "./vault-graph.ts";
+export type { VaultGraph, GraphNeighborhood } from "./vault-graph.ts";
+export type { AnalysisSnapshot, LintCode, LintReport } from "./analysis-types.ts";
+export { writeAnalysisReports } from "./analysis-reports.ts";
+export type { AnalysisRequest } from "./analysis-reports.ts";

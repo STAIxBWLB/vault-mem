@@ -1,0 +1,35 @@
+{
+  "L01": [
+    "`notes/a.md`: `[[fenced-missing]]` (body) → 대상 노트 없음",
+    "`notes/a.md`: `[[missing-note]]` (body) → 대상 노트 없음",
+    "`notes/b.md`: `[[absent]]` (project) → 대상 노트 없음",
+    "`notes/no-fm.md`: `[[ghost]]` (body) → 대상 노트 없음"
+  ],
+  "L02": [
+    "`notes/b.md`: `confidence: True` 허용값 아님 (experimental | likely | proven)",
+    "`notes/b.md`: `status: done` 허용값 아님 (active | archived | superseded) (status는 노트 생애주기이지 사업 진행 상태가 아님 — 작업 상태는 본문에)",
+    "`notes/c.md`: `confidence: 8` 허용값 아님 (experimental | likely | proven)",
+    "`notes/c.md`: `status: 1e3` 허용값 아님 (active | archived | superseded) (status는 노트 생애주기이지 사업 진행 상태가 아님 — 작업 상태는 본문에)",
+    "`notes/c.md`: `topics` 없음/빈 배열",
+    "`notes/index.md`: `type: moc` 노트는 `description` 필수",
+    "`notes/invalid.md`: frontmatter 없음/파싱 실패",
+    "`notes/no-fm.md`: frontmatter 없음/파싱 실패"
+  ],
+  "L03": [
+    "`notes/c.md`: in-link 0, topics 0"
+  ],
+  "L09": [
+    "`log:4`: 구조 위반 (`YYYY-MM-DD HH:MM  TYPE  ...` 아님): `bad structure`",
+    "`log:5`: TYPE `BOGUS` 미등록 (정규 12종·정규화표 모두 없음)"
+  ],
+  "L10": [
+    "`notes/b.md`: `project: [[absent]]` dead wiki-link",
+    "`notes/c.md`: `project: nope` registry id 아님"
+  ],
+  "L11": [
+    "`graph-report-260101.md`: 230일 경과 (> 7) — `/vault-graph build` 재실행 권장"
+  ],
+  "L12": [
+    "island community (2 notes): `d`, `e` — `/vault-connect` 필요"
+  ]
+}

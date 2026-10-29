@@ -1,3 +1,4 @@
+import { runAnalysisCommand } from "./analysis-commands.ts";
 import { runLogCommand } from "./log-commands.ts";
 import { isWriteCommand, runWriteCommand } from "./write-commands.ts";
 import { isReadCommand, runReadCommand } from "./read-commands.ts";
@@ -34,6 +35,7 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
     if (args.length !== 2) throw new Error("completion: requires bash, zsh or fish");
     return { text: completionScript(args[1]!).trimEnd(), code: 0 };
   }
+  if (args[0] === "lint" || args[0] === "graph") return runAnalysisCommand(args[0],args.slice(1),resolveHome(env).home,env);
   if (args[0] === "log") return runLogCommand(args.slice(1), resolveHome(env).home, env);
   if (isWriteCommand(args[0]!)) return runWriteCommand(args[0]!, args.slice(1), resolveHome(env).home, env);
   if (isReadCommand(args[0]!)) return runReadCommand(args[0]!, args.slice(1), resolveHome(env).home);

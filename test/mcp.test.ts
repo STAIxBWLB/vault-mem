@@ -52,8 +52,9 @@ test("tools/list: vault enum is the registered ids, default is first personal, e
     }
   }
   expect(tools.filter(t => t.annotations.destructiveHint).map(t => t.name)).toEqual(["vmem_move", "vmem_delete", "vmem_promote_from_amem"]);
-  // No graph or org-promotion tool is advertised before its provider exists.
-  expect(tools.some(t => /graph|^vmem_promote$/.test(t.name))).toBe(false);
+  // Graph and agent-mem providers are implemented; org promotion lands separately.
+  expect(tools.filter(t => /graph/.test(t.name)).map(t => t.name)).toEqual(["vmem_graph_build", "vmem_graph_neighbors"]);
+  expect(tools.some(t => t.name === "vmem_promote")).toBe(false);
 });
 
 test("reads go through the index with defaults and bounds", async () => {

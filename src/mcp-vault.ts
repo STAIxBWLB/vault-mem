@@ -1,3 +1,7 @@
+import { analysisInput } from "./analysis-input.ts";
+import { buildGraph, graphNeighbors } from "./vault-graph.ts";
+import { lintVault } from "./vault-lint.ts";
+import { writeAnalysisReports } from "./analysis-reports.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import type { VaultSpec } from "./config.ts";
 import { loadRegistry, registryStatus } from "./registry.ts";
@@ -21,9 +25,9 @@ const note = string(1024), sha = { type: "string", minLength: 64, maxLength: 64 
 const logEvent = object({ type: { type: "string", enum: LOG_TYPES }, project: string(64), source: string(512), dest: string(512), note: string(500) }, ["type", "project", "source", "note"]);
 const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLength: 4096, maxItems: 64, items: { type: ["string", "number", "boolean"], maxLength: 1024 } };
 
-/** Tool names for the implemented Part 1.4 read, write and log tools. Graph and promotion tools land with their providers. */
+/** Tool names for implemented read, write, log and analysis providers. Org promotion lands separately. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem"] as const;
+  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors"] as const;
 
 /** Tool definitions for a fixed vault set: `vault` is an enum of the registered ids. */
 export function vaultTools(ids: readonly string[]): McpTool[] {
@@ -50,6 +54,9 @@ export function vaultTools(ids: readonly string[]): McpTool[] {
     tool("vmem_delete", "Two-step delete: without confirm returns preview (or refusal), backlinks and fingerprint; then confirm=true with that fingerprint.", object({ vault, path: note, ...twoStep }, ["path"]), "confirm"),
     tool("vmem_promote_from_amem", "Two-step promotion of one durable agent-mem entry (id from amem_vault_candidates) into a vault note: without confirm returns the full note text, possible duplicates and fingerprint; confirm=true with that fingerprint creates the note, logs LEARN and records the agent-mem vault link. linkTo links an existing note instead.",
       object({ vault, id: { type: "string", minLength: 32, maxLength: 36 }, stem: string(120), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), linkTo: note, project: string(400), ...twoStep }, ["id"]), "confirm"),
+    tool("vmem_lint", "Lint a private derived snapshot; write=true writes a screened report.", object({ vault, write: { type: "boolean" }, dryRun: { type: "boolean" } }), "write"),
+    tool("vmem_graph_build", "Build a deterministic graph and screened reports; dryRun changes nothing.", object({ vault, dryRun: { type: "boolean" } }), "write"),
+    tool("vmem_graph_neighbors", "Read a bounded graph neighborhood.", object({ vault, path: note, hops: integer(1,2), limit: integer(1,500) }, ["path"])),
   ];
 }
 type Issue = { code: string; severity: "error"; message: string };
@@ -93,6 +100,9 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
         ...(Array.isArray(args.topics) ? { topics: args.topics as string[] } : {}) }, { env, ...(str(args.project) ? { project: str(args.project) } : {}) });
       return result.ok ? result : { ...result, refused: true };
     },
+    vmem_lint: args => args.write === true ? writeAnalysisReports(home,{vault:pick(args).id,kind:"lint",channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env) : lintVault(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),
+    vmem_graph_build: args => writeAnalysisReports(home,{vault:pick(args).id,kind:"graph",channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env),
+    vmem_graph_neighbors: args => graphNeighbors(buildGraph(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),str(args.path)!, (args.hops as 1|2|undefined) ?? 1, (args.limit as number|undefined) ?? 50),
     vmem_status: () => ({ defaultVault: defaultVault ?? null, vaults: registryStatus(home).filter(v => ids.includes(v.id)) }),
     vmem_search: args => read(args, index => ({ hits: index.search(str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }) })),
     vmem_read: args => read(args, index => { const r = index.show(str(args.path)!, (args.maxBytes as number | undefined) ?? 16384); return document(r.path, r.content, r.hash, r.truncated); }),
