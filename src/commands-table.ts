@@ -9,5 +9,16 @@ export const COMMANDS = [
   { name: "vaults list", usage: "vaults list [--json]", mutates: false },
   { name: "vaults add", usage: "vaults add <id> <absolute-path> --kind personal|org --write mcp|cli|none [--pii allow|deny] [--remote URL] [--registry PATH] [--json]", mutates: true },
   { name: "vaults remove", usage: "vaults remove <id> [--confirm] [--json]", mutates: "confirm" },
+  { name: "new", usage: "new <vault> <stem> --type TYPE --domain DOMAIN --topics a,b --description TEXT [--title TEXT] [--body file|-] [--extra JSON] [--dry-run]", mutates: true },
+  { name: "patch", usage: "patch <vault> <note> --old TEXT --new TEXT [--expected-sha SHA] [--dry-run]", mutates: true },
+  { name: "append", usage: "append <vault> <note> --section SECTION --markdown TEXT [--dry-run]", mutates: true },
+  { name: "frontmatter", usage: "frontmatter <vault> <note> [--set JSON] [--unset key,key] [--dry-run]", mutates: true },
+  { name: "link", usage: "link <vault> <from> <to> --relation R [--context TEXT] [--one-way] [--dry-run]", mutates: true },
+  { name: "supersede", usage: "supersede <vault> <old> <next> [--dry-run]", mutates: true },
+  { name: "move", usage: "move <vault> <from> <to> [--confirm --fingerprint SHA]", mutates: "confirm" },
+  { name: "delete", usage: "delete <vault> <note> [--confirm --fingerprint SHA]", mutates: "confirm" },
+  { name: "tidy", usage: "tidy <vault> --connections [--confirm --fingerprint SHA]", mutates: "confirm" },
+  { name: "report", usage: "report <vault> <reports/path|ops/path> --body file|- [--dry-run]", mutates: true },
+  { name: "check", usage: "check <vault> <file|-> [--path stem]", mutates: false },
 ] as const;
 export function help(): string { return "vmem - vault registry and indexed reads\n\n" + COMMANDS.map(c => `  vmem ${c.usage}`).join("\n") + "\n\n  vmem --help | --version\n"; }

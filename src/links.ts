@@ -76,6 +76,25 @@ export function extractLinks(body: string): Link[] {
   }
   return links;
 }
+/** Rewrite only visible wiki-link note targets; retain aliases, anchors, embeds and code verbatim. */
+export function rewriteLinkTargets(body: string, replace: (target: string) => string | undefined): string {
+  const masked = maskInlineCode(proseLines(body).join("\n")).split("\n");
+  const lines = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  return lines.map((raw, index) => {
+    let output = raw;
+    const matches = [...(masked[index] ?? "").matchAll(/(!?)\[\[([^\]\n]+)\]\]/g)];
+    for (const match of matches.reverse()) {
+      if (escapedAt(masked[index]!, match.index!)) continue;
+      const address = match[2]!.split("|")[0]!, hash = address.indexOf("#");
+      const target = hash < 0 ? address : address.slice(0, hash);
+      const next = replace(target.trim());
+      if (next === undefined) continue;
+      const start = match.index! + match[1]!.length + 2;
+      output = output.slice(0, start) + next + output.slice(start + target.length);
+    }
+    return output;
+  }).join("");
+}
 function noteKey(value: string): string {
   return normalizeTarget(value.replace(/^\.\//, "").replace(/^notes\//i, "").replace(/\.md$/i, ""));
 }
