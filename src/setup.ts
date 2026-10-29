@@ -109,9 +109,13 @@ function putEntry(host: HostFile, text: string | null, value: unknown, rawToml?:
     }
     if (spans.length) {
       // Remove every owned table (last first so indexes stay valid), then insert at the first one.
-      for (const [start, stop] of [...spans].reverse()) lines.splice(start, stop - start);
+      // A later removed table also takes the blank separator just above it; blank runs elsewhere are untouched.
+      for (const [start, stop] of [...spans].reverse()) {
+        let from = start;
+        if (start !== spans[0]![0]) while (from > 0 && lines[from - 1]!.trim() === "") from--;
+        lines.splice(from, stop - from);
+      }
       lines.splice(spans[0]![0], 0, ...block);
-      for (let i = lines.length - 1; i > 0; i--) if (lines[i]!.trim() === "" && lines[i - 1]!.trim() === "") lines.splice(i, 1);
     } else if (block.length) {
       while (lines.length && lines[lines.length - 1] === "") lines.pop();
       if (lines.length) lines.push("");

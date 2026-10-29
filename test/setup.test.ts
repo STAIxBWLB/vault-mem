@@ -175,3 +175,22 @@ test("TOML subtables of the entry are collected even when separated by another t
   const restored = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
   expect(restored).toEqual(Bun.TOML.parse(source));
 });
+
+test("blank-line runs outside the vmem tables survive apply and undo byte for byte", () => {
+  const f = fixture(), file = f.files.codex!;
+  mkdirSync(join(file, ".."), { recursive: true });
+  for (const source of [
+    `model = "gpt"\n\n\n[profiles.a]\nx = 1\n\n\n\n[profiles.b]\ny = 2\n`,
+    `model = "gpt"\n\n\n[mcp_servers.vmem]\ncommand = "/old"\nargs = []\n\n\n[other]\nkeep = 1\n\n[mcp_servers.vmem.env]\nA = "1"\n\n\n[tail]\nz = 3\n`,
+  ]) {
+    writeFileSync(file, source);
+    f.setup("codex", "apply");
+    const applied = readFileSync(file, "utf8");
+    expect(applied).toContain(`model = "gpt"\n\n\n`);
+    if (source.includes("[profiles.a]")) expect(applied.startsWith(source)).toBe(true);
+    else expect(applied).toContain(`[other]\nkeep = 1\n\n\n[tail]`);
+    f.setup("codex", "undo");
+    if (source.includes("[profiles.a]")) expect(readFileSync(file, "utf8")).toBe(source);
+    else expect(Bun.TOML.parse(readFileSync(file, "utf8"))).toEqual(Bun.TOML.parse(source));
+  }
+});
