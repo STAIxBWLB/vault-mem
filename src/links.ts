@@ -4,6 +4,7 @@ export interface Link {
   heading: string | null;
   block: string | null;
   embed: boolean;
+  /** One-based line in the body, excluding frontmatter delimiters and YAML. */
   line: number;
 }
 export interface LinkNote { path: string; title: string; aliases: string[]; body: string }

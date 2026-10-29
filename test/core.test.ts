@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -9,7 +9,7 @@ import { addVault } from "../src/registry.ts";
 import { run } from "../src/cli.ts";
 const roots: string[] = [];
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "vmem-core-")); roots.push(root);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-core-"))); roots.push(root);
   const vault = join(root, "vault"), home = join(root, "home"), notes = join(vault, "notes");
   mkdirSync(notes, { recursive: true });
   for (const file of readdirSync("test/fixtures/core")) copyFileSync(join("test/fixtures/core", file), join(notes, file));
@@ -78,6 +78,8 @@ test("unicode FTS5, BM25 relevance, filters, bounded search/show/links", () => {
     expect(index.search("synthetic", { domain: "teaching" }).map(n => n.path)).toEqual(["method.md"]);
     expect(index.search("synthetic", { limit: 1 })).toHaveLength(1);
     expect(index.show("COFFEE", 21).truncated).toBe(true);
+    expect(index.show("CAFÉ").path).toBe("café.md");
+    expect(index.show("notes/CAFÉ.md").path).toBe("café.md");
     expect(Buffer.byteLength(index.show("COFFEE", 21).content)).toBeLessThanOrEqual(21);
     expect(index.links("Atlas", 2)).toHaveLength(2);
     expect(index.links("projects").find(link => link.target === "Missing Note")!.reason).toBe("missing-note");
@@ -88,6 +90,11 @@ test("unicode FTS5, BM25 relevance, filters, bounded search/show/links", () => {
     expect(() => index.search(" ")).toThrow(); expect(() => index.search("a".repeat(1025))).toThrow();
     expect(index.search('" OR *')).toEqual([]);
     expect(() => index.show("../outside")).toThrow();
+    writeFileSync(join(notes, "collision.md"), "---\naliases: [Coffee]\n---\n[[café]]\n");
+    index.scan();
+    expect(() => index.show("Coffee")).toThrow("ambiguous");
+    expect(() => index.links("Coffee")).toThrow("ambiguous");
+    expect(index.show("café").path).toBe("café.md");
     writeFileSync(join(notes, "huge.md"), "x".repeat(MAX_NOTE_BYTES + 1));
     expect(() => index.scan()).toThrow("exceeds");
     expect(index.search("coffee")[0]!.path).toBe("café.md");

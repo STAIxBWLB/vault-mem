@@ -147,20 +147,33 @@ export class VaultIndex {
       WHERE fts MATCH ? AND (? IS NULL OR n.type=?) AND (? IS NULL OR n.domain=?) ORDER BY score,n.path LIMIT ?`).all(terms, options.type ?? null, options.type ?? null, options.domain ?? null, options.domain ?? null, limit)
       .map(row => ({ ...row, title: boundedText(row.title, 512).content, snippet: boundedText(row.snippet, 1024).content, type: boundedText(row.type, 256).content, domain: boundedText(row.domain, 256).content }));
   }
-  private find(target: string): StoredNote {
+  private find(target: string): string {
     if (!target || Buffer.byteLength(target) > 1024) throw new Error("note: expected target <=1024 bytes");
     const key = normalizeTarget(target.replace(/^notes\//i, "").replace(/\.md$/i, ""));
-    const notes = this.stored().filter(note => normalizeTarget(note.path.slice(0, -3)) === key || note.aliases.some(alias => normalizeTarget(alias) === key));
+    // Stream only lookup metadata, never source/body; retain at most two candidates.
+    // SQLite's lower() does not implement NFC/Unicode case folding, so match in JS.
+    const notes: { path: string }[] = [];
+    const lookup = this.db.prepare<{ path: string; aliases: string }, []>("SELECT path,aliases FROM notes");
+    try {
+      for (const note of lookup.iterate()) {
+        if (normalizeTarget(note.path.slice(0, -3)) === key || (JSON.parse(note.aliases) as string[]).some(alias => normalizeTarget(alias) === key)) notes.push({ path: note.path });
+        if (notes.length === 2) break;
+      }
+    } finally { lookup.finalize(); }
     if (notes.length !== 1) throw new Error(notes.length ? "note: ambiguous target" : "note: unknown target");
-    return notes[0]!;
+    return notes[0]!.path;
   }
   show(target: string, maxBytes = 16384): { path: string; hash: string; content: string; truncated: boolean } {
     if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_READ_BYTES) throw new Error(`max-bytes: expected integer 1..${MAX_READ_BYTES}`);
-    const note = this.find(target);
-    return { path: note.path, hash: note.hash, ...boundedText(note.source, maxBytes) };
+    const path = this.find(target);
+    const note = this.db.query<{ hash: string; prefix: Uint8Array; bytes: number }, [number, string]>(
+      "SELECT hash,substr(CAST(source AS BLOB),1,?) AS prefix,length(CAST(source AS BLOB)) AS bytes FROM notes WHERE path=?"
+    ).get(maxBytes + 4, path)!;
+    const bounded = boundedText(Buffer.from(note.prefix).toString("utf8"), maxBytes);
+    return { path, hash: note.hash, content: bounded.content, truncated: note.bytes > maxBytes };
   }
   links(target: string, limit = 50): ResolvedLink[] {
-    const path = this.find(target).path;
+    const path = this.find(target);
     return this.db.query<{ data: string }, [string, number]>("SELECT data FROM links WHERE source=? ORDER BY ordinal LIMIT ?").all(path, resultLimit(limit)).map(row => JSON.parse(row.data) as ResolvedLink).map(link => ({ ...link, target: boundedText(link.target, 1024).content, label: link.label === null ? null : boundedText(link.label, 1024).content, heading: link.heading === null ? null : boundedText(link.heading, 1024).content, block: link.block === null ? null : boundedText(link.block, 1024).content }));
   }
 }
