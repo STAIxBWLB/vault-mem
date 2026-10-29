@@ -76,6 +76,8 @@ jobs:
       # check includes strict tsc, boundaries, tests, package dry-run and clean-install CLI/MCP smoke.
       # Smoke installs the staged npm artifact, including the exact Linux artifact later published.
       - run: bun run check
+      - name: Require fresh candidate release evidence
+        run: bun run release:verify
         env:
           VMEM_SMOKE_TARBALL: ${{ runner.temp }}/release-package/package.tgz
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

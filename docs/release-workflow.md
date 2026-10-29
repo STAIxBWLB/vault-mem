@@ -9,6 +9,7 @@ The workflow is authored for readiness only. This change creates no release tag,
 - Both systems run frozen Bun installation and npm package dry-run, then stage an npm tarball with a manifest containing package identity, tag, commit and SHA-256.
 - Both run `bun run check` with `VMEM_SMOKE_TARBALL` pointing at that staged npm artifact. The check includes `bun scripts/package-smoke.ts`, which installs that exact tarball in a clean directory and verifies CLI/MCP behavior. No second smoke invocation is added.
 - Linux uploads its validated tarball and manifest only after its check passes. The publish job waits for both validation jobs and consumes that same Linux artifact without rebuilding it.
+- Tag validation additionally runs `bun run release:verify` for runtime/method and external-parity evidence freshness and the declared synthetic thresholds. Ordinary PR tests check evidence shape and sample consistency, so routine code edits do not require rerunning the benchmark.
 - Before publication, the job checks artifact hash, embedded package identity and tag/commit binding. Stable versions use the `latest` npm dist-tag; prerelease versions use `next`.
 
 ## Deployment prerequisites

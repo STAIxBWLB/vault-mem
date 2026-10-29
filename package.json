@@ -35,6 +35,7 @@
     "check": "bun x tsc --noEmit && bun scripts/check-boundary.ts && bun test && bun pm pack --dry-run && bun scripts/package-smoke.ts",
     "smoke:package": "bun scripts/package-smoke.ts",
     "bench:release": "bun scripts/release-performance.ts",
-    "parity:release": "bun scripts/release-parity.ts"
+    "parity:release": "bun scripts/release-parity.ts",
+    "release:verify": "bun scripts/release-evidence.ts"
   }
 }
