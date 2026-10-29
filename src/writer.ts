@@ -78,7 +78,10 @@ function checkExpected(request: WriteRequest, notes: Map<string, string>): void 
   const expected = { ...request.expectedShas };
   if ("expectedSha" in request.operation && request.operation.expectedSha !== undefined && "path" in request.operation) expected[notePath(request.operation.path)] = request.operation.expectedSha;
   for (const [path, hash] of Object.entries(expected)) {
-    const canonical = notePath(path), source = notes.get(canonical);
+    // Reports verify an existing snapshot, including legacy names diagnosed by L13.
+    // Exact membership is safe here: snapshot() contains only existing flat regular notes.
+    // All note mutation targets still go through the stricter notePath naming policy.
+    const canonical = request.operation.op === "report" && notes.has(path) ? path : notePath(path), source = notes.get(canonical);
     if (typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash) || source === undefined || sha256(source) !== hash) refuse("V09", "expected SHA mismatch", canonical);
   }
 }

@@ -10,6 +10,7 @@ import { buildGraph } from "../src/vault-graph.ts";
 import graphFixture from "./fixtures/analysis/vault-graph.json";
 import { writeAnalysisReports } from "../src/analysis-reports.ts";
 import { run } from "../src/cli.ts";
+import { applyWrite, sha256 } from "../src/writer.ts";
 import { createVaultMcp } from "../src/mcp-vault.ts";
 import { analysisCorpus } from "./fixtures/analysis-corpus.ts";
 const roots:string[]=[];
@@ -138,4 +139,22 @@ test("report snapshot binding refuses registry rebind and preserves concurrent t
     expect(disk(other.root)).toEqual(before);expect(readFileSync(join(f.vault,"reports","vault-graph.json"),"utf8")).toBe(artifact);
     if(mode==="trend")expect(readFileSync(trend,"utf8")).toContain("Concurrent build history preserved.");
   }
+});
+
+test("legacy filenames are diagnosed by L13 without blocking report writes or bypassing drift checks",()=>{
+  const f=fixture(),file=join(f.vault,"notes","Bad_Name.md");
+  const source="---\ntype: moc\ndescription: Synthetic legacy filename.\n---\n# Legacy filename\n";
+  writeFileSync(file,source);
+  const lint=writeAnalysisReports(f.home,{vault:"test",kind:"lint",today:f.snapshot.today});
+  expect(lint.ok).toBe(true);expect(lint.applied).toBe(true);
+  expect(readFileSync(join(f.vault,"reports","lint-report-260819.md"),"utf8")).toContain("`notes/Bad_Name.md`: expected lowercase ASCII kebab-case filename");
+  expect(writeAnalysisReports(f.home,{vault:"test",kind:"graph",today:f.snapshot.today}).ok).toBe(true);
+  expect(JSON.parse(readFileSync(join(f.vault,"reports","vault-graph.json"),"utf8")).nodes.some((n:{id:string})=>n.id==="Bad_Name")).toBe(true);
+  expect(readFileSync(file,"utf8")).toBe(source);
+  const request={vault:"test",operation:{op:"report" as const,path:"reports/legacy-sha.md",text:"# Synthetic report\n"},expectedShas:{"notes/Bad_Name.md":sha256(source)},dryRun:true};
+  expect(applyWrite(f.home,request).ok).toBe(true);
+  writeFileSync(file,source+"External change.\n");
+  const drift=applyWrite(f.home,request);expect(drift.ok).toBe(false);expect(drift.issues.some(i=>i.code==="V09")).toBe(true);
+  const unsafe=applyWrite(f.home,{...request,expectedShas:{"notes/../outside.md":sha256(source)}});
+  expect(unsafe.ok).toBe(false);expect(unsafe.issues.some(i=>i.code==="V04")).toBe(true);
 });
