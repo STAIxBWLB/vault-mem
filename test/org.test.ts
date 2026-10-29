@@ -208,7 +208,10 @@ test("a note that would fail org lint is refused at preview and never written", 
 
 test("local remote paths compare case-sensitively", () => {
   expect(sameRemote("/srv/Vault.git", "/srv/vault.git")).toBe(false);
-  expect(sameRemote("file:///srv/vault.git", "/srv/vault")).toBe(true);
+  expect(sameRemote("file:///srv/vault.git", "/srv/vault.git")).toBe(true);
+  // Local repositories `x` and `x.git` are distinct; only host remotes drop the suffix.
+  expect(sameRemote("file:///srv/vault.git", "/srv/vault")).toBe(false);
+  expect(sameRemote("/srv/team", "/srv/team.git")).toBe(false);
 });
 
 test("sync refuses when any push URL or URL rewrite points away from the configured remote", () => {
@@ -244,3 +247,42 @@ test("the Topics section is found outside code fences; fenced headings and conte
   expect(replaceTopicsSection("# T\n\nText.", ["[[a]]"])).toBe("# T\n\nText.\n\n## Topics\n\n- [[a]]\n");
   expect(replaceTopicsSection("# T\n\n## Topics\n\n- [[old]]\n\n## After\n\nKeep.\n", ["[[a]]"])).toBe("# T\n\n## Topics\n\n- [[a]]\n\n## After\n\nKeep.\n");
 });
+
+test("a local remote and its .git twin are different destinations", () => {
+  const f = fixture();
+  // Two real bare repos: <remote> and <remote without .git>. Origin points at the twin.
+  const twin = f.remote.replace(/\.git$/, "");
+  Bun.spawnSync(["git", "init", "--bare", "--quiet", "-b", "main", twin], { env: gitEnv });
+  git(f.org, "remote", "set-url", "origin", twin);
+  writeFileSync(join(f.org, "notes", "org-only.md"), note("Org Only", "Changed."));
+  const before = git(f.remote, "rev-parse", "main");
+  expect(syncVault(f.home, { vault: "team" }, { env: f.env })).toMatchObject({ ok: false, remote: { matches: false }, issues: [{ code: "REMOTE" }] });
+  expect(git(f.remote, "rev-parse", "main")).toBe(before);
+  expect(Bun.spawnSync(["git", "-C", twin, "rev-parse", "--verify", "--quiet", "refs/heads/main"], { env: gitEnv }).exitCode).not.toBe(0);
+}, 30_000);
+
+test("sync never hashes, stages or pushes a denied path, and refuses a denied vault", () => {
+  const f = fixture();
+  const config = JSON.parse(readFileSync(join(f.home, "vmem.config.json"), "utf8"));
+  config.denyPaths = ["private-ledger"];
+  writeFileSync(join(f.home, "vmem.config.json"), JSON.stringify(config));
+  writeFileSync(join(f.org, "notes", "private-ledger.md"), note("Private Ledger", "Denied content."));
+  writeFileSync(join(f.org, "notes", "org-only.md"), note("Org Only", "Changed."));
+  const before = git(f.remote, "rev-parse", "main");
+  const preview = syncVault(f.home, { vault: "team" }, { env: f.env });
+  expect(preview).toMatchObject({ ok: false, issues: [{ code: "V06" }], paths: ["notes/org-only.md"] });
+  expect(preview.fingerprint).toBeUndefined();
+  expect(JSON.stringify(preview.issues)).not.toContain("private-ledger");
+  expect(syncVault(f.home, { vault: "team", confirm: true, fingerprint: "0".repeat(64) }, { env: f.env }).ok).toBe(false);
+  expect(git(f.org, "diff", "--cached", "--name-only")).toBe("");
+  expect(git(f.remote, "rev-parse", "main")).toBe(before);
+  // Default deny names apply too (for example a credentials file).
+  rmSync(join(f.org, "notes", "private-ledger.md"));
+  writeFileSync(join(f.org, "notes", "credentials.json"), "{}");
+  expect(syncVault(f.home, { vault: "team" }, { env: f.env })).toMatchObject({ ok: false, issues: [{ code: "V06" }] });
+  rmSync(join(f.org, "notes", "credentials.json"));
+  // A denied vault root refuses the whole sync before any git call.
+  config.denyPaths = [f.org.split("/").at(-1)!];
+  writeFileSync(join(f.home, "vmem.config.json"), JSON.stringify(config));
+  expect(syncVault(f.home, { vault: "team" }, { env: f.env })).toMatchObject({ ok: false, branch: null, issues: [{ code: "V06" }] });
+}, 30_000);

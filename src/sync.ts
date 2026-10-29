@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
+import { join } from "node:path";
 import type { SpawnSyncReturns } from "node:child_process";
 import { loadRegistry } from "./registry.ts";
-import { memoryGitArgv, memoryGitEnv } from "./platform.ts";
+import { isDenied, memoryGitArgv, memoryGitEnv } from "./platform.ts";
 import type { WriteIssue } from "./write-types.ts";
 
 /** Paths sync may stage; everything else in the clone is left alone (and reported). */
@@ -29,14 +30,14 @@ export interface SyncResult {
 }
 type Git = (args: string[], options?: { allowFail?: boolean }) => SpawnSyncReturns<string>;
 const issue = (code: string, message: string): WriteIssue => ({ code, severity: "error", message });
-/** Compare remotes after removing transport noise: scheme, credentials, trailing .git and slash. Host remotes compare case-insensitively; local paths keep their case. */
+/** Compare remotes after removing transport noise: scheme, credentials, trailing .git and slash. Host remotes compare case-insensitively without a trailing .git; local and file: paths keep their case and their .git suffix. */
 export function sameRemote(a: string, b: string): boolean {
   const norm = (url: string) => {
     let value = url.trim();
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
-      try { const parsed = new URL(value); if (parsed.protocol === "file:") return decodeURIComponent(parsed.pathname).replace(/\/+$/, "").replace(/\.git$/, ""); value = `${parsed.hostname}${parsed.port && !["22", "443"].includes(parsed.port) ? `:${parsed.port}` : ""}${parsed.pathname}`; }
+      try { const parsed = new URL(value); if (parsed.protocol === "file:") return decodeURIComponent(parsed.pathname).replace(/\/+$/, ""); value = `${parsed.hostname}${parsed.port && !["22", "443"].includes(parsed.port) ? `:${parsed.port}` : ""}${parsed.pathname}`; }
       catch { return value; }
-    } else if (value.startsWith("/")) return value.replace(/\/+$/, "").replace(/\.git$/, "");
+    } else if (value.startsWith("/")) return value.replace(/\/+$/, ""); // local: `x` and `x.git` are different repositories
     else if (/^[^/@:]+@[^:]+:/.test(value) || /^[^/:]+:[^/]/.test(value)) value = value.replace(/^[^@]+@/, "").replace(":", "/");
     return value.replace(/\/+$/, "").replace(/\.git$/, "").toLowerCase();
   };
@@ -71,13 +72,15 @@ function changed(git: Git): string[] {
  * missing credentials) is reported with `ok: false`; it never reports success it did not observe.
  */
 export function syncVault(home: string, request: { vault: string; confirm?: boolean; fingerprint?: string; message?: string }, options: { env?: NodeJS.ProcessEnv } = {}): SyncResult {
-  const spec = loadRegistry(home).vaults.find(v => v.id === request.vault);
+  const config = loadRegistry(home), spec = config.vaults.find(v => v.id === request.vault);
   const result: SyncResult = { ok: false, applied: false, vault: request.vault, remote: { configured: spec?.remote ?? null, origin: null, matches: false }, branch: null, paths: [], ignored: [], ahead: 0, behind: 0, issues: [] };
   if (!spec) return { ...result, issues: [issue("V04", "unknown vault id")] };
   if (!spec.remote) return { ...result, issues: [issue("SYNC", "vault has no configured remote; register it with --remote")] };
   if (spec.write === "none") return { ...result, issues: [issue("POLICY", "vault write policy refuses sync")] };
   const root = realpathSync(spec.path);
   if (root !== spec.path) return { ...result, issues: [issue("V04", "registered vault path changed")] };
+  // Same rule as applyWrite: a denied vault root is never synced.
+  if (isDenied(root, config.denyPaths)) return { ...result, issues: [issue("V06", "vault path is denied; nothing was synced")] };
   const git = gitIn(root, options.env ?? process.env);
   try {
     if (realpathSync(git(["rev-parse", "--show-toplevel"]).stdout.trim()) !== root) return { ...result, issues: [issue("SYNC", "vault path is not the root of its git repository")] };
@@ -105,6 +108,9 @@ export function syncVault(home: string, request: { vault: string; confirm?: bool
     }
     const all = changed(git);
     result.paths = all.filter(planned); result.ignored = all.filter(path => !planned(path));
+    // Denied files are never hashed, staged, committed or pushed: the whole sync refuses before any of that.
+    const denied = result.paths.filter(path => isDenied(join(root, path), config.denyPaths));
+    if (denied.length) return { ...result, paths: result.paths.filter(path => !denied.includes(path)), issues: [issue("V06", `${denied.length} changed path${denied.length === 1 ? " is" : "s are"} denied by policy; remove or revert ${denied.length === 1 ? "it" : "them"} before syncing`)] };
     const head = git(["rev-parse", "HEAD"], { allowFail: true }).stdout.trim();
     const remoteHead = hasUpstream ? git(["rev-parse", upstream]).stdout.trim() : null;
     const contents = result.paths.map(path => [path, git(["hash-object", "--", path], { allowFail: true }).stdout.trim()]);
