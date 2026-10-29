@@ -76,6 +76,18 @@ test("incremental metadata scan matches clean rebuild after create/edit/delete/r
     expect(index.show("projects").content).toContain("Mop");
   } finally { index.close(); }
 });
+test("a cache written by an older link resolver recomputes every link on the next scan", () => {
+  const { home, spec } = fixture();
+  const index = new VaultIndex(home, spec);
+  try {
+    index.scan(); const fresh = snapshot(index);
+    // Simulate an older cache: stale link rows and no resolution version.
+    const db = new Database(index.file);
+    try { db.run("UPDATE links SET data=json_set(data,'$.resolved','stale.md','$.reason',NULL)"); db.run("PRAGMA user_version = 0"); } finally { db.close(); }
+    expect(index.scan()).toEqual({ notes: 3, changed: 0, removed: 0 });
+    expect(snapshot(index)).toEqual(fresh);
+  } finally { index.close(); }
+});
 test("unicode FTS5, BM25 relevance, filters, bounded search/show/links", () => {
   const { home, spec, notes } = fixture(), index = new VaultIndex(home, spec);
   try {

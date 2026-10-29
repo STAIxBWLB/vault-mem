@@ -9,6 +9,8 @@ import { normalizeTarget, noteKey, proseLines, resolveLinks, type LinkNote, type
 
 export const MAX_NOTE_BYTES = 2 * 1024 * 1024;
 export const MAX_RESULTS = 500;
+/** Bump when link resolution changes, so caches written by an older version recompute every link. 2 = path-only. */
+const LINK_RESOLUTION = 2;
 export const MAX_READ_BYTES = 64 * 1024;
 export interface IndexedNote extends LinkNote { hash: string; description: string; type: string; domain: string }
 export interface NoteReadResult {
@@ -150,6 +152,7 @@ export class VaultIndex {
               this.db.query("INSERT INTO fts VALUES (?,?,?,?)").run(row.path,row.title,row.description,row.body);
             }
             for (const row of disk.query<{source:string;ordinal:number;data:string}, []>("SELECT * FROM links").all()) this.db.query("INSERT INTO links VALUES (?,?,?)").run(row.source,row.ordinal,row.data);
+            this.db.run(`PRAGMA user_version = ${Number(disk.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0)}`);
             const exists = disk.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='analysis_notes'").get();
             if (exists) {
               const size = disk.query<{count:number;bytes:number}, []>("SELECT count(*) AS count, coalesce(sum(length(CAST(source AS BLOB))),0) AS bytes FROM analysis_notes").get()!;
@@ -225,7 +228,8 @@ export class VaultIndex {
       for (const row of this.db.query<{path:string}, []>("SELECT path FROM analysis_notes").all()) if (!present.has(row.path)) this.db.query("DELETE FROM analysis_notes WHERE path=?").run(row.path);
       let removed = 0;
       for (const path of previous.keys()) if (!live.has(path)) { touch(path); this.db.query("DELETE FROM notes WHERE path=?").run(path); this.db.query("DELETE FROM fts WHERE path=?").run(path); removed++; }
-      if (rebuild) this.db.run("DELETE FROM links");
+      const stale = this.db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version !== LINK_RESOLUTION;
+      if (rebuild || stale) this.db.run("DELETE FROM links");
       else if (changed || removed) {
         for (const row of this.db.query<{ source: string; data: string }, []>("SELECT source,data FROM links").all()) {
           if (!touched.has(row.source) && keys.has(noteKey((JSON.parse(row.data) as ResolvedLink).target))) touched.add(row.source);
@@ -233,14 +237,15 @@ export class VaultIndex {
         const remove = this.db.query("DELETE FROM links WHERE source=?");
         for (const source of touched) remove.run(source);
       }
-      if (changed || removed || rebuild) {
+      if (changed || removed || rebuild || stale) {
         // Ordinals count per source, so a partial refresh orders exactly like a rebuild.
         const insert = this.db.query("INSERT INTO links VALUES (?, ?, ?)"), next = new Map<string, number>();
-        for (const link of resolveLinks(this.stored(), undefined, rebuild ? undefined : touched)) {
+        for (const link of resolveLinks(this.stored(), undefined, rebuild || stale ? undefined : touched)) {
           const ordinal = next.get(link.source) ?? 0;
           next.set(link.source, ordinal + 1); insert.run(link.source, ordinal, JSON.stringify(link));
         }
       }
+      if (stale) this.db.run(`PRAGMA user_version = ${LINK_RESOLUTION}`);
       return { notes: live.size, changed, removed, ...(skipped.length ? { skipped } : {}) };
     }).immediate();
   }
