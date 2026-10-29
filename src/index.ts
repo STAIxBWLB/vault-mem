@@ -9,3 +9,6 @@ export { extractLinks, resolveLinks, normalizeTarget } from "./links.ts";
 export type { Link, LinkNote, ResolvedLink } from "./links.ts";
 export { VaultIndex, MAX_NOTE_BYTES, MAX_RESULTS, MAX_READ_BYTES } from "./vault-index.ts";
 export type { IndexedNote, SearchOptions, SearchResult } from "./vault-index.ts";
+export { applyWrite, sha256, MUTATION_LOCK, MAX_WRITE_BYTES } from "./writer.ts";
+export { validateWrite, screenContent } from "./write-validation.ts";
+export type { WriteOp, WriteRequest, WriteReceipt, WriteIssue, PlannedChange, ValidationContext, ChangeReceipt } from "./write-types.ts";

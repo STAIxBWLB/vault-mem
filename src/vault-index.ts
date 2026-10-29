@@ -83,7 +83,7 @@ export class VaultIndex {
     return this.db.query< Omit<StoredNote, "aliases"> & { aliases: string }, []>("SELECT * FROM notes ORDER BY path").all().map(row => ({ ...row, aliases: JSON.parse(row.aliases) as string[] }));
   }
   /** Scan metadata each call; hash only new or metadata-changed files. Atomic cache update. */
-  scan(rebuild = false): { notes: number; changed: number; removed: number } {
+  scan(rebuild = false, options: { skipInvalidFrontmatter?: boolean } = {}): { notes: number; changed: number; removed: number; skipped?: string[] } {
     return this.db.transaction(() => {
       const notesDir = join(this.root, "notes");
       if (realpathSync(this.root) !== this.root || realpathSync(notesDir) !== notesDir || !lstatSync(notesDir).isDirectory()) throw new Error(`vault ${this.vault.id}: path or notes directory changed`);
@@ -91,6 +91,7 @@ export class VaultIndex {
       if (rebuild) this.db.run("DELETE FROM fts");
       const live = new Set<string>();
       let changed = 0;
+      const skipped: string[] = [];
       for (const entry of readdirSync(notesDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
         if (!entry.name.endsWith(".md") || !entry.isFile()) continue;
         const path = entry.name, file = join(notesDir, path), before = lstatSync(file);
@@ -119,7 +120,10 @@ export class VaultIndex {
         if (!rebuild && old?.hash === hash) { this.db.query("UPDATE notes SET metadata=? WHERE path=?").run(stamp, path); continue; }
         let document: ReturnType<typeof parseFrontmatter>;
         try { document = parseFrontmatter(buffer.toString("utf8")); }
-        catch { throw new Error(`vault ${this.vault.id}, ${path}: invalid frontmatter`); }
+        catch {
+          if (!options.skipInvalidFrontmatter) throw new Error(`vault ${this.vault.id}, ${path}: invalid frontmatter`);
+          live.delete(path); skipped.push(path); continue;
+        }
         const { data, body } = document;
         this.db.query("INSERT OR REPLACE INTO notes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(path, hash, stamp,
           text(data.title) || path.slice(0, -3), text(data.description), body, text(data.type), text(data.domain), JSON.stringify(aliases(data.aliases ?? data.alias)), buffer.toString("utf8"));
@@ -134,7 +138,7 @@ export class VaultIndex {
         const insert = this.db.query("INSERT INTO links VALUES (?, ?, ?)");
         for (const [ordinal, link] of resolveLinks(this.stored()).entries()) insert.run(link.source, ordinal, JSON.stringify(link));
       }
-      return { notes: live.size, changed, removed };
+      return { notes: live.size, changed, removed, ...(skipped.length ? { skipped } : {}) };
     }).immediate();
   }
   search(query: string, options: SearchOptions = {}): SearchResult[] {
