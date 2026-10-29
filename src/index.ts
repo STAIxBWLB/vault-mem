@@ -3,3 +3,9 @@ export { parseConfig, parseVault, readConfig, CONFIG_FILE, MAX_CONFIG_BYTES } fr
 export type { VaultSpec, VmemConfig } from "./config.ts";
 export { addVault, removeVault, loadRegistry, registryStatus, recoverRegistry, effectivePii, syncDirectory, LOCK_FILE } from "./registry.ts";
 export type { RecoveryReport, LockOwner } from "./registry.ts";
+export { parseFrontmatter, emitFrontmatter } from "./frontmatter.ts";
+export type { FrontmatterDocument } from "./frontmatter.ts";
+export { extractLinks, resolveLinks, normalizeTarget } from "./links.ts";
+export type { Link, LinkNote, ResolvedLink } from "./links.ts";
+export { VaultIndex, MAX_NOTE_BYTES, MAX_RESULTS, MAX_READ_BYTES } from "./vault-index.ts";
+export type { IndexedNote, SearchOptions, SearchResult } from "./vault-index.ts";

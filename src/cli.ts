@@ -1,3 +1,4 @@
+import { isReadCommand, runReadCommand } from "./read-commands.ts";
 import { version } from "../package.json";
 import { help } from "./commands-table.ts";
 import { resolveHome } from "./home.ts";
@@ -19,6 +20,7 @@ function parse(args: string[], allowed: string[], values: string[]) {
 export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
   if (!args.length || (args.length === 1 && ["--help", "-h", "help"].includes(args[0]!))) return { text: help(), code: 0 };
   if (args.length === 1 && args[0] === "--version") return { text: version, code: 0 };
+  if (isReadCommand(args[0]!)) return runReadCommand(args[0]!, args.slice(1), resolveHome(env).home);
   const command = args[0] === "vaults" ? `vaults ${args[1] ?? ""}` : args[0];
   const tail = args.slice(args[0] === "vaults" ? 2 : 1);
   const options = command === "vaults add" ? ["--kind", "--write", "--pii", "--remote", "--registry"] : [];
