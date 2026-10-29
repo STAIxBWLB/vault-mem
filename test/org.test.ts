@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addVault } from "../src/registry.ts";
-import { promoteToOrg, screenForOrg, dropUnresolvedLinks } from "../src/org-promote.ts";
+import { promoteToOrg, screenForOrg, dropUnresolvedLinks, replaceTopicsSection } from "../src/org-promote.ts";
 import { syncVault, sameRemote } from "../src/sync.ts";
 import { readLog } from "../src/vault-log.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
@@ -209,4 +209,38 @@ test("a note that would fail org lint is refused at preview and never written", 
 test("local remote paths compare case-sensitively", () => {
   expect(sameRemote("/srv/Vault.git", "/srv/vault.git")).toBe(false);
   expect(sameRemote("file:///srv/vault.git", "/srv/vault")).toBe(true);
+});
+
+test("sync refuses when any push URL or URL rewrite points away from the configured remote", () => {
+  const f = fixture();
+  const elsewhere = join(f.root, "elsewhere.git"); Bun.spawnSync(["git", "init", "--bare", "--quiet", "-b", "main", elsewhere], { env: gitEnv });
+  writeFileSync(join(f.org, "notes", "org-only.md"), note("Org Only", "Changed."));
+  const before = { remote: git(f.remote, "rev-parse", "main"), elsewhere: git(elsewhere, "rev-parse", "--all") };
+  // pushurl: fetch URL matches, push would go elsewhere.
+  git(f.org, "config", "remote.origin.pushurl", elsewhere);
+  expect(syncVault(f.home, { vault: "team" }, { env: f.env })).toMatchObject({ ok: false, remote: { matches: false, push: [elsewhere] }, issues: [{ code: "REMOTE" }] });
+  git(f.org, "config", "--unset", "remote.origin.pushurl");
+  // pushInsteadOf rewrite: refused because the destination cannot be verified.
+  git(f.org, "config", `url.${elsewhere}.pushInsteadOf`, f.remote);
+  expect(syncVault(f.home, { vault: "team" }, { env: f.env })).toMatchObject({ ok: false, issues: [{ code: "REMOTE" }] });
+  git(f.org, "config", "--unset", `url.${elsewhere}.pushInsteadOf`);
+  // A pushurl added after the preview is caught by the fingerprint, and nothing is pushed anywhere.
+  const plan = syncVault(f.home, { vault: "team" }, { env: f.env });
+  expect(plan).toMatchObject({ ok: true, remote: { matches: true } });
+  git(f.org, "config", "remote.origin.pushurl", elsewhere);
+  expect(syncVault(f.home, { vault: "team", confirm: true, fingerprint: plan.fingerprint }, { env: f.env }).ok).toBe(false);
+  expect(git(f.remote, "rev-parse", "main")).toBe(before.remote);
+  expect(git(elsewhere, "rev-parse", "--all")).toBe(before.elsewhere);
+}, 30_000);
+
+test("the Topics section is found outside code fences; fenced headings and content are kept", () => {
+  const f = fixture();
+  const body = "Uses [[org-only]].\n\n```md\n## Topics\n\n- [[org-only]]\n```\n\nMore prose after the fence.";
+  writeFileSync(join(f.personal, "notes", "shared-method.md"), note("Shared Method", body));
+  const preview = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
+  expect(preview.ok).toBe(true);
+  expect(preview.text).toContain("```md\n## Topics\n\n- [[org-only]]\n```\n\nMore prose after the fence.");
+  expect(preview.text!.endsWith("## Topics\n\n- [[research]]\n")).toBe(true);
+  expect(replaceTopicsSection("# T\n\nText.", ["[[a]]"])).toBe("# T\n\nText.\n\n## Topics\n\n- [[a]]\n");
+  expect(replaceTopicsSection("# T\n\n## Topics\n\n- [[old]]\n\n## After\n\nKeep.\n", ["[[a]]"])).toBe("# T\n\n## Topics\n\n- [[a]]\n\n## After\n\nKeep.\n");
 });

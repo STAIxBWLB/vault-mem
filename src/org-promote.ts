@@ -95,6 +95,19 @@ function screenDroppedLinks(home: string, source: VaultSpec, all: VaultSpec[], d
   // Counts and categories only: the linked names are exactly what must not be echoed.
   return [...found].map(([category, count]) => issue("SCREEN", `${category}: ${count} body link${count === 1 ? "" : "s"} point at notes that are never promoted; remove those links from the source note first`));
 }
+/** Replace the last prose `## Topics` section (never one inside a fence) with the given topics; append one if absent. */
+export function replaceTopicsSection(body: string, topics: string[]): string {
+  const prose = proseLines(body), raw = body.split("\n");
+  let start = -1;
+  for (let i = prose.length - 1; i >= 0; i--) if (/^ {0,3}##[ \t]+Topics[ \t]*#*[ \t]*$/.test(prose[i]!)) { start = i; break; }
+  const section = ["## Topics", "", ...topics.map(topic => `- ${topic}`), ""];
+  if (start < 0) return `${body.replace(/\n*$/, "")}\n\n${section.join("\n")}`;
+  // The section ends at the next prose heading of level 1 or 2.
+  let end = raw.length;
+  for (let i = start + 1; i < prose.length; i++) if (/^ {0,3}#{1,2}[ \t]/.test(prose[i]!)) { end = i; break; }
+  const tail = raw.slice(end);
+  return [...raw.slice(0, start), ...section, ...(tail.length ? tail : [])].join("\n").replace(/\n*$/, "\n");
+}
 /** Replace visible wiki links whose target does not resolve in the target vault with their plain text. */
 export function dropUnresolvedLinks(body: string, resolves: (target: string) => boolean): { body: string; dropped: string[] } {
   const prose = proseLines(body), raw = body.split("\n"), dropped: string[] = [];
@@ -208,7 +221,7 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   if (!topics.length || missingTopics.length) return fail(issue("V02", `target topics must name existing MOCs in ${target.id}${missingTopics.length ? `: missing ${missingTopics.join(", ")}` : ""}; use --topics`));
   const transformed = dropUnresolvedLinks(parsed.body, value => targetNotes.resolved.has(linkKey(value)));
   // Body Topics section follows the target topics.
-  const body = transformed.body.replace(/\n## Topics\n[\s\S]*$/, `\n## Topics\n\n${topics.map(topic => `- ${topic}`).join("\n")}\n`);
+  const body = replaceTopicsSection(transformed.body, topics);
   const day = (options.now ?? new Date()).toISOString().slice(0, 10);
   const frontmatter: Record<string, unknown> = { topics, promoted_from: result.source, promoted_at: day, promoted_to: undefined };
   // Wiki-valued fields that point outside the target vault are dropped as well.

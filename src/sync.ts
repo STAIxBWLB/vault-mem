@@ -14,7 +14,7 @@ export interface SyncResult {
   applied: boolean;
   preview?: boolean;
   vault: string;
-  remote: { configured: string | null; origin: string | null; matches: boolean };
+  remote: { configured: string | null; origin: string | null; push?: string[]; matches: boolean };
   branch: string | null;
   /** Planned changed paths that will be staged and committed. */
   paths: string[];
@@ -83,8 +83,14 @@ export function syncVault(home: string, request: { vault: string; confirm?: bool
     if (realpathSync(git(["rev-parse", "--show-toplevel"]).stdout.trim()) !== root) return { ...result, issues: [issue("SYNC", "vault path is not the root of its git repository")] };
     const origin = git(["remote", "get-url", "origin"], { allowFail: true });
     result.remote.origin = origin.status === 0 ? origin.stdout.trim() : null;
-    result.remote.matches = result.remote.origin !== null && sameRemote(result.remote.origin, spec.remote);
-    if (!result.remote.matches) return { ...result, issues: [issue("REMOTE", result.remote.origin === null ? "repository has no origin remote" : "origin does not match the configured remote; nothing was fetched or pushed")] };
+    // Every effective fetch and push URL must be the configured remote; URL rewrites are refused outright
+    // because git does not report pushInsteadOf rewrites of an explicit pushurl.
+    const lines = (args: string[]) => { const out = git(args, { allowFail: true }); return out.status === 0 ? out.stdout.split("\n").map(line => line.trim()).filter(Boolean) : []; };
+    const fetchUrls = lines(["remote", "get-url", "--all", "origin"]), pushUrls = lines(["remote", "get-url", "--push", "--all", "origin"]);
+    const rewrites = lines(["config", "--get-regexp", "^url\\..*\\.(insteadof|pushinsteadof)$"]);
+    result.remote.push = pushUrls;
+    result.remote.matches = result.remote.origin !== null && rewrites.length === 0 && fetchUrls.length > 0 && pushUrls.length > 0 && [...fetchUrls, ...pushUrls].every(url => sameRemote(url, spec.remote!));
+    if (!result.remote.matches) return { ...result, issues: [issue("REMOTE", result.remote.origin === null ? "repository has no origin remote" : rewrites.length ? "git url insteadOf/pushInsteadOf rewrites are configured; refusing because the push destination cannot be verified" : "an origin fetch or push URL does not match the configured remote; nothing was fetched or pushed")] };
     const branch = git(["symbolic-ref", "--quiet", "--short", "HEAD"], { allowFail: true });
     if (branch.status !== 0) return { ...result, issues: [issue("SYNC", "detached HEAD; check out a branch first")] };
     result.branch = branch.stdout.trim();
@@ -102,7 +108,7 @@ export function syncVault(home: string, request: { vault: string; confirm?: bool
     const head = git(["rev-parse", "HEAD"], { allowFail: true }).stdout.trim();
     const remoteHead = hasUpstream ? git(["rev-parse", upstream]).stdout.trim() : null;
     const contents = result.paths.map(path => [path, git(["hash-object", "--", path], { allowFail: true }).stdout.trim()]);
-    result.fingerprint = createHash("sha256").update(JSON.stringify({ vault: spec.id, remote: spec.remote, branch: result.branch, head, remoteHead, contents })).digest("hex");
+    result.fingerprint = createHash("sha256").update(JSON.stringify({ vault: spec.id, remote: spec.remote, fetchUrls, pushUrls, branch: result.branch, head, remoteHead, contents })).digest("hex");
     if (request.confirm !== true) return { ...result, ok: true, preview: true };
     if (request.fingerprint !== result.fingerprint) return { ...result, issues: [issue("V09", "stale or missing preview fingerprint")] };
     if (result.paths.length) {
@@ -119,6 +125,7 @@ export function syncVault(home: string, request: { vault: string; confirm?: bool
       }
     }
     if (!result.commit && (!hasUpstream ? false : git(["rev-list", "--count", `${upstream}..HEAD`]).stdout.trim() === "0")) return { ...result, ok: true, applied: false, pushed: false };
+    if (lines(["remote", "get-url", "--push", "--all", "origin"]).some(url => !sameRemote(url, spec.remote!)) || lines(["config", "--get-regexp", "^url\\..*\\.(insteadof|pushinsteadof)$"]).length) return { ...result, applied: Boolean(result.commit), pushed: false, issues: [issue("REMOTE", "push destination changed before push; nothing was pushed")] };
     const push = git(["push", "--quiet", "--porcelain", "origin", `HEAD:refs/heads/${result.branch}`], { allowFail: true });
     if (push.status !== 0) return { ...result, applied: Boolean(result.commit), pushed: false, issues: [issue("PUSH", `push failed: ${push.stderr.trim().split("\n").at(-1)?.slice(0, 300) ?? "error"}; the local commit was kept`)] };
     // Verify the remote really has our head before reporting success.
