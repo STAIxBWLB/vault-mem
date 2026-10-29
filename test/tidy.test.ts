@@ -108,6 +108,32 @@ test("--secrets and --log never print a matched value in preview, receipts or th
   expect(readFileSync(join(f.vault, "log"), "utf8")).not.toContain(TOKEN);
 });
 
+test("--secrets in frontmatter keeps a valid key and does not block the rest of the run", () => {
+  const f = fixture();
+  writeFileSync(join(f.notes, "fm-secret.md"), fm([...base().filter(l => !l.startsWith("description")), `description: "Rotated token = ${TOKEN} recorded here."`, `aliases: ["${TOKEN}", "plain"]`]) + "# Fm Secret\n\nText.\n\n## Topics\n\n- [[research]]\n");
+  writeFileSync(join(f.notes, "comment-secret.md"), fm([...base(), `# ${TOKEN}`]) + "# Comment Secret\n\nText.\n\n## Topics\n\n- [[research]]\n");
+  const preview = f.tidy(["secrets"]);
+  expect(preview).toMatchObject({ ok: true, preview: true });
+  expect(preview.notes.map(n => n.path)).toEqual(expect.arrayContaining(["notes/fm-secret.md", "notes/secret.md"]));
+  expect(preview.reported.some(r => r.path === "notes/comment-secret.md" && r.message.startsWith("secrets:"))).toBe(true);
+  expect(JSON.stringify(preview)).not.toContain(TOKEN);
+  const done = f.tidy(["secrets"], { confirm: true, fingerprint: preview.fingerprint });
+  expect(done.ok).toBe(true);
+  const data = parseFrontmatter(f.read("fm-secret")).data;
+  expect(data).toMatchObject({ description: "[redacted]", aliases: ["[redacted]", "plain"] });
+  expect(f.read("fm-secret")).not.toContain(TOKEN);
+  expect(f.read("secret")).not.toContain(TOKEN);
+  // A sanitized note the writer would refuse (here an unknown key holding the secret) is skipped, not blocking.
+  writeFileSync(join(f.notes, "bad-key.md"), fm([...base(), `api_note: "token = ${TOKEN}"`]) + "# Bad Key\n\nText.\n\n## Topics\n\n- [[research]]\n");
+  writeFileSync(join(f.notes, "body-secret.md"), fm(base()) + `# Body Secret\n\nOld ${TOKEN} here.\n\n## Topics\n\n- [[research]]\n`);
+  const mixed = f.tidy(["secrets"]);
+  expect(mixed).toMatchObject({ ok: true, skipped: ["notes/bad-key.md"] });
+  expect(mixed.notes.map(n => n.path)).toEqual(["notes/body-secret.md"]);
+  expect(f.tidy(["secrets"], { confirm: true, fingerprint: mixed.fingerprint }).ok).toBe(true);
+  expect(f.read("body-secret")).not.toContain(TOKEN);
+  expect(f.read("bad-key")).toContain(TOKEN);
+});
+
 test("--map overrides defaults; unmapped values stay; map parsing is strict", () => {
   const f = fixture();
   const mapText = JSON.stringify({ enums: { confidence: { hunch: "experimental", confirmed: "likely" } }, keys: { mood: "drop", keywords: "keep", origin: { rename: "received" } } });

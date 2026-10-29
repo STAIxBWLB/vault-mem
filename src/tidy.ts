@@ -34,6 +34,8 @@ export interface TidyResult {
   written: string[];
   issues: WriteIssue[];
   event?: string;
+  /** Notes with planned changes that the writer would refuse; left unchanged and listed in `reported`. */
+  skipped?: string[];
 }
 
 const CONFIDENCE: Record<string, string> = { confirmed: "proven", verified: "proven", observed: "likely", possible: "experimental", speculative: "experimental", web_unverified: "experimental" };
@@ -218,8 +220,29 @@ function sanitizeNote(path: string, source: string, ctx: { rules: Set<TidyRule>;
   }
   if (has("secrets")) {
     const lines = SECRET_PATTERNS.flatMap(pattern => lineOf(text, pattern));
-    const result = redact(text);
-    if (result.hits) { text = result.text; changes.push(`secrets: ${result.hits} value${result.hits === 1 ? "" : "s"} redacted at line ${[...new Set(lines)].sort((a, b) => a - b).join(", ")}`); ruleCount(counts, "secrets", result.hits); }
+    // Frontmatter: replace the whole value of any field whose text matches, keeping `key: "[redacted]"` valid YAML.
+    // Body: replace each match in place.
+    const parsed = parseFrontmatter(text);
+    const fields: Record<string, unknown> = {};
+    let hits = 0;
+    const scrub = (value: unknown): unknown => {
+      if (typeof value === "string") { const r = redact(value); hits += r.hits; return r.hits ? "[redacted]" : value; }
+      if (Array.isArray(value)) return value.map(scrub);
+      if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, scrub(v)]));
+      return value;
+    };
+    for (const [key, value] of Object.entries(parsed.data)) {
+      const before = hits, next = scrub(value);
+      if (hits > before) fields[key] = next;
+    }
+    // A secret in raw frontmatter that the parsed values do not show (for example a comment) cannot be fixed safely.
+    const rawFrontmatter = redact(parsed.frontmatter ?? "").hits;
+    let output = Object.keys(fields).length ? emitFrontmatter(parsed, fields) : text;
+    const reparsed = parseFrontmatter(output), body = redact(reparsed.body);
+    hits += body.hits;
+    output = output.slice(0, output.length - reparsed.body.length) + body.text;
+    if (redact(parseFrontmatter(output).frontmatter ?? "").hits || (rawFrontmatter && !Object.keys(fields).length)) reported.push({ path, message: "secrets: a secret-looking value in frontmatter outside a field value (for example a comment); repair by hand" });
+    else if (hits) { text = output; changes.push(`secrets: ${hits} value${hits === 1 ? "" : "s"} redacted at line ${[...new Set(lines)].sort((a, b) => a - b).join(", ")}`); ruleCount(counts, "secrets", hits); }
   }
   return { text, changes };
 }
@@ -313,14 +336,20 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
       if (sanitized.redactions) { logPlan = { before, ...sanitized }; result.counts.log = sanitized.redactions; }
     }
   }
+  // Validate every planned note with the writer (dry-run). A note the writer would refuse is reported and skipped
+  // (left fully unchanged for manual repair) instead of blocking the rest of the migration.
+  for (const change of [...planned]) {
+    const dry = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", dryRun: true, log: false }, { env: options.env });
+    const errors = dry.issues.filter(found => found.severity === "error");
+    if (!errors.length) continue;
+    planned.splice(planned.indexOf(change), 1);
+    result.reported.push({ path: change.path, message: `skipped: the writer refuses the sanitized note (${[...new Set(errors.map(found => found.code))].join(", ")}); repair by hand` });
+  }
+  result.skipped = result.notes.filter(note => !planned.some(change => change.path === note.path)).map(note => note.path);
+  result.notes = result.notes.filter(note => planned.some(change => change.path === note.path));
   result.fingerprint = sha256(JSON.stringify({ vault: vault.id, root, rules, map: request.mapText ?? map, files: planned.map(c => [c.path, sha256(c.before), sha256(c.after)]), log: logPlan ? [sha256(logPlan.before), sha256(logPlan.text)] : null }));
   result.event = `tidy: ${rules.filter(rule => rule !== "log" || logPlan).map(rule => `${rule} ${result.counts[rule] ?? 0}`).join(", ")}`;
-  // Validate every planned note with the writer (dry-run), so the preview refuses what confirm would refuse.
-  for (const change of planned) {
-    const dry = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", dryRun: true, log: false }, { env: options.env });
-    result.issues.push(...dry.issues.filter(found => found.severity === "error").map(found => ({ ...found, path: found.path ?? change.path })));
-  }
-  if (result.issues.length) return result;
+
   if (request.confirm !== true) return { ...result, ok: true, preview: true };
   if (request.fingerprint !== result.fingerprint) return { ...result, issues: [issue("V09", "stale or missing preview fingerprint")] };
   for (const change of planned) {

@@ -233,6 +233,7 @@ Runtime changes intentionally make `release:verify` report stale historical rele
 `vmem tidy <vault> [--connections --escapes --enums --keys --sources --topics --secrets --log | --all] [--map <file>] [--json] [--confirm --fingerprint SHA]` sanitizes debt from older, unvalidated writers. It is meant for the one-time V2 cutover and later imports.
 
 - **Two steps.** Without `--confirm` it prints per-rule `counts`, a per-note change list (`key: old -> new`, dropped keys with their values, sections added) and `reported` items that were left unchanged; nothing is written. With `--confirm` the fingerprint must match: it covers the rules, the map file, and the before/after sha of every touched file (and of the log). Each note is then written through `applyWrite` (atomic per note, under the vault lock) and one `LINT` event is appended, for example `tidy: escapes 1, enums 13, keys 78, ...`.
+- **Never blocked by one note.** A sanitized note that the writer would still refuse (for example an unknown key) is left unchanged, listed under `skipped` and `reported`, and the rest of the run proceeds. Rule counts include such notes.
 - **Restart-safe.** If a run is interrupted, every note is either fully old or fully new; a rerun previews only the rest. A second `--all` run previews zero changes.
 - **Scope.** Only flat `notes/*.md` and, for `--log`, the vault `log` are touched; `.obsidian/`, `templates/` and `self/` never are. Nothing is committed; commit the receipt paths yourself.
 
@@ -244,7 +245,7 @@ Runtime changes intentionally make `release:verify` report stale historical rele
 | `--sources` | strip `work/`, split joined paths into a list, report paths that do not resolve |
 | `--topics` | append `## Topics` listing the frontmatter topics where no such heading exists; mismatched sections are reported |
 | `--connections` | fold `## Connections (...)` headings into `## Relevant Notes` |
-| `--secrets` | replace V06 secret matches in notes with `[redacted]`; the preview names note and line, never the value. PII in personal vaults is left alone |
+| `--secrets` | replace V06 secret matches with `[redacted]`: in the body the match itself, in frontmatter the whole field value (the key stays, so the YAML stays valid). A match outside a field value, such as a YAML comment, is reported for manual repair. The preview names note and line, never the value. PII in personal vaults is left alone |
 | `--log` | replace secret-looking substrings and email addresses in existing log lines with `[redacted]`, under the log lock; legacy lines are otherwise kept byte for byte. Git history is not rewritten: rotate exposed credentials |
 
 `--map <file>` overrides defaults with strict JSON `{"enums": {"confidence|status|type": {"from": "to"}}, "keys": {"key": "drop" | "keep" | {"rename": "key"}}}` (at most 64 KiB and 1000 entries). For `tidy`, `--log` selects the log rule; tidy always writes its own `LINT` event.
