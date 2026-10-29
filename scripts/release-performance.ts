@@ -4,7 +4,7 @@ import { cpus, release, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { releaseRpc } from "./release-rpc.ts";
 export function percentile(samples:number[],quantile:number):number {
-  if(!samples.length || samples.some(n=>!Number.isFinite(n)||n<0) || quantile<=0 || quantile>1)throw new Error("invalid percentile samples");
+  if(!samples.length || samples.some(n=>!Number.isFinite(n)||n<0) || !Number.isFinite(quantile) || quantile<=0 || quantile>1)throw new Error("invalid percentile samples");
   return [...samples].sort((a,b)=>a-b)[Math.ceil(quantile*samples.length)-1]!;
 }
 export function runtimeDigest(root:string):string {

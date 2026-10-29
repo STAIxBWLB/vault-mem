@@ -8,9 +8,9 @@
 
 | Gate | Current evidence | Status |
 |---|---|---|
-| Strict TypeScript, boundaries, tests, package dry-run | Initial dgx02 Bun 1.4.2 gate passed; final candidate gate recorded in PR/hub handoff | Final candidate pending |
+| Strict TypeScript, boundaries, tests, package dry-run | Complete-core dgx02 Bun 1.4.2 gate passed; exact final candidate gate recorded in PR/hub handoff | Final candidate pending |
 | Exact-head Linux/macOS CI | Both OS jobs remain in Check; tag workflow validates the triggering commit on both OSes | Hosted candidate result pending |
-| Clean installed CLI/MCP | Fresh consumer install of packed tarball, exact installed byte comparison, CLI version/help/create/search, MCP read/tools and stale-fingerprint refusal | Initial synthetic run passed |
+| Clean installed CLI/MCP | Fresh consumer install of packed tarball, exact installed byte comparison, CLI version/help/create/search, MCP read/tools and stale-fingerprint refusal | Bun and npm tarball installations passed |
 | Frontmatter round-trip | Four release fixture notes, original comments/folded descriptions/Unicode retained byte-identically | Provider fixture passed |
 | Incremental index vs rebuild | Baseline/create/edit/rename/delete compare notes, FTS and links | Provider fixture passed |
 | Two Python parity runs | [External parity record](evidence/external-parity.json), same code/input hashes and two zero-diff rounds | Synthetic passed; private unverified |
@@ -25,9 +25,11 @@
 
 The [raw synthetic report](evidence/synthetic-performance.json) contains every search/write/RSS sample, runtime/method digests, Bun/kernel/CPU details and container quotas. RSS uses decimal byte thresholds; search p95 is the nearest-rank statistic over 30 measured MCP queries after five warmups, including metadata refresh and transport. The derived index is prebuilt before the MCP process starts.
 
-The first pre-org baseline used Bun 1.4.2, Intel Xeon Platinum 8480CL, a 16-CPU/32GiB container on dgx02. Its MCP idle RSS was 29.36 MB, high-water RSS 91.72 MB and search p95 33.54 ms, passing the synthetic limits 100 MB/200 MB/50 ms. Synthetic CLI write p95 was 693.66 ms over five samples. That diagnostic does not meet 150 ms, and it is not the authorized representative-vault measurement. It cannot be used to mark that private acceptance passed.
+The complete-core run includes the approved org/sync implementation. It measured MCP idle RSS 31.20 MB, kernel high-water RSS 88.76 MB and MCP search p95 33.87 ms. The three synthetic gates passed. Synthetic CLI write p95 was 701.64 ms; representative private-vault write acceptance remains unverified. The measured snapshot revision is a temporary remote verify commit; the runtime/method digests are asserted against the final checkout by the test suite.
 
-The final complete-core runtime must be measured after the org/sync dependency lands. Preserve the baseline instead of replacing inconvenient values. Missing private data, unsupported YAML, native UI evidence or integration acceptance remains incomplete rather than being inferred from fixture results.
+The preserved [pre-org baseline](evidence/pre-org-synthetic-performance.json) used Bun 1.4.2, Intel Xeon Platinum 8480CL, a 16-CPU/32GiB container on dgx02. Its MCP idle RSS was 29.36 MB, high-water RSS 91.72 MB and search p95 33.54 ms, passing the synthetic limits 100 MB/200 MB/50 ms. Synthetic CLI write p95 was 693.66 ms over five samples. That diagnostic does not meet 150 ms, and it is not the authorized representative-vault measurement. It cannot be used to mark that private acceptance passed.
+
+The complete-core snapshot was built on approved PR #19 at `41aa97a` while its squash merge was pending. Final PR integration must retain the same runtime/method digests or repeat the measurement. Preserve the baseline instead of replacing inconvenient values. Missing private data, unsupported YAML, native UI evidence or integration acceptance remains incomplete rather than being inferred from fixture results.
 
 ## Scope and reproduction
 
