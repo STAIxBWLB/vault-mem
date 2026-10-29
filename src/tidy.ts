@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import type { VaultSpec } from "./config.ts";
+import type { VaultSpec, VmemConfig } from "./config.ts";
 import { emitFrontmatter, parseFrontmatter } from "./frontmatter.ts";
 import { extractLinks, normalizeTarget } from "./links.ts";
 import { isDenied } from "./platform.ts";
@@ -11,7 +11,7 @@ import { loadRegistry, syncDirectory } from "./registry.ts";
 import { normalizeSource, sourceReferences, sourceWorkspaceRoot, missingSourceWarnings } from "./source.ts";
 import { appendLog, LOG_LOCK } from "./vault-log.ts";
 import { appendSection, foldConnections, h2Sections } from "./write-operations.ts";
-import { EMAIL_PATTERN, SCHEMA_KEYS, SECRET_PATTERNS, TYPED_KEYS } from "./write-validation.ts";
+import { EMAIL_PATTERN, SCHEMA_KEYS, SECRET_PATTERNS, TYPED_KEYS, screenContent } from "./write-validation.ts";
 import { applyWrite, sha256, snapshot } from "./writer.ts";
 import type { WriteIssue } from "./write-types.ts";
 
@@ -19,7 +19,7 @@ export const TIDY_RULES = ["connections", "escapes", "enums", "keys", "sources",
 export type TidyRule = typeof TIDY_RULES[number];
 export interface TidyMap { enums: Record<string, Record<string, string>>; keys: Record<string, "drop" | "keep" | { rename: string }> }
 export interface TidyRequest { vault: string; rules: TidyRule[]; map?: TidyMap; mapText?: string; confirm?: boolean; fingerprint?: string; channel?: "cli" | "mcp" }
-export interface TidyNoteChange { path: string; changes: string[]; before: string; after: string }
+export interface TidyNoteChange { path: string; changes: string[]; before: string; after: string; counts: Record<string, number> }
 export interface TidyResult {
   ok: boolean;
   applied: boolean;
@@ -47,7 +47,12 @@ const DROP = new Set(["origin", "ideation_stage", "keywords", "priority", "deadl
 const RELATED = ["related", "relatedMeetings", "github"];
 const MAX_MAP_BYTES = 64 * 1024;
 const issue = (code: string, message: string, path?: string): WriteIssue => ({ code, severity: "error", message, ...(path ? { path } : {}) });
-const show = (value: unknown) => { const text = JSON.stringify(value) ?? String(value); return text.length > 200 ? `${text.slice(0, 197)}...` : text; };
+/** Echo a value into a change line or report: secret-looking values (and PII when the vault denies it) print as [redacted]. */
+function shown(value: unknown, vault: VaultSpec, config: VmemConfig): string {
+  const text = JSON.stringify(value) ?? String(value);
+  if (screenContent(text, vault, config).length || screenContent(String(value), vault, config).length) return '"[redacted]"';
+  return text.length > 200 ? `${text.slice(0, 197)}...` : text;
+}
 const ruleCount = (counts: Record<string, number>, rule: string, n = 1) => { counts[rule] = (counts[rule] ?? 0) + n; };
 
 /** Strictly parse a `--map` file: `{enums: {field: {from: to}}, keys: {key: "drop" | "keep" | {rename: key}}}`. */
@@ -122,10 +127,11 @@ function lineOf(text: string, needle: RegExp): number[] {
 }
 
 /** Apply every selected rule to one note. Returns the new text and human-readable change lines (values never secrets). */
-function sanitizeNote(path: string, source: string, ctx: { rules: Set<TidyRule>; map: TidyMap; vault: VaultSpec; stems: Map<string, string>; sourceRoot: string | undefined }, counts: Record<string, number>, reported: { path: string; message: string }[]): { text: string; changes: string[] } {
+function sanitizeNote(path: string, source: string, ctx: { rules: Set<TidyRule>; map: TidyMap; vault: VaultSpec; config: VmemConfig; stems: Map<string, string>; sourceRoot: string | undefined }, counts: Record<string, number>, reported: { path: string; message: string }[]): { text: string; changes: string[] } {
   let text = source;
   const changes: string[] = [];
   const has = (rule: TidyRule) => ctx.rules.has(rule);
+  const show = (value: unknown) => shown(value, ctx.vault, ctx.config);
   if (has("connections")) {
     const folded = foldConnections(text, path);
     if (folded !== text) { const n = h2Sections(parseFrontmatter(text).body).filter(s => /^Connections(?:\s*\(.*\))?$/i.test(s.name)).length; changes.push(`connections: folded ${n} section${n === 1 ? "" : "s"} into Relevant Notes`); ruleCount(counts, "connections", n); text = folded; }
@@ -197,10 +203,15 @@ function sanitizeNote(path: string, source: string, ctx: { rules: Set<TidyRule>;
   if (has("sources") && data.source !== undefined) {
     try {
       const normalized = normalizeSource(data.source);
-      const joined = typeof normalized === "string" && /\s[,;]\s|,\s*(?:work\/)?[\w.-]+\//.test(normalized) ? normalized.split(/\s*[,;]\s*/).map(part => part.trim()).filter(Boolean) : undefined;
-      const next = joined && joined.length > 1 ? normalizeSource(joined) : normalized;
+      // Only a path reference may hold several joined paths; URLs and mem ids are never split.
+      let joined: string[] | undefined;
+      if (typeof normalized === "string" && sourceReferences(normalized)[0]!.kind === "path" && /\s[,;]\s|,\s*(?:work\/)?[\w.-]+\//.test(normalized)) {
+        const parts = normalized.split(/\s*[,;]\s*/).map(part => part.trim()).filter(Boolean);
+        try { if (parts.length > 1 && sourceReferences(parts).every(ref => ref.kind === "path")) joined = parts; } catch { /* not cleanly splittable: keep as one reference */ }
+      }
+      const next = joined ? normalizeSource(joined) : normalized;
       if (!isDeepStrictEqual(next, data.source)) assign("source", next, `sources: ${show(data.source)} -> ${show(next)}`, "sources");
-      for (const warning of missingSourceWarnings(next, ctx.sourceRoot)) reported.push({ path, message: `sources: ${warning}` });
+      for (const warning of missingSourceWarnings(next, ctx.sourceRoot)) reported.push({ path, message: `sources: ${screenContent(warning, ctx.vault, ctx.config).length ? "source path does not exist: [redacted]" : warning}` });
     } catch { reported.push({ path, message: "sources: invalid source reference; unchanged" }); }
   }
   if (Object.keys(set).length) text = emitFrontmatter(doc, set, force);
@@ -316,18 +327,20 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
     const aliases = parseFrontmatter(source).data.aliases;
     for (const alias of asList(aliases)) if (!stems.has(normalizeTarget(alias))) stems.set(normalizeTarget(alias), path);
   } catch { /* unparsable notes are reported below */ }
-  const ctx = { rules: new Set(rules), map, vault, stems, sourceRoot: sourceWorkspaceRoot(vault) };
+  const ctx = { rules: new Set(rules), map, vault, config, stems, sourceRoot: sourceWorkspaceRoot(vault) };
   const planned: TidyNoteChange[] = [];
   for (const [path, source] of notes) {
     try {
-      const { text, changes } = sanitizeNote(path, source, ctx, result.counts, result.reported);
-      if (text !== source) planned.push({ path, changes, before: source, after: text });
+      const noteCounts: Record<string, number> = {};
+      const { text, changes } = sanitizeNote(path, source, ctx, noteCounts, result.reported);
+      if (text !== source) planned.push({ path, changes, before: source, after: text, counts: noteCounts });
     } catch (error) {
       result.reported.push({ path, message: `unparsable note skipped (${error instanceof Error ? error.message.slice(0, 120) : "error"})` });
     }
   }
   result.notes = planned.map(change => ({ path: change.path, changes: change.changes }));
   let logPlan: { before: string; text: string; lines: number; redactions: number; changes: string[] } | undefined;
+  if (rules.includes("log") && isDenied(join(root, "log"), config.denyPaths)) return { ...result, issues: [issue("V06", "the vault log is denied by the path policy; drop --log")] };
   if (rules.includes("log")) {
     const before = readLogFile(root);
     if (before !== null) {
@@ -347,6 +360,8 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   }
   result.skipped = result.notes.filter(note => !planned.some(change => change.path === note.path)).map(note => note.path);
   result.notes = result.notes.filter(note => planned.some(change => change.path === note.path));
+  // Counts and the LINT event describe only what will be written: skipped notes are excluded.
+  for (const change of planned) for (const [rule, n] of Object.entries(change.counts)) if (n > 0) ruleCount(result.counts, rule, n);
   result.fingerprint = sha256(JSON.stringify({ vault: vault.id, root, rules, map: request.mapText ?? map, files: planned.map(c => [c.path, sha256(c.before), sha256(c.after)]), log: logPlan ? [sha256(logPlan.before), sha256(logPlan.text)] : null }));
   result.event = `tidy: ${rules.filter(rule => rule !== "log" || logPlan).map(rule => `${rule} ${result.counts[rule] ?? 0}`).join(", ")}`;
 
@@ -358,6 +373,7 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
     result.written.push(change.path);
   }
   if (logPlan) {
+    if (isDenied(join(root, "log"), loadRegistry(home).denyPaths)) return { ...result, issues: [issue("V06", "the vault log is denied by the path policy; log not rewritten")] };
     try { rewriteLog(root, logPlan.before, logPlan.text); result.written.push("log"); }
     catch (error) { return { ...result, issues: [issue("LOG", error instanceof Error ? error.message.slice(0, 200) : "log rewrite failed")] }; }
   }
