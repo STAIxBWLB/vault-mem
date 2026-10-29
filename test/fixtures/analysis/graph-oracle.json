@@ -1,0 +1,99 @@
+{
+  "nodes": [
+    {
+      "id": "a",
+      "label": "A",
+      "type": "insight",
+      "domain": "unknown",
+      "description": "Synthetic fixture.",
+      "confidence": "",
+      "source_file": "notes/a.md",
+      "topics": "projects"
+    },
+    {
+      "id": "b",
+      "label": "B",
+      "type": "decision",
+      "domain": "unknown",
+      "description": "Synthetic fixture.",
+      "confidence": "True",
+      "source_file": "notes/b.md",
+      "topics": "projects"
+    },
+    {
+      "id": "c",
+      "label": "C",
+      "type": "insight",
+      "domain": "unknown",
+      "description": "Synthetic fixture.",
+      "confidence": "8",
+      "source_file": "notes/c.md",
+      "topics": ""
+    },
+    {
+      "id": "d",
+      "label": "D",
+      "type": "method",
+      "domain": "unknown",
+      "description": "Synthetic fixture.",
+      "confidence": "",
+      "source_file": "notes/d.md",
+      "topics": "projects"
+    },
+    {
+      "id": "e",
+      "label": "E",
+      "type": "reference",
+      "domain": "unknown",
+      "description": "Synthetic fixture.",
+      "confidence": "",
+      "source_file": "notes/e.md",
+      "topics": "projects"
+    },
+    {
+      "id": "index",
+      "label": "Index",
+      "type": "moc",
+      "domain": "unknown",
+      "description": "",
+      "confidence": "",
+      "source_file": "notes/index.md",
+      "topics": ""
+    },
+    {
+      "id": "invalid",
+      "label": "Invalid",
+      "type": "[unclosed",
+      "domain": "unknown",
+      "description": "",
+      "confidence": "",
+      "source_file": "notes/invalid.md",
+      "topics": ""
+    },
+    {
+      "id": "no-fm",
+      "label": "No Fm",
+      "type": "unknown",
+      "domain": "unknown",
+      "description": "",
+      "confidence": "",
+      "source_file": "notes/no-fm.md",
+      "topics": ""
+    },
+    {
+      "id": "projects",
+      "label": "Projects",
+      "type": "moc",
+      "domain": "unknown",
+      "description": "Synthetic fixture.",
+      "confidence": "",
+      "source_file": "notes/projects.md",
+      "topics": "index"
+    }
+  ],
+  "edges": [
+    "a|b",
+    "a|invalid",
+    "d|e"
+  ]
+}
