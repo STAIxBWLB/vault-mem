@@ -24,7 +24,7 @@ function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-org-"))); roots.push(root);
   const home = join(root, "state"), personal = join(root, "personal"), org = join(root, "org"), remote = join(root, "org-remote.git");
   for (const vault of [personal, org]) { mkdirSync(join(vault, "notes"), { recursive: true }); writeFileSync(join(vault, "notes", "research.md"), moc); }
-  writeFileSync(join(personal, "notes", "shared-method.md"), note("Shared Method", "Uses [[org-only]] and [[private-idea|a private idea]] and [[research]]. Code `[[kept]]`."));
+  writeFileSync(join(personal, "notes", "shared-method.md"), note("Shared Method", "Uses [[org-only]] and [[private-idea|a private idea]] and [[research]]."));
   writeFileSync(join(personal, "notes", "private-idea.md"), note("Private Idea", "Personal."));
   writeFileSync(join(org, "notes", "org-only.md"), note("Org Only", "Org text."));
   Bun.spawnSync(["git", "init", "--bare", "--quiet", "-b", "main", remote], { env: gitEnv });
@@ -40,7 +40,8 @@ test("preview shows full transformed text and dropped links and writes nothing; 
   const f = fixture(), before = { personal: readFileSync(join(f.personal, "notes", "shared-method.md"), "utf8"), org: snapshot(f.org) };
   const preview = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
   expect(preview).toMatchObject({ ok: true, preview: true, applied: false, source: "personal:notes/shared-method.md", target: "team:notes/shared-method.md", screen: { passed: true }, droppedLinks: ["private-idea"] });
-  expect(preview.text).toContain("Uses [[org-only]] and a private idea and [[research]]. Code `[[kept]]`.");
+  expect(preview.text).toContain("Uses [[org-only]] and a private idea and [[research]].");
+  expect(preview.lint).toMatchObject({ passed: true, issues: [] });
   expect(preview.text).toContain(`"promoted_from": "personal:notes/shared-method.md"`);
   expect(readFileSync(join(f.personal, "notes", "shared-method.md"), "utf8")).toBe(before.personal);
   expect(snapshot(f.org)).toBe(before.org);
@@ -181,7 +182,7 @@ test("a failed provenance write is recoverable with a provenance-only rerun", ()
   const preview = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
   promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team", confirm: true, fingerprint: preview.fingerprint }, { env: f.env });
   // Simulate the lost provenance write: restore the source without promoted_to.
-  writeFileSync(join(f.personal, "notes", "shared-method.md"), note("Shared Method", "Uses [[org-only]] and [[private-idea|a private idea]] and [[research]]. Code `[[kept]]`."));
+  writeFileSync(join(f.personal, "notes", "shared-method.md"), note("Shared Method", "Uses [[org-only]] and [[private-idea|a private idea]] and [[research]]."));
   const orgBefore = readFileSync(join(f.org, "notes", "shared-method.md"), "utf8");
   const rerun = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
   expect(rerun).toMatchObject({ ok: true, preview: true, recovery: "provenance-only" });
@@ -193,6 +194,16 @@ test("a failed provenance write is recoverable with a provenance-only rerun", ()
   // A foreign org note at the same path is still never overwritten.
   writeFileSync(join(f.personal, "notes", "org-only.md"), note("Org Only", "Personal copy."));
   expect(promoteToOrg(f.home, { from: "personal", note: "org-only", to: "team" }, { env: f.env }).issues[0]!.code).toBe("V08");
+});
+
+test("a note that would fail org lint is refused at preview and never written", () => {
+  const f = fixture(), before = snapshot(f.org);
+  // lint.py parity: a wiki link inside inline code still counts, so it is a dead link in the org vault.
+  writeFileSync(join(f.personal, "notes", "shared-method.md"), note("Shared Method", "Uses [[org-only]]. Code `[[kept]]`."));
+  const result = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
+  expect(result).toMatchObject({ ok: false, applied: false, lint: { passed: false } });
+  expect(result.issues.map(i => i.code)).toContain("L01");
+  expect(snapshot(f.org)).toBe(before);
 });
 
 test("local remote paths compare case-sensitively", () => {

@@ -12,6 +12,9 @@ import { screenContent } from "./write-validation.ts";
 import { appendLog } from "./vault-log.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
 import type { LogReceipt } from "./log-types.ts";
+import { analysisInput } from "./analysis-input.ts";
+import { lintVault } from "./vault-lint.ts";
+import type { AnalysisSnapshot } from "./analysis-types.ts";
 
 export interface OrgPromoteRequest {
   /** Personal vault id and note (stem, alias or notes/ path). */
@@ -41,7 +44,7 @@ export interface OrgPromoteResult {
   note?: WriteReceipt;
   provenance?: WriteReceipt;
   logs?: { source: LogReceipt | null; target: LogReceipt | null };
-  lint?: { passed: boolean; issues: WriteIssue[] };
+  lint?: { passed: boolean; issues: WriteIssue[]; summary?: string };
   /** Set when the org note already exists from this source and only the source provenance is missing. */
   recovery?: "provenance-only";
 }
@@ -137,11 +140,20 @@ function readSource(spec: VaultSpec, path: string): string {
 }
 const linkKey = (value: string) => normalizeTarget(value.replace(/^\[\[|\]\]$/g, "").split(/[|#]/)[0]!.trim().replace(/^notes\//i, "").replace(/\.md$/i, ""));
 
-/** The single org-lint call site. Until analysis lint lands this runs the writer's read-only check on the written note. */
-export function lintPromoted(home: string, target: VaultSpec, path: string, text: string): { passed: boolean; issues: WriteIssue[] } {
-  const checked = applyWrite(home, { vault: target.id, operation: { op: "check", path, text } });
-  const issues = checked.issues.filter(found => found.severity === "error" && found.code !== "V08");
-  return { passed: issues.length === 0, issues };
+/**
+ * The single org-lint call site: the promoted text is overlaid on the org vault's analysis snapshot and
+ * `lintVault` is scoped to that note. It passes when the note has no lint errors (L01/L02/L13); vault-wide
+ * warnings are reported separately and do not fail the promotion.
+ */
+export function lintPromoted(home: string, target: VaultSpec, path: string, text: string): { passed: boolean; issues: WriteIssue[]; summary?: string } {
+  let snapshot: AnalysisSnapshot;
+  try { snapshot = analysisInput(home, target.id).snapshot; }
+  catch (error) { return { passed: false, issues: [issue("LINT", `org lint unavailable: ${error instanceof Error ? error.message.slice(0, 200) : "error"}`)] }; }
+  const relative = path.replace(/^notes\//, "");
+  snapshot = { ...snapshot, notes: [...snapshot.notes.filter(note => note.path !== relative), { path: relative, source: text }] };
+  const report = lintVault(snapshot, path);
+  const errors = (["L01", "L02", "L13"] as const).flatMap(code => report.findings[code].map(finding => issue(code, finding.slice(0, 500), path)));
+  return { passed: errors.length === 0, issues: errors, summary: report.summary };
 }
 
 /**
@@ -214,7 +226,10 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   const provenanceText = emitFrontmatter(parsed, provenanceSet);
   const provenancePlan = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set: provenanceSet }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env });
   result.fingerprint = sha({ target: planned.fingerprint, source: provenancePlan.fingerprint, text, provenanceText });
-  const blocking = [...planned.issues, ...provenancePlan.issues].filter(found => found.severity === "error");
+  // Org lint runs on the preview too (the note overlaid on the org snapshot), so a note that would fail lint is never written.
+  const previewLint = lintPromoted(home, target, targetPath, text);
+  result.lint = previewLint;
+  const blocking = [...planned.issues, ...provenancePlan.issues, ...previewLint.issues].filter(found => found.severity === "error");
   if (blocking.length) return { ...result, issues: blocking };
   if (request.confirm !== true) return { ...result, ok: true, preview: true, issues: [...planned.issues, ...provenancePlan.issues] };
   if (request.fingerprint !== result.fingerprint) return { ...result, issues: [issue("V09", "stale or missing preview fingerprint")] };
