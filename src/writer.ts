@@ -35,11 +35,11 @@ function safePath(root: string, path: string): string {
   }
   return current;
 }
-/** Nanosecond file identity: any content write moves ctime, which no caller can set back. */
+/** Nanosecond file identity used to detect a write racing a single read. */
 function stamp(stat: { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint }): string {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }
-function readPlain(root: string, path: string, stamps?: Map<string, string>): string | null {
+function readPlain(root: string, path: string): string | null {
   const file = safePath(root, path);
   let fd: number;
   try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
@@ -55,14 +55,13 @@ function readPlain(root: string, path: string, stamps?: Map<string, string>): st
     }
     const after = fstatSync(fd, { bigint: true });
     if (size > MAX_NOTE_BYTES || stamp(before) !== stamp(after)) refuse("V09", "file changed during read", path);
-    stamps?.set(path, stamp(after));
     const buffer = bytes.subarray(0, size), text = buffer.toString("utf8");
     if (!Buffer.from(text).equals(buffer)) refuse("V01", "note must be valid UTF-8", path);
     return text;
   } finally { closeSync(fd); }
 }
 /** Flat `notes/*.md` snapshot used by every mutation (other directories such as templates/ and self/ are never read). */
-export function snapshot(root: string, denyPaths: string[] = [], stamps?: Map<string, string>): Map<string, string> {
+export function snapshot(root: string, denyPaths: string[] = []): Map<string, string> {
   const dir = join(root, "notes");
   if (realpathSync(dir) !== dir || !lstatSync(dir).isDirectory()) refuse("V04", "notes directory changed");
   const notes = new Map<string, string>();
@@ -71,25 +70,11 @@ export function snapshot(root: string, denyPaths: string[] = [], stamps?: Map<st
     if (notes.size >= 10000) refuse("V09", "vault exceeds 10000-note mutation bound");
     const path = `notes/${entry.name}`;
     if (isDenied(join(root, path), denyPaths)) refuse("V06", "mutation snapshot contains a denied note path");
-    const source = readPlain(root, path, stamps);
+    const source = readPlain(root, path);
     if (source === null) refuse("V09", "note disappeared during snapshot", path);
     notes.set(path, source);
   }
   return notes;
-}
-/** True when the flat note set and every note's file identity still match a snapshot's stamps. */
-function snapshotUnchanged(root: string, stamps: Map<string, string>): boolean {
-  const dir = join(root, "notes");
-  if (realpathSync(dir) !== dir || !lstatSync(dir).isDirectory()) return false;
-  let count = 0;
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    const path = `notes/${entry.name}`, expected = stamps.get(path);
-    if (expected === undefined || ++count > stamps.size) return false;
-    const stat = lstatSync(join(dir, entry.name), { bigint: true });
-    if (!stat.isFile() || stamp(stat) !== expected) return false;
-  }
-  return count === stamps.size;
 }
 function receipts(changes: PlannedChange[]): ChangeReceipt[] {
   return changes.map(change => ({ path: change.path, beforeSha: change.before === null ? null : sha256(change.before), sha256: change.after === null ? null : sha256(change.after), bytes: Buffer.byteLength(change.after ?? "") }));
@@ -154,7 +139,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       writeFileSync(lockFd, JSON.stringify({ pid: process.pid, host: hostname(), token: randomUUID(), created: new Date().toISOString() }) + "\n");
       fsyncSync(lockFd);
     }
-    const stamps = new Map<string, string>(), notes = snapshot(root, config.denyPaths, stamps);
+    const notes = snapshot(root, config.denyPaths);
     checkExpected(request, notes);
     let reportBefore: string | null | undefined;
     if (request.operation.op === "report") {
@@ -200,7 +185,9 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       // Detect non-cooperating writers before any rename; cooperating callers use our lock.
       const currentRoot = lstatSync(root);
       if (currentRoot.dev !== identity.dev || currentRoot.ino !== identity.ino) refuse("V09", "vault identity changed while staging");
-      if (!snapshotUnchanged(root, stamps)) refuse("V09", "vault changed while staging");
+      // Full content recheck: shared mmap writes can change bytes without moving any stat field.
+      const current = snapshot(root, config.denyPaths);
+      if (current.size !== notes.size || [...current].some(([path, text]) => notes.get(path) !== text)) refuse("V09", "vault changed while staging");
       for (const change of changes) {
         const file = safePath(root, change.path);
         if (readPlain(root, change.path) !== change.before) refuse("V09", "file changed while staging", change.path);

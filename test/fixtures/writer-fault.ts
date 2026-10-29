@@ -33,6 +33,11 @@ mock.module("node:fs", () => ({ ...original,
     return original.writeFileSync(...args);
   },
   fsyncSync: (fd: number) => {
+    if (tempFds.has(fd) && mode === "mmap-edit" && !injected) {
+      // A shared mapping changes bytes without moving size, mtime or ctime.
+      injected = true; const other = `${vault}/notes/next.md`, map = Bun.mmap(other);
+      map[original.readFileSync(other, "utf8").indexOf("Replacement") + 8] = "a".charCodeAt(0);
+    }
     if (tempFds.has(fd) && mode === "silent-edit" && !injected) {
       // Same size and restored mtime: only ctime records the unrelated edit.
       injected = true; const other = `${vault}/notes/next.md`, text = original.readFileSync(other, "utf8");
