@@ -9,6 +9,8 @@ import { normalizeTarget, noteKey, proseLines, resolveLinks, type LinkNote, type
 
 export const MAX_NOTE_BYTES = 2 * 1024 * 1024;
 export const MAX_RESULTS = 500;
+/** Bump when link resolution changes, so caches written by an older version recompute every link. 2 = path-only. */
+const LINK_RESOLUTION = 2;
 export const MAX_READ_BYTES = 64 * 1024;
 export interface IndexedNote extends LinkNote { hash: string; description: string; type: string; domain: string }
 export interface NoteReadResult {
@@ -150,6 +152,7 @@ export class VaultIndex {
               this.db.query("INSERT INTO fts VALUES (?,?,?,?)").run(row.path,row.title,row.description,row.body);
             }
             for (const row of disk.query<{source:string;ordinal:number;data:string}, []>("SELECT * FROM links").all()) this.db.query("INSERT INTO links VALUES (?,?,?)").run(row.source,row.ordinal,row.data);
+            this.db.run(`PRAGMA user_version = ${Number(disk.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0)}`);
             const exists = disk.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='analysis_notes'").get();
             if (exists) {
               const size = disk.query<{count:number;bytes:number}, []>("SELECT count(*) AS count, coalesce(sum(length(CAST(source AS BLOB))),0) AS bytes FROM analysis_notes").get()!;
@@ -175,12 +178,8 @@ export class VaultIndex {
       const live = new Set<string>(), present = new Set<string>();
       let changed = 0, analysisBytes = 0;
       const skipped: string[] = [], touched = new Set<string>(), keys = new Set<string>();
-      // Link resolution of other notes can change only through names a touched note had or now has.
-      const touch = (path: string, names?: string[]) => {
-        touched.add(path); keys.add(noteKey(path));
-        const row = this.db.query<{ aliases: string }, [string]>("SELECT aliases FROM notes WHERE path=?").get(path);
-        for (const alias of [...(row ? JSON.parse(row.aliases) as string[] : []), ...(names ?? [])]) keys.add(noteKey(alias));
-      };
+      // Links resolve by path only, so other notes re-resolve only when they target a touched path.
+      const touch = (path: string) => { touched.add(path); keys.add(noteKey(path)); };
       for (const entry of readdirSync(notesDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
         if (!entry.name.endsWith(".md") || !entry.isFile()) continue;
         const path = entry.name, file = join(notesDir, path), before = lstatSync(file);
@@ -219,7 +218,7 @@ export class VaultIndex {
           live.delete(path); skipped.push(path); continue;
         }
         const { data, body } = document;
-        touch(path, aliases(data.aliases ?? data.alias));
+        touch(path);
         this.db.query("INSERT OR REPLACE INTO notes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(path, hash, stamp,
           text(data.title) || path.slice(0, -3), text(data.description), body, text(data.type), text(data.domain), JSON.stringify(aliases(data.aliases ?? data.alias)), buffer.toString("utf8"));
         this.db.query("DELETE FROM fts WHERE path=?").run(path);
@@ -229,7 +228,8 @@ export class VaultIndex {
       for (const row of this.db.query<{path:string}, []>("SELECT path FROM analysis_notes").all()) if (!present.has(row.path)) this.db.query("DELETE FROM analysis_notes WHERE path=?").run(row.path);
       let removed = 0;
       for (const path of previous.keys()) if (!live.has(path)) { touch(path); this.db.query("DELETE FROM notes WHERE path=?").run(path); this.db.query("DELETE FROM fts WHERE path=?").run(path); removed++; }
-      if (rebuild) this.db.run("DELETE FROM links");
+      const stale = this.db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version !== LINK_RESOLUTION;
+      if (rebuild || stale) this.db.run("DELETE FROM links");
       else if (changed || removed) {
         for (const row of this.db.query<{ source: string; data: string }, []>("SELECT source,data FROM links").all()) {
           if (!touched.has(row.source) && keys.has(noteKey((JSON.parse(row.data) as ResolvedLink).target))) touched.add(row.source);
@@ -237,14 +237,15 @@ export class VaultIndex {
         const remove = this.db.query("DELETE FROM links WHERE source=?");
         for (const source of touched) remove.run(source);
       }
-      if (changed || removed || rebuild) {
+      if (changed || removed || rebuild || stale) {
         // Ordinals count per source, so a partial refresh orders exactly like a rebuild.
         const insert = this.db.query("INSERT INTO links VALUES (?, ?, ?)"), next = new Map<string, number>();
-        for (const link of resolveLinks(this.stored(), undefined, rebuild ? undefined : touched)) {
+        for (const link of resolveLinks(this.stored(), undefined, rebuild || stale ? undefined : touched)) {
           const ordinal = next.get(link.source) ?? 0;
           next.set(link.source, ordinal + 1); insert.run(link.source, ordinal, JSON.stringify(link));
         }
       }
+      if (stale) this.db.run(`PRAGMA user_version = ${LINK_RESOLUTION}`);
       return { notes: live.size, changed, removed, ...(skipped.length ? { skipped } : {}) };
     }).immediate();
   }
@@ -330,6 +331,12 @@ export class VaultIndex {
     return out;
   }
   /** MOC notes with the number of resolved links pointing at each. */
+  /** Link keys that name exactly one indexed note path (aliases excluded), as wiki links resolve. */
+  linkTargets(): Set<string> {
+    const counts = new Map<string, number>();
+    for (const row of this.db.query<{ path: string }, []>("SELECT path FROM notes").all()) { const key = noteKey(row.path); counts.set(key, (counts.get(key) ?? 0) + 1); }
+    return new Set([...counts].filter(([, count]) => count === 1).map(([key]) => key));
+  }
   mocs(limit = 200): { path: string; title: string; description: string; count: number }[] {
     const mocs = this.db.query<{ path: string; title: string; description: string }, [number]>("SELECT path,title,substr(description,1,512) AS description FROM notes WHERE type='moc' ORDER BY path LIMIT ?").all(resultLimit(limit));
     const counts = new Map(mocs.map(moc => [moc.path, 0]));

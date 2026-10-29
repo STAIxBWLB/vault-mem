@@ -34,7 +34,7 @@ describe("writer validation schema and topics", () => {
     const unicode = note({ description: "가".repeat(200) });
     expect(errors([create(unicode)]).filter(value => value.code === "V01")).toEqual([]);
   });
-  test("topics require nonempty exact wiki links to existing MOCs, including aliases", () => {
+  test("topics require nonempty exact wiki links to existing MOC paths, not aliases", () => {
     for (const topics of [undefined, [], "[[research]]", ["research"], ["[[missing]]"], ["[[research#Heading]]"], ["[[research|Alias]]"], [1]]) {
       const text = topics === undefined ? note().replace(/^topics:.*\n/m, "") : note({ topics });
       expect(errors([create(text)]).some(value => value.code === "V02")).toBe(true);
@@ -42,7 +42,7 @@ describe("writer validation schema and topics", () => {
     const notes = new Map([["notes/research.md", moc.replace("type: moc", "type: reference")]]);
     expect(errors([create(note())], context(notes)).some(value => value.code === "V02")).toBe(true);
     const aliases = new Map([["notes/research.md", moc.replace("type: moc", 'type: moc\naliases: ["Research Alias"]')]]);
-    expect(errors([create(note({ topics: ["[[research alias]]"] }))], context(aliases))).toEqual([]);
+    expect(errors([create(note({ topics: ["[[research alias]]"] }))], context(aliases)).some(value => value.code === "V02")).toBe(true);
   });
   test("the final snapshot resolves new MOCs and refuses removing an existing topic target", () => {
     expect(errors([create(note({ topics: ["[[new-moc]]"] })), create(moc.replace("# Research", "# New synthetic MOC"), "notes/new-moc.md")])).toEqual([]);
@@ -70,11 +70,12 @@ describe("writer validation references and duplicates", () => {
     expect(duplicated.map(value => value.severity).sort()).toEqual(["error", "warning"]);
     expect(errors([create(before)]).some(value => value.code === "V03")).toBe(true);
   });
-  test("heading, block, embed and alias links resolve using the final corpus", () => {
+  test("heading, block and embed links resolve using the final corpus; alias-only links are refused", () => {
     const target = note({ aliases: ["Target Alias"] }, "# Target\n## Detail\nA paragraph ^synthetic-block\n## Topics\n- [[research]]\n");
     const notes = new Map([["notes/research.md", moc], ["notes/target.md", target]]);
-    const body = "# Synthetic claim\n[[TARGET ALIAS#Detail]] ![[target#^synthetic-block]]\n```\n[[missing]]\n```\n## Topics\n- [[research]]\n";
+    const body = "# Synthetic claim\n[[TARGET#Detail]] ![[target#^synthetic-block]]\n```\n[[missing]]\n```\n## Topics\n- [[research]]\n";
     expect(errors([create(note({}, body))], context(notes))).toEqual([]);
+    expect(errors([create(note({}, body.replace("[[TARGET#Detail]]", "[[TARGET ALIAS#Detail]]")))], context(notes)).some(value => value.code === "V03")).toBe(true);
     const bad = body.replace("#Detail", "#Missing");
     expect(errors([create(note({}, bad))], context(notes)).some(value => value.code === "V03")).toBe(true);
   });

@@ -115,11 +115,10 @@ const memo = new WeakMap<LinkNote, Analysis>();
 /** Additional outgoing links share the real target anchor index but never the body code state. `sources` limits output to those source paths. */
 export function resolveLinks(notes: LinkNote[], additionalLinks?: ReadonlyMap<string, readonly Link[]>, sources?: ReadonlySet<string>): ResolvedLink[] {
   const names = new Map<string, Set<LinkNote>>();
+  // Obsidian resolves wiki links by note path only; aliases are display metadata.
   for (const note of notes) {
-    for (const name of [note.path, ...note.aliases]) {
-      const key = noteKey(name), candidates = names.get(key) ?? new Set<LinkNote>();
-      candidates.add(note); names.set(key, candidates);
-    }
+    const key = noteKey(note.path), candidates = names.get(key) ?? new Set<LinkNote>();
+    candidates.add(note); names.set(key, candidates);
   }
   // Each body is read once per call; a memo entry is reused only while that body is unchanged.
   const seen = new Map<LinkNote, Analysis>();

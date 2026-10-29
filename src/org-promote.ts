@@ -128,16 +128,14 @@ export function dropUnresolvedLinks(body: string, resolves: (target: string) => 
   return { body: out.join("\n"), dropped: [...new Set(dropped)].sort() };
 }
 
-/** Target-vault facts read once from its index: link resolution (stems and aliases), MOCs and existing paths. */
+/** Target-vault facts read once from its index: link resolution (path stems only, as Obsidian resolves), MOCs and existing paths. */
 function targetFacts(home: string, spec: VaultSpec, all: VaultSpec[], links: string[], targetPath: string): { resolved: Set<string>; mocs: Set<string>; exists: boolean } {
   const index = new VaultIndex(home, spec, all.map(v => v.path));
   try {
     index.scan();
-    const resolved = new Set<string>();
-    for (const link of new Set(links)) { try { index.show(link, 1); resolved.add(linkKey(link)); } catch { /* unresolved or ambiguous */ } }
-    let exists = false;
-    try { exists = `notes/${index.show(targetPath, 1).path}` === targetPath; } catch { /* absent */ }
-    return { resolved, mocs: new Set(index.mocs(500).map(moc => linkKey(moc.path))), exists };
+    const targets = index.linkTargets(), resolved = new Set([...new Set(links)].map(linkKey).filter(key => targets.has(key)));
+    // Path existence is checked without alias lookup, so another note's alias cannot hide the target.
+    return { resolved, mocs: new Set(index.mocs(500).map(moc => linkKey(moc.path))), exists: targets.has(linkKey(targetPath)) };
   } finally { index.close(); }
 }
 function readSource(spec: VaultSpec, path: string): string {

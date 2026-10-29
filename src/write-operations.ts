@@ -142,11 +142,9 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
       if (notes.has(to)) refuse("V08", "move destination already exists", to);
       const names = new Map<string, Set<string>>();
       for (const [path, source] of notes) {
-        const data = document(source, path).data;
-        const namesForNote = [path.slice(6, -3), ...(Array.isArray(data.aliases) ? data.aliases : typeof data.aliases === "string" ? [data.aliases] : [])];
-        for (const name of namesForNote) if (typeof name === "string") {
-          const key = normalizeTarget(name.replace(/^\.\//, "").replace(/^notes\//i, "").replace(/\.md$/i, "")), values = names.get(key) ?? new Set<string>(); values.add(path); names.set(key, values);
-        }
+        document(source, path); // Every note must still parse before a move rewrites links.
+        // Links resolve by path only, so alias-only links are left untouched.
+        const key = normalizeTarget(path.slice(6, -3)), values = names.get(key) ?? new Set<string>(); values.add(path); names.set(key, values);
       }
       const replace = (target: string): string | undefined => {
         const candidates = names.get(normalizeTarget(target.replace(/^\.\//, "").replace(/^notes\//i, "").replace(/\.md$/i, "")));
