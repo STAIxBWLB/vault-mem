@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.1.0] - 2026-10-30
 
 - Add vault registration, bounded configuration, home resolution, diagnostics and explicit unregister confirmation.
 - Add lossless frontmatter, local wiki-link resolution and incremental SQLite FTS indexing.
@@ -10,5 +10,3 @@
 - Reuse unchanged parsed notes and link analysis during write validation, refresh derived links only for affected sources, and recheck the staging snapshot by direct content comparison instead of rehashing.
 - Resolve wiki links by note path only, matching Obsidian and lint L01; aliases remain lookup metadata for read commands, and new alias-only links are refused.
 - Prepare release validation, clean-install package smoke and an opt-in npm OIDC workflow. Publication, private evidence and live cutover remain separate gates.
-
-Release preparation must replace this section with a dated `## [VERSION] - YYYY-MM-DD` entry for the exact package version before creating a release tag. No version has been declared released here.
