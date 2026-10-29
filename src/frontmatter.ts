@@ -121,9 +121,10 @@ function canonical(key: string, value: unknown, newline: string): string {
 }
 
 /** Emit the entire note. Undefined deletes a key; omitted or semantically equal keys retain their bytes. */
-export function emitFrontmatter(document: FrontmatterDocument, changes: Record<string, unknown> = {}): string {
+export function emitFrontmatter(document: FrontmatterDocument, changes: Record<string, unknown> = {}, force: ReadonlySet<string> = new Set()): string {
   const parsed = parseFrontmatter(document.source) as ParsedDocument;
-  const changed = Object.entries(changes).filter(([key, value]) => !isDeepStrictEqual(parsed.data[key], value));
+  // `force` re-emits listed keys canonically even when semantically unchanged (escape cleanup).
+  const changed = Object.entries(changes).filter(([key, value]) => force.has(key) || !isDeepStrictEqual(parsed.data[key], value));
   if (!changed.length) return document.source;
   const newline = parsed.frontmatter === null ? "\n" : parsed.newline;
   if (parsed.frontmatter === null) {

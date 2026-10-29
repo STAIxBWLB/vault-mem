@@ -20,7 +20,7 @@ export const COMMANDS = [
   { name: "supersede", usage: "supersede <vault> <old> <next> [--dry-run] [--json]", mutates: true },
   { name: "move", usage: "move <vault> <from> <to> [--confirm --fingerprint SHA] [--dry-run] [--json]", mutates: "confirm" },
   { name: "delete", usage: "delete <vault> <note> [--confirm --fingerprint SHA] [--dry-run] [--json]", mutates: "confirm" },
-  { name: "tidy", usage: "tidy <vault> --connections [--confirm --fingerprint SHA] [--dry-run] [--json]", mutates: "confirm" },
+  { name: "tidy", usage: "tidy <vault> [--connections] [--escapes] [--enums] [--keys] [--sources] [--topics] [--secrets] [--log] [--all] [--map file] [--confirm --fingerprint SHA] [--dry-run] [--json]", mutates: "confirm" },
   { name: "report", usage: "report <vault> <reports/path|ops/path> --body file|- [--dry-run] [--json]", mutates: true },
   { name: "check", usage: "check <vault> <file|-> [--path stem] [--json]", mutates: false },
   { name: "log tail", usage: "log tail <vault> [--limit 1..200] [--type TYPE] [--json]", mutates: false },

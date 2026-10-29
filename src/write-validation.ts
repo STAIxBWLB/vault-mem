@@ -18,12 +18,19 @@ const KEYS = new Set([
   "course", "semester", "student_level", "institution", "policy_area", "role", "affiliation", "last_contact",
   "tool", "category", "resolution_status", "aliases", "tags", "cssclasses", "title", "created", "updated", "received", "entities",
   "promoted_from", "promoted_at", "promoted_to", "source_ref",
+  // Adopted in the V2 cutover (#22): decision dates/owners and person contact fields.
+  "decided_at", "decided_by", "email", "phone",
 ]);
+/** Adopted keys valid only on one note type (contact fields additionally only in personal vaults, by PII policy). */
+export const TYPED_KEYS: Readonly<Record<string, string>> = { decided_at: "decision", decided_by: "decision", email: "person", phone: "person" };
+export const SCHEMA_KEYS: ReadonlySet<string> = KEYS;
 const WIKI_FIELDS = ["topics", "project", "superseded_by", "supersedes", "source_ref"];
 // Exact regex set from @staix/agent-mem v0.11.0 src/memory/screen.ts; parity-tested against its root export.
 const SECRETS = [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, /\bAKIA[0-9A-Z]{16}\b/, /\bgh[pousr]_[A-Za-z0-9]{30,}/, /\bgithub_pat_[A-Za-z0-9_]{40,}/, /\bsk-[A-Za-z0-9_-]{20,}/,
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/, /\bAIza[0-9A-Za-z_-]{35}\b/, /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, /\b(?:password|passwd|secret|api[_-]?key|token)\s*[:=]\s*\S{8,}/i];
+export const SECRET_PATTERNS: readonly RegExp[] = SECRETS;
 const EMAIL = /[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?\.[A-Z]{2,}/i;
+export const EMAIL_PATTERN = EMAIL;
 const MAX_BYTES = 256 * 1024;
 
 function issue(code: string, message: string, severity: WriteIssue["severity"] = "error", path?: string): WriteIssue {
@@ -157,7 +164,7 @@ interface SchemaIssue extends WriteIssue { fields: string[] }
 function schema(note: ParsedNote): SchemaIssue[] {
   const issues: SchemaIssue[] = [], { data, path } = note;
   const add=(field:string,message:string,dependencies=[field])=>issues.push({...issue("V01",message,"error",path),fields:dependencies});
-  for(const key of Object.keys(data))if(!KEYS.has(key))add(key,"unknown frontmatter key");
+  for(const key of Object.keys(data))if(!KEYS.has(key)||(TYPED_KEYS[key]!==undefined&&data.type!==TYPED_KEYS[key]))add(key,"unknown frontmatter key",[key,"type"]);
   const description = data.description;
   if (typeof description !== "string" || !description.trim() || [...description].length > 200) add("description","description must contain 1..200 Unicode characters");
   else if ([note.title, note.h1, basename(path, ".md")].some(value => value && fold(description) === fold(value))) add("description","description must supplement the title");
@@ -215,7 +222,8 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
   const issues: WriteIssue[] = [], final = new Map(context.notes), touched = new Set(changes.map(change => change.path));
   const report = context.operation.op === "report";
   for (const change of changes) {
-    if (!validPath(change.path, report)) issues.push(issue("V04", "invalid mutation path"));
+    // Sanitize may rewrite an existing legacy-named note in place (L13 names stay until moved).
+    if (!validPath(change.path, report) && !(context.operation.op === "sanitize" && context.notes.has(change.path))) issues.push(issue("V04", "invalid mutation path"));
     if (change.after === null) final.delete(change.path);
     else if (change.path.startsWith("notes/")) final.set(change.path, change.after);
     if (change.after === null) continue;

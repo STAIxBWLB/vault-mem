@@ -56,7 +56,8 @@ function readPlain(root: string, path: string): string | null {
     return text;
   } finally { closeSync(fd); }
 }
-function snapshot(root: string, denyPaths: string[] = []): Map<string, string> {
+/** Flat `notes/*.md` snapshot used by every mutation (other directories such as templates/ and self/ are never read). */
+export function snapshot(root: string, denyPaths: string[] = []): Map<string, string> {
   const dir = join(root, "notes");
   if (realpathSync(dir) !== dir || !lstatSync(dir).isDirectory()) refuse("V04", "notes directory changed");
   const notes = new Map<string, string>();
@@ -81,7 +82,7 @@ function checkExpected(request: WriteRequest, notes: Map<string, string>): void 
     // Reports verify an existing snapshot, including legacy names diagnosed by L13.
     // Exact membership is safe here: snapshot() contains only existing flat regular notes.
     // All note mutation targets still go through the stricter notePath naming policy.
-    const canonical = request.operation.op === "report" && notes.has(path) ? path : notePath(path), source = notes.get(canonical);
+    const canonical = (request.operation.op === "report" || request.operation.op === "sanitize") && notes.has(path) ? path : notePath(path), source = notes.get(canonical);
     if (typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash) || source === undefined || sha256(source) !== hash) refuse("V09", "expected SHA mismatch", canonical);
   }
 }

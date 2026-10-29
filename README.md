@@ -73,6 +73,7 @@ vmem move personal example-finding renamed-finding
 vmem move personal example-finding renamed-finding --confirm --fingerprint <preview-fingerprint>
 vmem delete personal renamed-finding
 vmem tidy personal --connections
+vmem tidy personal --all --json                 # migration sanitize preview (see Migration tidy)
 ```
 
 Syntax follows indexed reads: the vault id comes first. `new` supports `--title`, `--source`, `--confidence`, `--status`, `--extra JSON` and `--body file|-`; omitted body gets an H1/Relevant Notes/Topics skeleton. Patch accepts nonempty old/new strings up to 8192 bytes and requires exactly one occurrence (including overlapping occurrences). Append uses an existing section or inserts it before Topics; it refuses targeting or introducing a Topics H2. `frontmatter` supports `--set JSON`, `--unset key,key` and `--expected-sha`; append also supports `--expected-sha`. Link relations are `supports`, `contradicts`, `extends`, `applies-to`, `context-for`; links are bidirectional unless `--one-way`. Supersede sets `status`/`superseded_by` on the old note and adds a reverse link in the next note. Report permits plain paths below `reports/` or `ops/`, is schema-exempt and still screened. Inputs are bounded to 256 KiB, follow no file symlinks and accept stdin with `-`.
@@ -226,3 +227,26 @@ vmem sync team --confirm --fingerprint <sha>
 - `bun scripts/frontmatter-probe.ts --vault <vault> --output <private-counts.json>` is a read-only bounded local diagnostic. It stores aggregate counters/hash only, rejects unstable reads, and writes its private result outside note directories. Real note bodies must never be copied into fixtures or public evidence.
 
 Runtime changes intentionally make `release:verify` report stale historical release evidence until the separately authorized release-time refresh. This core fix does not rerun a benchmark or authorize live cutover.
+
+# Migration tidy
+
+`vmem tidy <vault> [--connections --escapes --enums --keys --sources --topics --secrets --log | --all] [--map <file>] [--json] [--confirm --fingerprint SHA]` sanitizes debt from older, unvalidated writers. It is meant for the one-time V2 cutover and later imports.
+
+- **Two steps.** Without `--confirm` it prints per-rule `counts`, a per-note change list (`key: old -> new`, dropped keys with their values, sections added) and `reported` items that were left unchanged; nothing is written. With `--confirm` the fingerprint must match: it covers the rules, the map file, and the before/after sha of every touched file (and of the log). Each note is then written through `applyWrite` (atomic per note, under the vault lock) and one `LINT` event is appended, for example `tidy: escapes 1, enums 13, keys 78, ...`.
+- **Never blocked by one note.** A sanitized note that the writer would still refuse (for example an unknown key) is left unchanged, listed under `skipped` and `reported`, and the rest of the run proceeds. Counts and the `LINT` event cover only notes that are written.
+- **No value leaks.** Every value echoed into a change line or report is screened: secret-looking values, and email/phone values in `pii: deny` vaults, print as `[redacted]`.
+- **Restart-safe.** If a run is interrupted, every note is either fully old or fully new; a rerun previews only the rest. A second `--all` run previews zero changes.
+- **Scope.** Only flat `notes/*.md` and, for `--log`, the vault `log` are touched; `.obsidian/`, `templates/` and `self/` never are. Nothing is committed; commit the receipt paths yourself.
+
+| rule | default disposition |
+|---|---|
+| `--escapes` | values written with YAML escapes (`\uXXXX`, ...) or the old writer's trailing-backslash wraps are re-emitted as canonical single-line scalars with literal characters |
+| `--enums` | `confidence`: `confirmed`/`verified` -> `proven`, `observed` -> `likely`, `possible`/`speculative`/`web_unverified` -> `experimental`, `a \| b` -> the lower one. Other `confidence`, `status` and `type` values are reported, not guessed |
+| `--keys` | `date`/`record_date` -> `created` (dropped when equal, reported when different). `decided_date`/`decision_date`/`decided` -> `decided_at` on `type: decision`. `decided_at`/`decided_by` are schema keys for decisions, and `email`/`phone` for `type: person` in personal vaults (org promotion still refuses them). `related`/`relatedMeetings`/`github`: resolvable wiki targets become `## Relevant Notes` links (deduplicated), paths and URLs join `source`. `origin`, `ideation_stage`, `keywords`, `priority`, `deadline`, `completedDate`, `taskSourceType`, `submission_status` are dropped (values listed in the preview). Any other key is reported and kept |
+| `--sources` | strip `work/`, split joined paths into a list (only when every part is a workspace path; URLs and `mem:` ids are never split), report paths that do not resolve |
+| `--topics` | append `## Topics` listing the frontmatter topics where no such heading exists; mismatched sections are reported |
+| `--connections` | fold `## Connections (...)` headings into `## Relevant Notes` |
+| `--secrets` | replace V06 secret matches with `[redacted]`: in the body the match itself, in frontmatter the whole field value (the key stays, so the YAML stays valid). A match outside a field value, such as a YAML comment, is reported for manual repair. The preview names note and line, never the value. PII in personal vaults is left alone |
+| `--log` | replace secret-looking substrings and email addresses in existing log lines with `[redacted]`, under the log lock (refused with V06 when `denyPaths` covers the log); legacy lines are otherwise kept byte for byte. Git history is not rewritten: rotate exposed credentials |
+
+`--map <file>` overrides defaults with strict JSON `{"enums": {"confidence|status|type": {"from": "to"}}, "keys": {"key": "drop" | "keep" | {"rename": "key"}}}` (at most 64 KiB and 1000 entries). For `tidy`, `--log` selects the log rule; tidy always writes its own `LINT` event.
