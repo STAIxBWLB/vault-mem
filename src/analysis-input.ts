@@ -1,6 +1,8 @@
+import { parseFrontmatter } from "./frontmatter.ts";
+import { sourceWorkspaceRoot, missingSourceWarnings, sourceReferences } from "./source.ts";
 import { parseAnalysisYaml } from "./analysis-yaml.ts";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { VaultSpec, VmemConfig } from "./config.ts";
 import type { AnalysisSnapshot } from "./analysis-types.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
@@ -66,7 +68,15 @@ export function analysisInput(home: string, id: string, options: { today?: strin
     index.scan(false,{captureInvalidFrontmatter:true});
     const after = lstatSync(vault.path);
     if (after.dev !== identity.dev || after.ino !== identity.ino || after.isSymbolicLink()) throw new Error("analysis: vault changed during snapshot");
-    return {vault,config,identity:{dev:Number(identity.dev),ino:Number(identity.ino)},snapshot:index.analysisSnapshot(inputs)};
+    const snapshot=index.analysisSnapshot(inputs),sourceRoot=sourceWorkspaceRoot(vault),warnings:Record<string,string[]>={};
+    if(sourceRoot)for(const note of snapshot.notes)try{
+      const value=parseFrontmatter(note.source).data.source;
+      const denied=value!==undefined&&sourceReferences(value).some(ref=>isDenied(ref.value,config.denyPaths??[])||(ref.kind==="path"&&isDenied(canonicalPath(resolve(sourceRoot,ref.value)),config.denyPaths??[])));
+      const found=denied?["source is denied by the path policy"]:missingSourceWarnings(value,sourceRoot);
+      if(found.length)warnings[note.path]=found;
+    }catch{ /* Invalid frontmatter remains visible to L02; do not infer missing source paths. */ }
+    if(Object.keys(warnings).length)snapshot.sourceWarnings=warnings;
+    return {vault,config,identity:{dev:Number(identity.dev),ino:Number(identity.ino)},snapshot};
   }
   finally { index.close(); }
 }

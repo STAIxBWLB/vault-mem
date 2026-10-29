@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { parseYamlWithQuotedEscapes } from "./yaml-quoted.ts";
 
 interface FieldSpan { key: string; start: number; end: number }
 export interface FrontmatterDocument {
@@ -44,7 +45,7 @@ function fieldSpans(yaml: string): FieldSpan[] {
         else if (c === ":" && /[ \t\r\n]/.test(line[i + 1] ?? "\n")) { colon = i; break; }
       }
       if (colon >= 0) {
-        const parsed: unknown = Bun.YAML.parse(`${line.slice(0, colon)}: null`);
+        const parsed: unknown = parseYamlWithQuotedEscapes(`${line.slice(0, colon)}: null`);
         if (!mapping(parsed) || Object.keys(parsed).length !== 1) throw new Error("frontmatter: expected string mapping key");
         const key = Object.keys(parsed)[0]!;
         if (fields.some(field => field.key === key)) throw new Error("frontmatter: duplicate key");
@@ -99,7 +100,7 @@ export function parseFrontmatter(source: string): FrontmatterDocument {
   if (!match) throw new Error("frontmatter: missing closing delimiter");
   const yaml = source.slice(start, match.index);
   let value: unknown;
-  try { value = Bun.YAML.parse(yaml); }
+  try { value = parseYamlWithQuotedEscapes(yaml); }
   catch { throw new Error("frontmatter: invalid YAML"); }
   if (value === null || value === undefined) value = {};
   if (!mapping(value)) throw new Error("frontmatter: expected mapping");

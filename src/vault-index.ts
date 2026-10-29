@@ -5,12 +5,27 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { AnalysisSnapshot } from "./analysis-types.ts";
 import type { VaultSpec } from "./config.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { normalizeTarget, resolveLinks, type LinkNote, type ResolvedLink } from "./links.ts";
+import { normalizeTarget, proseLines, resolveLinks, type LinkNote, type ResolvedLink } from "./links.ts";
 
 export const MAX_NOTE_BYTES = 2 * 1024 * 1024;
 export const MAX_RESULTS = 500;
 export const MAX_READ_BYTES = 64 * 1024;
 export interface IndexedNote extends LinkNote { hash: string; description: string; type: string; domain: string }
+export interface NoteReadResult {
+  path: string;
+  hash: string;
+  content: string;
+  /** Truncation applies to the requested whole note or selected section. */
+  truncated: boolean;
+  section?: string;
+  /** Byte offset within the selected section, or the whole note. Present when explicitly supplied. */
+  offset?: number;
+  /** Byte offset of the first unreturned character, in the same range. */
+  nextOffset?: number;
+  /** Real H2 names from the note body; included when content is truncated. */
+  headings?: string[];
+  headingsTruncated?: boolean;
+}
 export interface SearchOptions { limit?: number; type?: string; domain?: string }
 export interface SearchResult { path: string; title: string; description: string; type: string; domain: string; score: number; snippet: string }
 interface StoredNote extends IndexedNote { metadata: string; source: string }
@@ -45,6 +60,42 @@ function boundedText(value: string, bytes: number): { content: string; truncated
   let end = bytes;
   while (end > 0 && (buffer[end]! & 0xc0) === 0x80) end--;
   return { content: buffer.subarray(0, end).toString("utf8"), truncated: true };
+}
+function readPage(prefix: Buffer, maxBytes: number, offset: number, totalBytes: number): Pick<NoteReadResult, "content" | "truncated" | "nextOffset"> {
+  if (offset > totalBytes) throw new Error("offset: exceeds requested note or section");
+  if (prefix.length && (prefix[0]! & 0xc0) === 0x80) throw new Error("offset: must be a UTF-8 character boundary");
+  let end = Math.min(maxBytes, prefix.length);
+  while (end > 0 && end < prefix.length && (prefix[end]! & 0xc0) === 0x80) end--;
+  if (!end && offset < totalBytes) throw new Error("max-bytes: cannot fit the next UTF-8 character");
+  const truncated = offset + end < totalBytes;
+  return { content: prefix.subarray(0, end).toString("utf8"), truncated, ...(truncated ? { nextOffset: offset + end } : {}) };
+}
+function h2Sections(body: string): { name: string; start: number; end: number }[] {
+  const visible = proseLines(body), lines = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const sections: { name: string; start: number; end: number }[] = [];
+  let offset = 0, active: number | undefined;
+  for (const [index, line] of lines.entries()) {
+    const heading = /^ {0,3}##(?:[ \t]+(.*)|[ \t]*)$/.exec(visible[index] ?? "");
+    if (heading) {
+      if (active !== undefined) sections[active]!.end = offset;
+      sections.push({ name: (heading[1] ?? "").replace(/[ \t]+#+[ \t]*$/, "").trim(), start: offset, end: body.length });
+      active = sections.length - 1;
+    } else if (/^ {0,3}#(?:[ \t]+|[ \t]*$)/.test(visible[index] ?? "") && active !== undefined) {
+      sections[active]!.end = offset; active = undefined;
+    }
+    offset += line.length;
+  }
+  return sections;
+}
+function headingMetadata(sections: { name: string }[]): Pick<NoteReadResult, "headings" | "headingsTruncated"> {
+  const headings: string[] = [];
+  let bytes = 2, truncated = false;
+  for (const { name } of sections) {
+    const size = Buffer.byteLength(JSON.stringify(name)) + 1;
+    if (headings.length >= 64 || Buffer.byteLength(name) > 1024 || bytes + size > 8192) { truncated = true; continue; }
+    headings.push(name); bytes += size;
+  }
+  return { headings, ...(truncated ? { headingsTruncated: true } : {}) };
 }
 /** Derived cache only. No vault or application configuration files are written. */
 export class VaultIndex {
@@ -212,14 +263,31 @@ export class VaultIndex {
     if (notes.length !== 1) throw new Error(notes.length ? "note: ambiguous target" : "note: unknown target");
     return notes[0]!.path;
   }
-  show(target: string, maxBytes = 16384): { path: string; hash: string; content: string; truncated: boolean } {
+  show(target: string, maxBytes = 16384, section?: string, offset?: number): NoteReadResult {
     if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_READ_BYTES) throw new Error(`max-bytes: expected integer 1..${MAX_READ_BYTES}`);
-    const path = this.find(target);
-    const note = this.db.query<{ hash: string; prefix: Uint8Array; bytes: number }, [number, string]>(
-      "SELECT hash,substr(CAST(source AS BLOB),1,?) AS prefix,length(CAST(source AS BLOB)) AS bytes FROM notes WHERE path=?"
-    ).get(maxBytes + 4, path)!;
-    const bounded = boundedText(Buffer.from(note.prefix).toString("utf8"), maxBytes);
-    return { path, hash: note.hash, content: bounded.content, truncated: note.bytes > maxBytes };
+    if (section !== undefined && (typeof section !== "string" || !section.trim() || /[\r\n]/.test(section) || Buffer.byteLength(section) > 1024)) throw new Error("section: expected one exact H2 heading <=1024 bytes");
+    if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 0 || offset > MAX_NOTE_BYTES)) throw new Error(`offset: expected integer 0..${MAX_NOTE_BYTES}`);
+    const start = offset ?? 0, path = this.find(target);
+    const note = this.db.query<{ hash: string; prefix: Uint8Array; bytes: number }, [number, number, string]>(
+      "SELECT hash,substr(CAST(source AS BLOB),?,?) AS prefix,length(CAST(source AS BLOB)) AS bytes FROM notes WHERE path=?"
+    ).get(section === undefined ? start + 1 : 1, maxBytes + 4, path)!;
+    if (note.bytes > MAX_NOTE_BYTES) throw new Error("note: indexed source exceeds read bound");
+    const metadata = { ...(section !== undefined ? { section } : {}), ...(offset !== undefined ? { offset } : {}) };
+    if (section === undefined) {
+      const page = readPage(Buffer.from(note.prefix), maxBytes, start, note.bytes);
+      if (!page.truncated) return { path, hash: note.hash, ...page, ...metadata };
+    }
+    // Only the derived source is loaded; section discovery never rescans a note file.
+    const source = this.db.query<{ source: string }, [string]>("SELECT source FROM notes WHERE path=?").get(path)!.source;
+    const body = parseFrontmatter(source).body, sections = h2Sections(body);
+    if (section !== undefined) {
+      const found = sections.filter(item => item.name === section);
+      if (found.length !== 1) throw new Error(found.length ? "section: ambiguous H2 heading" : "section: unknown H2 heading");
+      const selected = Buffer.from(body.slice(found[0]!.start, found[0]!.end));
+      const page = readPage(selected.subarray(start, start + maxBytes + 4), maxBytes, start, selected.length);
+      return { path, hash: note.hash, ...page, ...metadata, ...(page.truncated ? headingMetadata(sections) : {}) };
+    }
+    return { path, hash: note.hash, ...readPage(Buffer.from(note.prefix), maxBytes, start, note.bytes), ...metadata, ...headingMetadata(sections) };
   }
   /** Indexed notes (paths relative to notes/) ordered by path, optionally filtered by a literal stem prefix. */
   list(prefix = "", limit = 50): { path: string; title: string; type: string; domain: string; description: string }[] {

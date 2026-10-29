@@ -1,8 +1,10 @@
-import { basename } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { sourceReferences, sourceWorkspaceRoot, missingSourceWarnings } from "./source.ts";
+import { basename, resolve } from "node:path";
 import type { VaultSpec, VmemConfig } from "./config.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { extractLinks, normalizeTarget, proseLines, resolveLinks, type LinkNote, type ResolvedLink } from "./links.ts";
-import { isDenied } from "./platform.ts";
+import { canonicalPath, isDenied } from "./platform.ts";
 import type { PlannedChange, ValidationContext, WriteIssue } from "./write-types.ts";
 
 const TYPES = new Set(["insight", "decision", "observation", "person", "project", "method", "moc", "reference"]);
@@ -64,6 +66,27 @@ export function screenContent(text: string, vault: VaultSpec, config: VmemConfig
     }
   }
   return issues;
+}
+
+/** Quoted escapes must not hide semantic metadata from the same content policy. */
+function screenMetadata(data:Record<string,unknown>,context:ValidationContext,path:string):WriteIssue[]{
+  const found=new Map<string,WriteIssue>(),active=new WeakSet<object>();let nodes=0,bytes=0;
+  const inspect=(text:string)=>{
+    bytes+=Buffer.byteLength(text);if(bytes>MAX_BYTES*4)throw new Error("budget");
+    for(const item of screenContent(text,context.vault,context.config))found.set(item.code,{...item,path});
+  };
+  const visit=(value:unknown,key:string|undefined,depth:number):void=>{
+    if(++nodes>10000||depth>32)throw new Error("budget");
+    if(value===null||typeof value!=="object"){
+      const text=String(value);inspect(text);if(key!==undefined)inspect(key+": "+text);return;
+    }
+    if(active.has(value))throw new Error("cycle");active.add(value);
+    try{if(Array.isArray(value))for(const item of value)visit(item,key,depth+1);
+      else for(const [name,item] of Object.entries(value)){inspect(name);visit(item,name,depth+1);}}
+    finally{active.delete(value);}
+  };
+  try{visit(data,undefined,0);}catch{return [...found.values(),issue("V09","frontmatter semantic screening exceeds safe traversal bounds","error",path)];}
+  return [...found.values()];
 }
 
 interface ParsedNote extends LinkNote { data: Record<string, unknown>; h1: string; text: string }
@@ -130,21 +153,33 @@ function changedBrokenLinks(oldNotes: Map<string, ParsedNote>, newNotes: Map<str
   }
   return issues;
 }
-function schema(note: ParsedNote): WriteIssue[] {
-  const issues: WriteIssue[] = [], { data, path } = note;
-  if ([...Object.keys(data)].some(key => !KEYS.has(key))) issues.push(issue("V01", "unknown frontmatter key", "error", path));
+interface SchemaIssue extends WriteIssue { fields: string[] }
+function schema(note: ParsedNote): SchemaIssue[] {
+  const issues: SchemaIssue[] = [], { data, path } = note;
+  const add=(field:string,message:string,dependencies=[field])=>issues.push({...issue("V01",message,"error",path),fields:dependencies});
+  for(const key of Object.keys(data))if(!KEYS.has(key))add(key,"unknown frontmatter key");
   const description = data.description;
-  if (typeof description !== "string" || !description.trim() || [...description].length > 200) issues.push(issue("V01", "description must contain 1..200 Unicode characters", "error", path));
-  else if ([note.title, note.h1, basename(path, ".md")].some(value => value && fold(description) === fold(value))) issues.push(issue("V01", "description must supplement the title", "error", path));
-  if (typeof data.type !== "string" || !TYPES.has(data.type)) issues.push(issue("V01", "invalid or missing note type", "error", path));
+  if (typeof description !== "string" || !description.trim() || [...description].length > 200) add("description","description must contain 1..200 Unicode characters");
+  else if ([note.title, note.h1, basename(path, ".md")].some(value => value && fold(description) === fold(value))) add("description","description must supplement the title");
+  if (typeof data.type !== "string" || !TYPES.has(data.type)) add("type","invalid or missing note type");
   if (data.type !== "moc" || data.domain !== undefined) {
-    if (typeof data.domain !== "string" || !DOMAINS.has(data.domain)) issues.push(issue("V01", "invalid or missing domain", "error", path));
+    if (typeof data.domain !== "string" || !DOMAINS.has(data.domain)) add("domain","invalid or missing domain");
   }
   for (const [key, allowed] of [["confidence", CONFIDENCE], ["status", STATUS], ["category", CATEGORY]] as const) {
-    if (data[key] !== undefined && (typeof data[key] !== "string" || !allowed.has(data[key]))) issues.push(issue("V01", `invalid ${key} enum`, "error", path));
+    if (data[key] !== undefined && (typeof data[key] !== "string" || !allowed.has(data[key]))) add(key,`invalid ${key} enum`);
   }
-  if (data.source !== undefined && (typeof data.source !== "string" || !data.source.trim())) issues.push(issue("V01", "source must be a nonempty string", "error", path));
+  if(data.source!==undefined)try{sourceReferences(data.source);}catch{add("source","source must contain workspace-relative paths, mem ids or URLs");}
   return issues;
+}
+function schemaIssues(note:ParsedNote,old:ParsedNote|undefined,context:ValidationContext):WriteIssue[]{
+  const op=context.operation;
+  const explicit=op.op==="frontmatter"&&noteKey(op.path)===noteKey(note.path)?new Set(Object.keys(op.set)):new Set<string>();
+  const value=(n:ParsedNote,key:string)=>n.data[key];
+  const previous=old?schema(old):[];
+  return schema(note).map(({fields,...finding})=>{
+    const retained=op.op!=="create"&&old&&!fields.some(key=>explicit.has(key))&&fields.every(key=>isDeepStrictEqual(value(note,key),value(old,key)))&&previous.some(before=>before.message===finding.message&&isDeepStrictEqual(before.fields,fields));
+    return {...finding,severity:retained?"warning":"error"};
+  });
 }
 function validPath(path: string, report: boolean): boolean {
   if (Buffer.byteLength(path) > 200 || path.includes("\\") || path.split("/").some(part => !part || part === "." || part === "..")) return false;
@@ -186,15 +221,29 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
     if (change.after === null) continue;
     if (Buffer.byteLength(change.after) > MAX_BYTES) issues.push(issue("V09", "prospective file exceeds 256 KiB", "error", change.path));
     issues.push(...screenContent(change.after, context.vault, context.config).map(value => ({ ...value, path: change.path })));
+    try{issues.push(...screenMetadata(parseFrontmatter(change.after).data,context,change.path));}catch{ /* Invalid note YAML is reported separately; reports remain schema-exempt. */ }
   }
+  const sourceRoot=sourceWorkspaceRoot(context.vault);
   const oldNotes = parseNotes(context.notes), newNotes = parseNotes(final), oldNames = names(oldNotes), newNames = names(newNotes);
-  for (const change of changes) {
+  const candidates=[...changes];
+  if(context.operation.op==="frontmatter"){
+    const key=noteKey(context.operation.path),existing=[...newNotes.values()].find(note=>noteKey(note.path)===key);
+    if(existing&&!candidates.some(change=>change.path===existing.path))candidates.push({path:existing.path,before:existing.text,after:existing.text});
+  }
+  for (const change of candidates) {
     if (change.after === null || report) continue;
     const note = newNotes.get(change.path);
     if (!note) { issues.push(issue("V01", "invalid frontmatter", "error", change.path)); continue; }
-    issues.push(...schema(note), ...topicPlacement(note));
+    const prior=context.operation.op==="move"&&noteKey(context.operation.to)===noteKey(note.path)?oldNotes.get(`notes/${noteKey(context.operation.from)}.md`):oldNotes.get(note.path);
+    issues.push(...schemaIssues(note,prior,context), ...topicPlacement(note));
     const source = note.data.source;
-    if (typeof source === "string" && isDenied(source.replaceAll("\\", "/"), context.config.denyPaths)) issues.push(issue("V06", "source is denied by the path policy", "error", change.path));
+    let sourceDenied=strings(source).some(entry=>isDenied(entry.replaceAll("\\","/"),context.config.denyPaths));
+    if(source!==undefined&&!sourceDenied)try{
+      const references=sourceReferences(source);
+      if(sourceRoot&&references.some(ref=>ref.kind==="path"&&isDenied(canonicalPath(resolve(sourceRoot,ref.value)),context.config.denyPaths)))sourceDenied=true;
+      if(!sourceDenied)issues.push(...missingSourceWarnings(source,sourceRoot).map(message=>issue("V11",message,"warning",change.path)));
+    }catch{ /* Typed source errors are emitted as field-sensitive V01 above. */ }
+    if(sourceDenied)issues.push(issue("V06","source is denied by the path policy","error",change.path));
     if (change.before === null && context.operation.op === "create") {
       const stem = noteKey(change.path);
       if (context.notes.has(change.path) || [...newNotes.values()].some(other => other.path !== note.path && (noteKey(other.path) === stem || (note.h1 && other.h1 && fold(note.h1) === fold(other.h1))))) {

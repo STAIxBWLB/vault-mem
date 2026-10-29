@@ -17,7 +17,7 @@ export function parity(kind:"lint"|"graph", args:string[]) {
     writeFileSync(join(root,"log"),snapshot.log!);
     const graph=buildGraph(snapshot),lint=lintVault(snapshot);
     const normalizeEdges=(edges:{source:string;target:string}[])=>edges.map(e=>[e.source,e.target].sort().join("|")).sort();
-    const actual=kind==="lint" ? Object.fromEntries(Object.entries(lint.findings).filter(([code])=>code!=="L13").map(([code,items])=>[code,[...items].sort()])) : {nodes:graph.nodes.map(({community,degree,...node})=>node),edges:normalizeEdges(graph.edges)};
+    const actual=kind==="lint" ? Object.fromEntries(Object.entries(lint.findings).filter(([code])=>!(["L13","L14"].includes(code))).map(([code,items])=>[code,[...items].sort()])) : {nodes:graph.nodes.map(({community,degree,...node})=>node),edges:normalizeEdges(graph.edges)};
     let expected:unknown;
     if (args[1]) {
       const python=process.env.PYTHON ?? "python3";

@@ -5,7 +5,7 @@ import { writeAnalysisReports } from "./analysis-reports.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import type { VaultSpec } from "./config.ts";
 import { loadRegistry, registryStatus } from "./registry.ts";
-import { VaultIndex } from "./vault-index.ts";
+import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
 import { appendLog, readLog } from "./vault-log.ts";
 import { applyWrite } from "./writer.ts";
 import { notePath } from "./write-operations.ts";
@@ -37,14 +37,14 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
   return [
     tool("vmem_status", "Registered vaults with health, write policy and effective pii.", object({})),
     tool("vmem_search", "Full-text (BM25) search over indexed notes. Literal AND terms.", object({ query: string(1000), vault, limit: integer(1, 50), type: string(64), domain: string(64) }, ["query"])),
-    tool("vmem_read", "Read one note by stem, alias or notes/ path: frontmatter, body, sha256. Bounded by maxBytes.", object({ path: note, vault, maxBytes: integer(1, 65536) }, ["path"])),
+    tool("vmem_read", "Read one note by stem, alias or notes/ path: frontmatter, body, sha256. Bounded by maxBytes; section selects an exact H2, offset pages UTF-8 byte ranges, and truncated reads list H2 headings/nextOffset.", object({ path: note, vault, maxBytes: integer(1, 65536), section: string(1024), offset: integer(0, MAX_NOTE_BYTES) }, ["path"])),
     tool("vmem_read_many", "Read up to 20 notes (8 KiB each).", object({ paths: { type: "array", minItems: 1, maxItems: 20, items: note }, vault }, ["paths"])),
     tool("vmem_list", "List indexed notes under notes/, optionally by stem prefix.", object({ vault, prefix: string(256, 0), limit: integer(1, 500) })),
     tool("vmem_links", "Outgoing links (with resolution) and/or incoming backlinks of a note.", object({ path: note, vault, direction: { type: "string", enum: ["out", "in", "both"] }, limit: integer(1, 200) }, ["path"])),
     tool("vmem_mocs", "MOC notes with incoming link counts.", object({ vault })),
     tool("vmem_check", "Validate a prospective note text without writing.", object({ vault, path: string(200), text: string(262144, 0) }, ["text"])),
     tool("vmem_log_tail", "Read the newest vault log lines, optionally filtered.", object({ vault, n: integer(1, 200), type: { type: "string", enum: LOG_TYPES }, grep: string(256) })),
-    tool("vmem_create", "Create a validated note. Requires a vault with write=mcp.", object({ vault, stem: string(200), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), source: string(512), confidence: string(32), status: string(32), extra: { type: "object", maxProperties: 32, additionalProperties: scalar }, log: logEvent }, ["stem", "type", "domain", "description"]), "write"),
+    tool("vmem_create", "Create a validated note. Requires a vault with write=mcp.", object({ vault, stem: string(200), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), source: { type: ["string", "array"], minLength: 1, maxLength: 512, minItems: 1, maxItems: 32, items: string(512) }, confidence: string(32), status: string(32), extra: { type: "object", maxProperties: 32, additionalProperties: scalar }, log: logEvent }, ["stem", "type", "domain", "description"]), "write"),
     tool("vmem_patch", "Replace one exact string in a note.", object({ vault, path: note, oldString: string(8192), newString: string(8192, 0), expectedSha: sha }, ["path", "oldString", "newString"]), "write"),
     tool("vmem_append", "Append markdown to a section of a note.", object({ vault, path: note, section: string(120), markdown: string(16384), expectedSha: sha }, ["path", "section", "markdown"]), "write"),
     tool("vmem_set_frontmatter", "Set or unset frontmatter keys of a note.", object({ vault, path: note, set: { type: "object", maxProperties: 32, additionalProperties: scalar }, unset: { type: "array", maxItems: 32, items: string(64) }, expectedSha: sha }, ["path"]), "write"),
@@ -89,8 +89,9 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     return receipt.ok ? receipt : { ...receipt, refused: true };
   };
   const twoStep = (args: Record<string, unknown>) => ({ confirm: args.confirm === true, ...(str(args.fingerprint) ? { fingerprint: str(args.fingerprint) } : {}) });
-  const document = (path: string, content: string, hash: string, truncated: boolean) => {
-    if (truncated) return { path, sha256: hash, truncated, frontmatter: null, body: content };
+  const document = (result: ReturnType<VaultIndex["show"]>) => {
+    const { path, content, hash, truncated, ...metadata } = result;
+    if (truncated || result.section !== undefined || result.offset !== undefined) return { path, sha256: hash, truncated, frontmatter: null, body: content, ...metadata };
     const parsed = parseFrontmatter(content);
     return { path, sha256: hash, truncated, frontmatter: parsed.data, body: parsed.body };
   };
@@ -116,9 +117,9 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_graph_neighbors: args => graphNeighbors(buildGraph(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),str(args.path)!, (args.hops as 1|2|undefined) ?? 1, (args.limit as number|undefined) ?? 50),
     vmem_status: () => ({ defaultVault: defaultVault ?? null, vaults: registryStatus(home).filter(v => ids.includes(v.id)) }),
     vmem_search: args => read(args, index => ({ hits: index.search(str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }) })),
-    vmem_read: args => read(args, index => { const r = index.show(str(args.path)!, (args.maxBytes as number | undefined) ?? 16384); return document(r.path, r.content, r.hash, r.truncated); }),
+    vmem_read: args => read(args, index => { const r = index.show(str(args.path)!, (args.maxBytes as number | undefined) ?? 16384, str(args.section), args.offset as number | undefined); return document(r); }),
     vmem_read_many: args => read(args, index => ({ notes: (args.paths as string[]).map(path => {
-      try { const r = index.show(path, 8192); return document(r.path, r.content, r.hash, r.truncated); }
+      try { const r = index.show(path, 8192); return document(r); }
       catch (error) { return { path, ...refusal("V04", error instanceof Error ? error.message : "unreadable") }; }
     }) })),
     vmem_list: args => read(args, index => ({ notes: index.list(str(args.prefix) ?? "", (args.limit as number | undefined) ?? 100) })),
@@ -133,6 +134,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_create: args => {
       const frontmatter: Record<string, unknown> = { ...(args.extra as Record<string, unknown> | undefined ?? {}) };
       for (const key of ["type", "domain", "description", "title", "source", "confidence", "status"]) if (str(args[key]) !== undefined) frontmatter[key] = args[key];
+      if (Array.isArray(args.source)) frontmatter.source = args.source as string[];
       if (Array.isArray(args.topics)) frontmatter.topics = (args.topics as string[]).map(v => v.startsWith("[[") ? v : `[[${v}]]`);
       return write(args, { op: "create", path: str(args.stem)!, frontmatter, ...(str(args.body) !== undefined ? { body: str(args.body) } : {}) });
     },

@@ -1,3 +1,4 @@
+import { parseYamlWithQuotedEscapes } from "./yaml-quoted.ts";
 import { randomUUID } from "node:crypto";
 
 /** Preserve Python scalar display and type tests without introducing a YAML runtime dependency. */
@@ -139,9 +140,9 @@ export function parseAnalysisYaml(source: string): unknown {
     if (!flow && source[offset] !== ":") previousPlain=effectiveIndent;
   }
   let parsed: unknown;
-  try { parsed=Bun.YAML.parse(out); }
+  try { parsed=parseYamlWithQuotedEscapes(out); }
   catch(error) {
-    try { Bun.YAML.parse(source); } catch { throw error; }
+    try { parseYamlWithQuotedEscapes(source); } catch { throw error; }
     throw new AnalysisYamlUnsupported("plain scalar layout (use a quoted or block scalar)");
   }
   const active = new Set<object>();
