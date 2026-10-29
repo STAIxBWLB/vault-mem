@@ -211,6 +211,19 @@ export class VaultIndex {
     } finally { rows.finalize(); }
     return mocs.map(moc => ({ path: moc.path, title: boundedText(moc.title, 512).content, description: boundedText(moc.description, 512).content, count: counts.get(moc.path) ?? 0 }));
   }
+  /** Notes whose frontmatter `promoted_from` equals the value exactly (at most 20). */
+  promotedFrom(value: string): string[] {
+    if (!/^mem:[a-f0-9]{32}$/.test(value)) throw new Error("promoted_from: expected mem:<32 hex>");
+    const out: string[] = [];
+    const rows = this.db.prepare<{ path: string; source: string }, [string]>("SELECT path,source FROM notes WHERE instr(source, ?) > 0 ORDER BY path");
+    try {
+      for (const row of rows.iterate(value)) {
+        try { if (parseFrontmatter(row.source).data.promoted_from === value) out.push(row.path); } catch { /* unrelated malformed YAML */ }
+        if (out.length >= 20) break;
+      }
+    } finally { rows.finalize(); }
+    return out;
+  }
   links(target: string, limit = 50): ResolvedLink[] {
     const path = this.find(target);
     return this.db.query<{ data: string }, [string, number]>("SELECT data FROM links WHERE source=? ORDER BY ordinal LIMIT ?").all(path, resultLimit(limit)).map(row => JSON.parse(row.data) as ResolvedLink).map(link => ({ ...link, target: boundedText(link.target, 1024).content, label: link.label === null ? null : boundedText(link.label, 1024).content, heading: link.heading === null ? null : boundedText(link.heading, 1024).content, block: link.block === null ? null : boundedText(link.block, 1024).content }));

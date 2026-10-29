@@ -23,6 +23,7 @@ export const COMMANDS = [
   { name: "log tail", usage: "log tail <vault> [--limit 1..200] [--type TYPE] [--json]", mutates: false },
   { name: "log grep", usage: "log grep <vault> <pattern> [--limit 1..200] [--type TYPE] [--json]", mutates: false },
   { name: "log append", usage: "log append <vault> <TYPE> <project> <source> <note> [--dest PATH] [--json]", mutates: true },
+  { name: "promote-from-amem", usage: "promote-from-amem <vault> [<mem-id>] [--project KEY|--all-projects] [--limit 1..200] [--stem STEM] [--type TYPE] [--domain DOMAIN] [--topics a,b] [--description TEXT] [--title TEXT] [--body file|-] [--link-to NOTE] [--log-project ID] [--edit] [--confirm --fingerprint SHA] [--json]", mutates: "confirm" },
   { name: "mcp", usage: "mcp", mutates: false },
   { name: "setup", usage: "setup <claude|codex|kimi|pi|qwen|jcode|agy|all> [--apply|--undo] [--json]", mutates: "apply" },
   { name: "completion", usage: "completion <bash|zsh|fish>", mutates: false },

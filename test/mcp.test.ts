@@ -51,9 +51,9 @@ test("tools/list: vault enum is the registered ids, default is first personal, e
       if (schema.type === "array") expect(schema.maxItems).toBeLessThanOrEqual(64);
     }
   }
-  expect(tools.filter(t => t.annotations.destructiveHint).map(t => t.name)).toEqual(["vmem_move", "vmem_delete"]);
-  // No graph or promotion tool is advertised before its provider exists.
-  expect(tools.some(t => /graph|promote/.test(t.name))).toBe(false);
+  expect(tools.filter(t => t.annotations.destructiveHint).map(t => t.name)).toEqual(["vmem_move", "vmem_delete", "vmem_promote_from_amem"]);
+  // No graph or org-promotion tool is advertised before its provider exists.
+  expect(tools.some(t => /graph|^vmem_promote$/.test(t.name))).toBe(false);
 });
 
 test("reads go through the index with defaults and bounds", async () => {

@@ -22,3 +22,6 @@ export { runSetup, defaultEntry, SETUP_TARGETS, SERVER_NAME } from "./setup.ts";
 export type { SetupTarget, SetupMode, SetupReport, SetupAction, McpEntry } from "./setup.ts";
 export { COMMANDS, completionDefinitions, completionScript } from "./commands-table.ts";
 export type { CompletionDefinition } from "./commands-table.ts";
+export { promoteFromAmem, listPromotionCandidates, draftNote, stemFor, logProjectFor } from "./promote.ts";
+export type { PromoteRequest, PromoteResult, PromoteMetadata, SeamFactory } from "./promote.ts";
+export type { AmemSeam, AmemCandidate, AmemOptions } from "./amem/seam.ts";
