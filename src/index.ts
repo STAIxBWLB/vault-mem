@@ -33,3 +33,7 @@ export type { VaultGraph, GraphNeighborhood } from "./vault-graph.ts";
 export type { AnalysisSnapshot, LintCode, LintReport } from "./analysis-types.ts";
 export { writeAnalysisReports } from "./analysis-reports.ts";
 export type { AnalysisRequest } from "./analysis-reports.ts";
+export { promoteToOrg, screenForOrg, dropUnresolvedLinks, lintPromoted } from "./org-promote.ts";
+export type { OrgPromoteRequest, OrgPromoteResult } from "./org-promote.ts";
+export { syncVault, sameRemote } from "./sync.ts";
+export type { SyncResult } from "./sync.ts";

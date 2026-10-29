@@ -2,7 +2,7 @@
 
 An Obsidian-compatible knowledge vault tool for agents and people. Requires Bun >=1.4.2. The full check (`bun run check`) needs only Bun: package validation uses `bun pm pack --dry-run`, so Node and npm are not required. CI runs on Ubuntu and macOS for pull requests and for pushes to `main`.
 
-Implemented: configuration, vault registration, lossless frontmatter parsing/emission, wiki-link resolution and derived SQLite FTS5 indexing with bounded read commands. Validated note writes, the append-only log, the `vmem mcp` stdio server, reversible `vmem setup` host registration and promotion from agent-mem (`promote-from-amem`) are also implemented below. Lint/graph analysis is implemented below. Promotion to org vaults (`vmem promote`), sync and the `acon` console remain planned under issues [#1](https://github.com/STAIxBWLB/vault-mem/issues/1) and [#2](https://github.com/STAIxBWLB/vault-mem/issues/2). Do not use this increment to replace an existing vault writer.
+Implemented: configuration, vault registration, lossless frontmatter parsing/emission, wiki-link resolution and derived SQLite FTS5 indexing with bounded read commands. Validated note writes, the append-only log, the `vmem mcp` stdio server, reversible `vmem setup` host registration and promotion from agent-mem (`promote-from-amem`) are also implemented below. Lint/graph analysis, promotion to org vaults (`vmem promote`) and explicit `vmem sync` are implemented below. The `acon` console remains planned under issues [#1](https://github.com/STAIxBWLB/vault-mem/issues/1) and [#2](https://github.com/STAIxBWLB/vault-mem/issues/2). Do not use this increment to replace an existing vault writer.
 
 ```sh
 bun install
@@ -128,9 +128,10 @@ The vault set is read once at startup: every tool's `vault` property is an enum 
 | `vmem_log_append` | `type`, `project`, `source`, `dest`, `note`<=500 |
 | `vmem_move` | `from`, `to`, `confirm`, `fingerprint` (two-step) |
 | `vmem_delete` | `path`, `confirm`, `fingerprint` (two-step; the preview lists backlinks) |
+| `vmem_promote` | `path` (in the personal vault), `to` (enum of org vaults), `topics[]`, `again`, `confirm`, `fingerprint` (two-step; never pushes) |
 | `vmem_promote_from_amem` | `id`, `project`, `stem`, `type`, `domain`, `topics[]`, `description`, `title`, `body`<=65536, `linkTo`, `confirm`, `fingerprint` (two-step) |
 
-Move and delete without `confirm` write nothing and return the preview and `fingerprint`; `confirm: true` requires the fingerprint recomputed on the current state, otherwise the call is refused with `V09`. `vmem_promote_from_amem` is described under Promotion from agent-mem. Graph/lint tools are listed below. Org promotion (`vmem_promote`) is not advertised until its provider lands (#10). Note paths in read results are relative to `notes/`.
+Move and delete without `confirm` write nothing and return the preview and `fingerprint`; `confirm: true` requires the fingerprint recomputed on the current state, otherwise the call is refused with `V09`. `vmem_promote_from_amem` is described under Promotion from agent-mem. `vmem_promote` is described under Org promotion and sync. Graph/lint tools are listed below. Note paths in read results are relative to `notes/`.
 
 # Host setup
 
@@ -176,3 +177,27 @@ Analysis consumes note sources from the derived SQLite index, including invalid-
 `bun scripts/lint-parity.ts` and `bun scripts/graph-parity.ts` compare the synthetic corpus against frozen Python reference oracles. Use `--reference /absolute/path/to/lint.py` or `--reference /absolute/path/to/build-graph.py` to run the unchanged Python tools directly (`PYTHON` selects an interpreter with PyYAML/networkx). Keep those references until a separate retirement decision after two consecutive zero-diff runs. Fixture parity does not establish private-corpus parity or authorize a live vault cutover. Private corpus evidence stays private; no note bodies belong in public fixtures.
 
 Analysis uses YAML 1.1 scalar compatibility for Python parity, including implicit booleans, octal/sexagesimal numbers, floats and timestamps, while preserving quoted/block strings and merge keys. Explicit tags, complex/non-string mapping keys, recursive aliases and nesting beyond 64 levels are refused explicitly instead of reporting misleading findings. These bounded-parser refusals require manual resolution before parity can be established for an affected corpus.
+# Org promotion and sync
+
+Each vault is its own git repository. There is no cross-vault link syntax: `[[x]]` always resolves inside its own vault, so an org note cannot link back into a personal vault. Nothing is scheduled and nothing pushes on its own.
+
+```sh
+vmem promote personal shared-method --to team                     # preview: full org text, dropped links, screen result, fingerprint
+vmem promote personal shared-method --to team --confirm --fingerprint <sha>
+vmem sync team                                                    # preview: remote check, branch, ahead/behind, paths to stage
+vmem sync team --confirm --fingerprint <sha>
+```
+
+`vmem promote` copies one note from a personal vault into the local clone of a writable org vault (`kind: org`, `write` not `none`):
+
+- **Transform.** Topics must name MOCs that already exist in the org vault (source topics by default, `--topics` to override). Body wiki links that do not resolve in the org vault become plain text (their label, if any); wiki-valued frontmatter (`project`, `supersedes`, `superseded_by`, `source_ref`) pointing outside it is dropped. All of this is listed in `droppedLinks`. The org note gets `promoted_from: "<personal>:notes/x.md"` and `promoted_at`.
+- **Screen (fail closed).** It refuses: secrets; PII under the org vault's policy (org defaults to `deny`, plus configured `piiPatterns`); `type: person` or `domain: people` records; private correspondence (`source`/`source_ref` from `inbox/`, `outlook:`, `telegram(`, `kakao`); and internal meeting notes (`source` under `meetings/`). These are keyword heuristics; the org clone's `git diff` before `vmem sync` is the review surface. A refusal or a preview writes nothing in either vault.
+- **Confirm.** It requires the current fingerprint. Then it creates the org note through `applyWrite`, records `promoted_to: "<org>:notes/x.md"` on the source, and appends `SYNC  <project>  personal:notes/x.md → <org>:notes/x.md  <em-dash> promoted: <type>` to both vault logs (`--log-project` sets the project, default `-`). Finally it checks the written note against the org vault. A second promotion of the same note needs `--again`, and an existing org note is never overwritten.
+- **MCP.** `vmem_promote` does the same over MCP and needs `write: mcp` on both vaults.
+
+`vmem sync <vault>` is the only command that commits or pushes:
+
+- **Preview.** It requires a configured `remote` that matches `origin` after normalising scheme, credentials, case and a trailing `.git`; a mismatch fetches and pushes nothing. It refuses a detached HEAD or an in-progress rebase or merge, then fetches and previews the branch, ahead/behind counts, and the changed paths it will stage: only `notes/`, `reports/` and `log`. Anything else is listed under `ignored` and never staged.
+- **Confirm.** With the current fingerprint it commits those paths, rebases onto `origin/<branch>` when behind, pushes, then re-fetches and reports success only when the remote head equals the local head. Conflicting history aborts the rebase and keeps the local commit (`DIVERGED`). A refused push (`PUSH`) or a failed fetch (`FETCH`, for example missing credentials) reports `ok: false`.
+- **Git hardening.** Git runs through agent-mem's hardened argv: hooks, fsmonitor, external diff, pager, credential helper and askpass are disabled, `GIT_TERMINAL_PROMPT=0` is set, and repository-redirecting `GIT_*` variables are removed. So sync uses ssh keys or a deploy key and never prompts.
+- **Not decided by the tool.** Which org, visibility, remote and deploy key a vault uses are deployment decisions, and whether an agent may push a given org vault is the workspace's external-sending rule.
