@@ -1,6 +1,7 @@
 export const COMMANDS = [
   { name: "status", usage: "status [--json]", mutates: false },
   { name: "doctor", usage: "doctor [--json]", mutates: false },
+  { name: "recover", usage: "recover [--confirm] [--json]", mutates: "confirm" },
   { name: "vaults list", usage: "vaults list [--json]", mutates: false },
   { name: "vaults add", usage: "vaults add <id> <absolute-path> --kind personal|org --write mcp|cli|none [--pii allow|deny] [--remote URL] [--registry PATH] [--json]", mutates: true },
   { name: "vaults remove", usage: "vaults remove <id> [--confirm] [--json]", mutates: "confirm" },

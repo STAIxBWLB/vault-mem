@@ -1,5 +1,9 @@
 name: Check
-on: [push, pull_request]
+# Push runs only for main (protected-branch result); PRs run once via pull_request.
+on:
+  push:
+    branches: [main]
+  pull_request:
 permissions:
   contents: read
 concurrency:

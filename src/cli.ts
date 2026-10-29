@@ -1,7 +1,7 @@
 import { version } from "../package.json";
 import { help } from "./commands-table.ts";
 import { resolveHome } from "./home.ts";
-import { addVault, loadRegistry, registryStatus, removeVault } from "./registry.ts";
+import { addVault, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault } from "./registry.ts";
 function parse(args: string[], allowed: string[], values: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -22,7 +22,7 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
   const command = args[0] === "vaults" ? `vaults ${args[1] ?? ""}` : args[0];
   const tail = args.slice(args[0] === "vaults" ? 2 : 1);
   const options = command === "vaults add" ? ["--kind", "--write", "--pii", "--remote", "--registry"] : [];
-  const { flags, positional } = parse(tail, ["--json", ...options, ...(command === "vaults remove" ? ["--confirm"] : [])], options);
+  const { flags, positional } = parse(tail, ["--json", ...options, ...(command === "vaults remove" || command === "recover" ? ["--confirm"] : [])], options);
   const home = resolveHome(env);
   let result: unknown, code = 0;
   switch (command) {
@@ -33,9 +33,14 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
       if (command === "doctor" && !healthy) code = 1;
       break;
     }
+    case "recover":
+      if (positional.length) throw new Error("recover: unexpected arguments");
+      result = recoverRegistry(home.home, flags["--confirm"] === true);
+      if ((result as { blocked?: string }).blocked) code = 1;
+      break;
     case "vaults list":
       if (positional.length) throw new Error("vaults list: unexpected arguments");
-      result = loadRegistry(home.home).vaults;
+      result = loadRegistry(home.home).vaults.map(v => ({ ...v, pii: effectivePii(v) }));
       break;
     case "vaults add": {
       if (positional.length !== 2) throw new Error("vaults add: requires id and absolute path");
