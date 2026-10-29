@@ -1,0 +1,138 @@
+name: Release
+
+# Authoring this workflow does not create a tag or enable publication.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Release validation (${{ matrix.os }})
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - name: Require matching version, tag and dated changelog entry
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (process.env.RELEASE_TAG !== `v${pkg.version}`) throw new Error('Tag must equal v + package.json version');
+          if (execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() !== process.env.RELEASE_SHA) throw new Error('Checkout must match the triggering commit');
+          const prefix = `## [${pkg.version}] - `;
+          const headings = readFileSync('CHANGELOG.md', 'utf8').split('\n');
+          if (!headings.some(line => line.startsWith(prefix) && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(line.slice(prefix.length)))) throw new Error('CHANGELOG needs a dated section for this version; Unreleased is insufficient');
+          NODE
+      - run: bun install --frozen-lockfile
+      - name: Verify npm package dry-run
+        run: npm pack --dry-run --ignore-scripts
+      - name: Stage the npm tarball for validation
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { execFileSync } from 'node:child_process';
+          const dir = join(process.env.RUNNER_TEMP, 'release-package');
+          mkdirSync(dir);
+          const packed = JSON.parse(execFileSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', dir], { encoding: 'utf8' }));
+          if (packed.length !== 1) throw new Error('Expected exactly one package');
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (packed[0].name !== pkg.name || packed[0].version !== pkg.version) throw new Error('Packed package identity differs');
+          const filename = packed[0].filename;
+          if (typeof filename !== 'string' || !/^[A-Za-z0-9._-]+\.tgz$/.test(filename)) throw new Error('Unexpected archive filename');
+          renameSync(join(dir, filename), join(dir, 'package.tgz'));
+          const sha256 = createHash('sha256').update(readFileSync(join(dir, 'package.tgz'))).digest('hex');
+          writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ name: pkg.name, version: pkg.version, tag: process.env.RELEASE_TAG, commit: process.env.RELEASE_SHA, sha256, distTag: pkg.version.includes('-') ? 'next' : 'latest' }) + '\n');
+          NODE
+      # check includes strict tsc, boundaries, tests, package dry-run and clean-install CLI/MCP smoke.
+      # Smoke installs the staged npm artifact, including the exact Linux artifact later published.
+      - run: bun run check
+        env:
+          VMEM_SMOKE_TARBALL: ${{ runner.temp }}/release-package/package.tgz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: runner.os == 'Linux'
+        with:
+          name: release-${{ github.sha }}
+          path: ${{ runner.temp }}/release-package/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish approved artifact with npm OIDC
+    needs: validate
+    # This variable is intentionally not configured by readiness work. Without it this job is skipped.
+    if: github.repository == 'STAIxBWLB/vault-mem' && vars.NPM_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-${{ github.sha }}
+          path: ${{ runner.temp }}/publish-package
+      - name: Verify toolchain and artifact binding
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { execFileSync } from 'node:child_process';
+          const npm = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number);
+          if (Number(process.versions.node.split('.')[0]) < 24 || npm[0] < 11 || (npm[0] === 11 && (npm[1] < 5 || (npm[1] === 5 && npm[2] < 1)))) throw new Error('OIDC requires Node 24 and npm >=11.5.1 in this workflow');
+          const dir = join(process.env.RUNNER_TEMP, 'publish-package');
+          const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
+          const archive = join(dir, 'package.tgz');
+          const sha256 = createHash('sha256').update(readFileSync(archive)).digest('hex');
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const packed = JSON.parse(execFileSync('tar', ['-xOf', archive, 'package/package.json'], { encoding: 'utf8' }));
+          if (manifest.commit !== process.env.RELEASE_SHA || manifest.tag !== process.env.RELEASE_TAG || manifest.tag !== `v${pkg.version}` || manifest.sha256 !== sha256 || manifest.name !== pkg.name || manifest.version !== pkg.version || packed.name !== pkg.name || packed.version !== pkg.version) throw new Error('Artifact differs from the validated tag');
+          const distTag = pkg.version.includes('-') ? 'next' : 'latest';
+          if (manifest.distTag !== distTag) throw new Error('Unexpected npm dist-tag');
+          appendFileSync(process.env.GITHUB_ENV, `NPM_DIST_TAG=${distTag}\n`);
+          NODE
+      - name: Publish the exact validated artifact
+        run: npm publish "$RUNNER_TEMP/publish-package/package.tgz" --registry https://registry.npmjs.org --provenance --access public --tag "$NPM_DIST_TAG" --ignore-scripts

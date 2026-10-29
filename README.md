@@ -1,6 +1,6 @@
 # vault-mem
 
-An Obsidian-compatible knowledge vault tool for agents and people. Requires Bun >=1.4.2. The full check (`bun run check`) needs only Bun: package validation uses `bun pm pack --dry-run`, so Node and npm are not required. CI runs on Ubuntu and macOS for pull requests and for pushes to `main`.
+An Obsidian-compatible knowledge vault tool for agents and people. Requires Bun >=1.4.2. The full check (`bun run check`) needs Bun, git and tar; it includes a package dry-run and clean installed CLI/MCP smoke. Node/npm are used by the separate release workflow, not required for the ordinary Bun gate. CI runs on Ubuntu and macOS for pull requests and for pushes to `main`.
 
 Implemented: configuration, vault registration, lossless frontmatter parsing/emission, wiki-link resolution and derived SQLite FTS5 indexing with bounded read commands. Validated note writes, the append-only log, the `vmem mcp` stdio server, reversible `vmem setup` host registration and promotion from agent-mem (`promote-from-amem`) are also implemented below. Lint/graph analysis, promotion to org vaults (`vmem promote`) and explicit `vmem sync` are implemented below. The `acon` console remains planned under issues [#1](https://github.com/STAIxBWLB/vault-mem/issues/1) and [#2](https://github.com/STAIxBWLB/vault-mem/issues/2). Do not use this increment to replace an existing vault writer.
 
@@ -201,3 +201,13 @@ vmem sync team --confirm --fingerprint <sha>
 - **Confirm.** With the current fingerprint it commits those paths, rebases onto `origin/<branch>` when behind, pushes, then re-fetches and reports success only when the remote head equals the local head. Conflicting history aborts the rebase and keeps the local commit (`DIVERGED`). A refused push (`PUSH`) or a failed fetch (`FETCH`, for example missing credentials) reports `ok: false`.
 - **Git hardening.** Git runs through agent-mem's hardened argv: hooks, fsmonitor, external diff, pager, credential helper and askpass are disabled, `GIT_TERMINAL_PROMPT=0` is set, and repository-redirecting `GIT_*` variables are removed. So sync uses ssh keys or a deploy key and never prompts.
 - **Not decided by the tool.** Which org, visibility, remote and deploy key a vault uses are deployment decisions, and whether an agent may push a given org vault is the workspace's external-sending rule.
+
+
+
+## Release readiness
+
+`bun run check` includes strict types, import boundaries, tests, package dry-run and a clean tarball installation with CLI/MCP reads, non-TTY mutation and stale-preview refusal. Package files are limited to runtime source/bootstrap, manifest, license, README and changelog. Tag validation additionally runs npm package dry-run and tests the exact npm tarball later used by the gated OIDC job. No release tag or publication is created by this readiness change.
+
+- `bun run parity:release` checks same-snapshot frontmatter bytes, incremental notes/FTS/links against clean rebuild, and two consecutive synthetic Python-oracle lint/graph comparisons. External Python reference paths can be supplied with `--lint-reference` and `--graph-reference`; `--output` records aggregate evidence.
+- `bun run bench:release --output <file.json>` measures a generated 5000-note corpus in the authorized Linux dgx02 container. It records actual MCP search round-trip timings (including metadata refresh), kernel RSS high-water, raw samples and environment; it exits nonzero when a synthetic threshold fails. Synthetic write timings are diagnostic and do not establish representative private-vault acceptance.
+- [Readiness evidence](docs/release-readiness.md), [release workflow](docs/release-workflow.md) and [cutover checklist](docs/cutover-checklist.md) distinguish verified results from outstanding private/native/integration/deployment gates. Live cutover remains blocked.
