@@ -5,11 +5,28 @@ if (!home || !vault || !mode || !raw) throw new Error("fixture arguments require
 const original = { ...fs }; let injected = false, cleanupInjected = false, renames = 0;
 let firstTarget: string | undefined;
 const tempFds = new Set<number>();
+const noteFds = new Map<number, string>();
+const reads: { capacity: number; size: number }[] = [];
 mock.module("node:fs", () => ({ ...original,
   openSync: (...args: Parameters<typeof fs.openSync>) => {
     const temporary = String(args[0]).includes(".vmem-");
     if (temporary && mode === "temp-open" && !injected) { injected = true; throw new Error("injected temp open failure"); }
-    const fd = original.openSync(...args); if (temporary) tempFds.add(fd); return fd;
+    const fd = original.openSync(...args); if (temporary) tempFds.add(fd);
+    if (String(args[0]).startsWith(`${vault}/notes/`) && !temporary) noteFds.set(fd, String(args[0]));
+    else noteFds.delete(fd);
+    return fd;
+  },
+  readSync: (fd: number, buffer: NodeJS.ArrayBufferView, offset: number, length: number, position: number | null) => {
+    const file = noteFds.get(fd);
+    if (file) {
+      reads.push({ capacity: buffer.byteLength, size: original.fstatSync(fd).size });
+      if (!injected && (mode === "grow" || mode === "shrink")) {
+        injected = true;
+        if (mode === "grow") original.appendFileSync(file, "x");
+        else original.truncateSync(file, original.fstatSync(fd).size - 1);
+      }
+    }
+    return original.readSync(fd, buffer, offset, length, position);
   },
   writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
     if (tempFds.has(Number(args[0])) && ["temp-write", "temp-cleanup"].includes(mode) && !injected) { injected = true; throw new Error("injected temp write failure"); }
@@ -48,4 +65,5 @@ if (mode === "index") {
   };
 }
 const { applyWrite } = await import("../../src/writer.ts");
-console.log(JSON.stringify(applyWrite(home, { vault: "test", operation: JSON.parse(raw) })));
+const result = applyWrite(home, { vault: "test", operation: JSON.parse(raw), ...(mode === "allocation" ? { dryRun: true } : {}) });
+console.log(JSON.stringify(mode === "allocation" ? { result, reads } : result));

@@ -18,8 +18,8 @@ function needed(notes: Map<string, string>, path: string): string {
   if (source === undefined) refuse("V04", "note does not exist", path);
   return source;
 }
-function document(source: string) {
-  try { return parseFrontmatter(source); } catch { return refuse("V01", "invalid frontmatter"); }
+function document(source: string, path: string) {
+  try { return parseFrontmatter(source); } catch { return refuse("V01", "invalid frontmatter", path); }
 }
 function h2Sections(body: string): { name: string; start: number; end: number }[] {
   const visible = proseLines(body), raw = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
@@ -35,24 +35,24 @@ function h2Sections(body: string): { name: string; start: number; end: number }[
   }
   return sections;
 }
-function appendSection(source: string, section: string, markdown: string): string {
+function appendSection(source: string, section: string, markdown: string, path: string): string {
   if (typeof section !== "string" || !section.trim() || section.length > 120 || /[\r\n]/.test(section) || section.trim().replace(/[ \t]+#+$/, "").trim().toLowerCase() === "topics") refuse("V05", "append cannot target Topics or an invalid section");
   if (typeof markdown !== "string" || Buffer.byteLength(markdown) > 16384 || proseLines(markdown).some(line => /^ {0,3}##[ \t]+Topics(?:[ \t]+#+)?[ \t]*$/i.test(line))) refuse("V05", "append cannot introduce a Topics section or exceed 16384 bytes");
-  const doc = document(source), sections = h2Sections(doc.body);
+  const doc = document(source, path), sections = h2Sections(doc.body);
   const found = sections.filter(item => normalizeTarget(item.name) === normalizeTarget(section.trim()));
   if (found.length > 1) refuse("V05", "append section is ambiguous");
   const end = found[0]?.end ?? sections.find(item => item.name.toLowerCase() === "topics")?.start ?? doc.body.length;
   const addition = found.length ? `\n${markdown.trimEnd()}\n\n` : `\n## ${section.trim()}\n\n${markdown.trimEnd()}\n\n`;
   return (doc.frontmatter ?? "") + doc.body.slice(0, end).trimEnd() + "\n" + addition + doc.body.slice(end);
 }
-function tidy(source: string): string {
-  const doc = document(source), sections = h2Sections(doc.body);
+function tidy(source: string, path: string): string {
+  const doc = document(source, path), sections = h2Sections(doc.body);
   const connections = sections.filter(section => /^Connections(?:\s*\(.*\))?$/i.test(section.name));
   if (!connections.length) return source;
   let body = doc.body, collected: string[] = [];
   for (const section of connections) collected.push(body.slice(section.start, section.end).replace(/^[^\n]*(?:\n|$)/, "").trim());
   for (const section of [...connections].reverse()) body = body.slice(0, section.start) + body.slice(section.end);
-  return appendSection((doc.frontmatter ?? "") + body, "Relevant Notes", collected.join("\n\n"));
+  return appendSection((doc.frontmatter ?? "") + body, "Relevant Notes", collected.join("\n\n"), path);
 }
 /** Plan transformations in memory. This function never touches files. */
 export function planOperation(operation: WriteOp, notes: Map<string, string>, reportBefore?: string | null): PlannedChange[] {
@@ -79,7 +79,7 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
       const body = operation.body ?? `# ${title}\n\nThis note argues that ${title}.\n\n## Relevant Notes\n\n## Topics\n\n${topics ? `- ${topics}\n` : ""}`;
       if (typeof body !== "string") refuse("V01", "body must be text");
       try { set(path, emitFrontmatter(parseFrontmatter(body), operation.frontmatter)); }
-      catch { refuse("V01", "cannot emit frontmatter"); }
+      catch (error) { if (error instanceof WriteRefusal) throw error; refuse("V01", "cannot emit frontmatter", path); }
       break;
     }
     case "patch": {
@@ -90,13 +90,13 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
       set(path, source.slice(0, first) + operation.newString + source.slice(first + operation.oldString.length));
       break;
     }
-    case "append": { const { path, source } = existing(operation.path); set(path, appendSection(source, operation.section, operation.markdown)); break; }
+    case "append": { const { path, source } = existing(operation.path); set(path, appendSection(source, operation.section, operation.markdown, path)); break; }
     case "frontmatter": {
       const { path, source } = existing(operation.path);
       if (!operation.set || typeof operation.set !== "object" || Array.isArray(operation.set) || (operation.unset !== undefined && (!Array.isArray(operation.unset) || operation.unset.some(key => typeof key !== "string")))) refuse("V01", "invalid frontmatter update");
       const changes = { ...operation.set };
       for (const key of operation.unset ?? []) changes[key] = undefined;
-      try { set(path, emitFrontmatter(document(source), changes)); } catch { refuse("V01", "cannot emit frontmatter"); }
+      try { set(path, emitFrontmatter(document(source, path), changes)); } catch (error) { if (error instanceof WriteRefusal) throw error; refuse("V01", "cannot emit frontmatter", path); }
       break;
     }
     case "link": {
@@ -105,15 +105,15 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
       if (operation.context !== undefined && (typeof operation.context !== "string" || /[\r\n]/.test(operation.context) || operation.context.length > 500)) refuse("V01", "link context must be one line <=500 characters");
       if (from.path === to.path) refuse("V01", "link endpoints must differ");
       const line = (path: string) => `- [[${path.slice(6, -3)}]] (${operation.relation})${operation.context ? `: ${operation.context}` : ""}`;
-      set(from.path, appendSection(from.source, "Relevant Notes", line(to.path)));
-      if (operation.bidirectional !== false) set(to.path, appendSection(to.source, "Relevant Notes", line(from.path)));
+      set(from.path, appendSection(from.source, "Relevant Notes", line(to.path), from.path));
+      if (operation.bidirectional !== false) set(to.path, appendSection(to.source, "Relevant Notes", line(from.path), to.path));
       break;
     }
     case "supersede": {
       const old = existing(operation.old), next = existing(operation.next);
       if (old.path === next.path) refuse("V10", "supersession endpoints must differ");
-      set(old.path, emitFrontmatter(document(old.source), { status: "superseded", superseded_by: `[[${next.path.slice(6, -3)}]]` }));
-      set(next.path, appendSection(next.source, "Relevant Notes", `- Supersedes [[${old.path.slice(6, -3)}]]`));
+      set(old.path, emitFrontmatter(document(old.source, old.path), { status: "superseded", superseded_by: `[[${next.path.slice(6, -3)}]]` }));
+      set(next.path, appendSection(next.source, "Relevant Notes", `- Supersedes [[${old.path.slice(6, -3)}]]`, next.path));
       break;
     }
     case "delete": { const { path } = existing(operation.path); set(path, null); break; }
@@ -122,7 +122,7 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
       if (notes.has(to)) refuse("V08", "move destination already exists", to);
       const names = new Map<string, Set<string>>();
       for (const [path, source] of notes) {
-        const data = document(source).data;
+        const data = document(source, path).data;
         const namesForNote = [path.slice(6, -3), ...(Array.isArray(data.aliases) ? data.aliases : typeof data.aliases === "string" ? [data.aliases] : [])];
         for (const name of namesForNote) if (typeof name === "string") {
           const key = normalizeTarget(name.replace(/^\.\//, "").replace(/^notes\//i, "").replace(/\.md$/i, "")), values = names.get(key) ?? new Set<string>(); values.add(path); names.set(key, values);
@@ -139,7 +139,7 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
         return value;
       };
       for (const [path, source] of notes) {
-        const doc = document(source), changes: Record<string, unknown> = {};
+        const doc = document(source, path), changes: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(doc.data)) changes[key] = rewriteValue(value);
         const frontmatter = emitFrontmatter(doc, changes).slice(0, -doc.body.length || undefined);
         const output = (doc.body.length ? frontmatter : emitFrontmatter(doc, changes)) + rewriteLinkTargets(doc.body, replace);
@@ -148,7 +148,7 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
       }
       break;
     }
-    case "tidy": { for (const [path, source] of notes) set(path, tidy(source)); break; }
+    case "tidy": { for (const [path, source] of notes) set(path, tidy(source, path)); break; }
     case "report": {
       if (typeof operation.path !== "string" || !/^(?:reports|ops)\/[a-z0-9][a-z0-9./-]*$/.test(operation.path) || operation.path.split("/").some(part => !part || part === "." || part === "..") || Buffer.byteLength(operation.path) > 200 || typeof operation.text !== "string") refuse("V04", "invalid report path");
       set(operation.path, operation.text); break;

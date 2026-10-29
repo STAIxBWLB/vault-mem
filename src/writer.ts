@@ -41,7 +41,7 @@ function readPlain(root: string, path: string): string | null {
   try {
     const before = fstatSync(fd);
     if (!before.isFile() || before.size > MAX_NOTE_BYTES) refuse("V09", "file exceeds read bound or is not regular", path);
-    const bytes = Buffer.alloc(MAX_NOTE_BYTES + 1);
+    const bytes = Buffer.alloc(Math.min(before.size + 1, MAX_NOTE_BYTES + 1));
     let size = 0;
     while (size < bytes.length) {
       const count = readSync(fd, bytes, size, bytes.length - size, null); size += count;
@@ -92,7 +92,8 @@ function duplicateWarnings(request: WriteRequest, notes: Map<string, string>, ch
     db.run("CREATE VIRTUAL TABLE candidates USING fts5(path UNINDEXED,title,description,body,tokenize='unicode61')");
     const insert = db.query("INSERT INTO candidates VALUES (?,?,?,?)");
     for (const [path, source] of notes) {
-      const value = parseFrontmatter(source);
+      let value: ReturnType<typeof parseFrontmatter>;
+      try { value = parseFrontmatter(source); } catch { continue; } // Unrelated legacy YAML is not a duplicate candidate.
       insert.run(path, typeof value.data.title === "string" ? value.data.title : path, typeof value.data.description === "string" ? value.data.description : "", value.body);
     }
     const hits = db.query<{ path: string; score: number }, [string]>("SELECT path,bm25(candidates,0,5,2,1) AS score FROM candidates WHERE candidates MATCH ? ORDER BY score,path LIMIT 3").all(terms.map(term => `"${term}"`).join(" AND "));
@@ -184,7 +185,9 @@ export function applyWrite(home: string, request: WriteRequest): WriteReceipt {
         committed.push(change);
       }
       for (const dir of new Set(changes.map(change => dirname(join(root, change.path))))) syncDirectory(dir);
-      index.scan(); indexUpdated = true; applied = true;
+      const refreshed = index.scan(false, { skipInvalidFrontmatter: true });
+      for (const path of refreshed.skipped ?? []) issues.push({ code: "V01", severity: "warning", path: `notes/${path}`, message: "legacy invalid frontmatter omitted from derived index; note unchanged" });
+      indexUpdated = true; applied = true;
     } catch (error) {
       for (const change of [...committed].reverse()) {
         try {
@@ -202,7 +205,7 @@ export function applyWrite(home: string, request: WriteRequest): WriteReceipt {
       for (const dir of new Set(committed.map(change => dirname(join(root, change.path))))) {
         try { syncDirectory(dir); } catch { recordError("ROLLBACK", "rollback directory flush failed"); }
       }
-      try { index.scan(); } catch { recordError("INDEX", "derived index refresh failed; rebuild after resolving filesystem error"); }
+      try { index.scan(false, { skipInvalidFrontmatter: true }); } catch { recordError("INDEX", "derived index refresh failed; rebuild after resolving filesystem error"); }
       throw error;
     }
     result = { ok: true, applied, issues, changes: receipts(changes), fingerprint, indexUpdated };

@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -202,4 +203,52 @@ test("denied create/move destinations refuse before writing and FTS duplicate hi
   expect(disk(f.root)).toEqual(before);
   const duplicate = f.request({ op: "create", path: "similar-title", frontmatter: { title: "Old Finding", description: "An independent supporting observation.", type: "insight", domain: "research", topics: ["[[research]]"] }, body: "# Distinct H1\n\nDifferent text.\n\n## Topics\n\n- [[research]]\n" }, { dryRun: true });
   expect(duplicate.ok).toBe(true); expect(duplicate.possibleDuplicates).toContain("notes/old.md"); expect(disk(f.root)).toEqual(before);
+});
+
+test("unrelated legacy YAML is skipped by duplicate hints and writer refresh, without blocking actual create", () => {
+  const f = fixture(), legacy = join(f.notes, "legacy.md"); writeFileSync(legacy, note("Legacy Finding"));
+  expect(f.request(create()).ok).toBe(true); // Seed an index row that must not survive malformed replacement.
+  const malformed = "---\ndescription: [PRIVATE_SYNTHETIC\n---\n# Legacy\n"; writeFileSync(legacy, malformed);
+  const operation: WriteOp = { op: "create", path: "second-result", frontmatter: { title: "Second Result", type: "insight", domain: "research", description: "A separate and valid observation.", topics: ["[[research]]"] } };
+  const before = disk(f.root), preview = f.request(operation, { dryRun: true });
+  expect(preview.ok).toBe(true); expect(preview.issues.some(issue => issue.code === "IO")).toBe(false); expect(disk(f.root)).toEqual(before);
+  const result = f.request(operation); expect(result.ok).toBe(true); expect(result.indexUpdated).toBe(true);
+  expect(result.issues.some(issue => issue.code === "V01" && issue.severity === "warning" && issue.path === "notes/legacy.md")).toBe(true);
+  expect(JSON.stringify(result)).not.toContain("PRIVATE_SYNTHETIC"); expect(readFileSync(legacy, "utf8")).toBe(malformed);
+  const database = readdirSync(join(f.home, "indexes")).find(file => file.endsWith(".sqlite"))!;
+  const db = new Database(join(f.home, "indexes", database), { readonly: true });
+  try {
+    expect(db.query("SELECT path FROM notes WHERE path='second-result.md'").get()).toEqual({ path: "second-result.md" });
+    expect(db.query("SELECT path FROM notes WHERE path='legacy.md'").get()).toBeNull();
+  } finally { db.close(); }
+  expect(() => run(["rebuild", "test"], f.env)).toThrow("invalid frontmatter"); // Read surfaces remain strict.
+});
+test("move/tidy malformed YAML refusals identify the offending note without its contents", () => {
+  const f = fixture(); writeFileSync(join(f.notes, "broken.md"), "---\ndescription: [PRIVATE_SYNTHETIC\n---\n");
+  for (const op of [{ op: "move", from: "old", to: "renamed" }, { op: "tidy" }] as WriteOp[]) {
+    const result = f.request(op);
+    expect(result.ok).toBe(false); expect(result.issues.find(issue => issue.code === "V01")?.path).toBe("notes/broken.md");
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_SYNTHETIC");
+  }
+});
+test("move preserves explicit labels while bare aliases intentionally display the new stem", () => {
+  const f = fixture(); writeFileSync(join(f.notes, "reference.md"), note("Reference", "[[Prior Alias]] [[old|Kept Label]]"));
+  const op: WriteOp = { op: "move", from: "old", to: "renamed" }, preview = f.request(op);
+  expect(f.request(op, { confirm: true, fingerprint: preview.fingerprint }).ok).toBe(true);
+  expect(readFileSync(join(f.notes, "reference.md"), "utf8")).toContain("[[renamed]] [[renamed|Kept Label]]");
+});
+test("writer read allocation follows file size plus growth probe, and size drift still refuses", () => {
+  const f = fixture();
+  const allocation = Bun.spawnSync([process.execPath, "test/fixtures/writer-fault.ts", f.home, f.vault, "allocation", JSON.stringify(create())], { stdout: "pipe", stderr: "pipe" });
+  expect(allocation.exitCode).toBe(0);
+  const output = JSON.parse(allocation.stdout.toString()) as { result: { ok: boolean }; reads: { capacity: number; size: number }[] };
+  expect(output.result.ok).toBe(true); expect(output.reads.length).toBeGreaterThanOrEqual(3);
+  expect(output.reads.every(read => read.capacity === read.size + 1)).toBe(true);
+  for (const mode of ["grow", "shrink"]) {
+    const fresh = fixture();
+    const result = Bun.spawnSync([process.execPath, "test/fixtures/writer-fault.ts", fresh.home, fresh.vault, mode, JSON.stringify({ op: "patch", path: "old", oldString: "Original text.", newString: "Changed text." })], { stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).toBe(0); const receipt = JSON.parse(result.stdout.toString());
+    expect(receipt.ok).toBe(false); expect(receipt.issues.some((issue: { code: string }) => issue.code === "V09")).toBe(true);
+    expect(readFileSync(join(fresh.notes, "old.md"), "utf8")).toContain("Original text."); expect(existsSync(join(fresh.vault, MUTATION_LOCK))).toBe(false);
+  }
 });
