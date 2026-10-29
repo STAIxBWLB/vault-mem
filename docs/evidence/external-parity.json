@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "kind": "external Python synthetic fixture parity",
+  "privateCorpus": "unverified",
+  "references": {
+    "lintSha256": "1b38d417aef8e3ea395da36e9c58dc2fa0d33bdb65fd2ea50a771a6f5dfa2ad6",
+    "graphSha256": "5ff417ae8e129c208034516b7db8250473312ddeca669af0ba68931e4fd87aa8"
+  },
+  "inputsSha256": {
+    "src/frontmatter.ts": "55402765b99c0e4fe4626fcf845e73111e6e270ce82be7763e61169b49dd1db0",
+    "src/analysis-yaml.ts": "cade91600658d3713378b50e3db3b4a70e86807b45195e827e2a601dfaf5023d",
+    "src/vault-lint.ts": "9bf128e8f15977b594f01a8ab10362d9f0946774ad6fb81daed6532f7a59cc03",
+    "src/vault-graph.ts": "e15a76697228c832ebe91ba1ec341005fd370acbf9b2640d748762d82fcb7c3a",
+    "test/fixtures/analysis-corpus.ts": "200232cf87fc8c77027eb8e1e1f08543d1c365556968978e732bcec48b52b5b2",
+    "test/fixtures/analysis/lint-oracle.json": "d3e4cb1c009b4be44c2b6323425e54d2f0af3797c4a992bf589b47f0073c4628",
+    "test/fixtures/analysis/graph-oracle.json": "2416f03f3bf4052af5320bac46264c7985f4e4c90ce7ab92151ebdb95f3a4b89",
+    "scripts/analysis-parity.ts": "b6747a031cfa38c189fe318e4acdbdf8c4e3fb8b11926549256837c0c3f8f9ef"
+  },
+  "rounds": [
+    {
+      "run": 1,
+      "results": {
+        "lint": "lint parity: zero diff (external reference)",
+        "graph": "graph parity: zero diff (external reference)"
+      }
+    },
+    {
+      "run": 2,
+      "results": {
+        "lint": "lint parity: zero diff (external reference)",
+        "graph": "graph parity: zero diff (external reference)"
+      }
+    }
+  ],
+  "referencesRetired": false
+}

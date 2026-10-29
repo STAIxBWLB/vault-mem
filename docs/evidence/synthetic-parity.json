@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "measuredAt": "2026-10-29T13:17:38.804Z",
+  "runtimeDigest": "1b3697ef9b7b6cdcd4932aeb8b34e496042a3acc5e40768ddb5ff0fd7cbf2976",
+  "fixtureDigest": "c018376b88b57d84ebba5484dd285b80acfc4c0f60ac7728dcd124ea54edc83c",
+  "frontmatter": {
+    "files": 4,
+    "roundTrip": "byte-identical"
+  },
+  "incrementalIndex": {
+    "matchesCleanRebuild": [
+      "baseline",
+      "create",
+      "edit",
+      "rename",
+      "delete"
+    ]
+  },
+  "references": {
+    "lint": "frozen synthetic Python oracle",
+    "graph": "frozen synthetic Python oracle",
+    "retired": false
+  },
+  "rounds": [
+    {
+      "run": 1,
+      "lint": "zero-diff",
+      "graph": "zero-diff"
+    },
+    {
+      "run": 2,
+      "lint": "zero-diff",
+      "graph": "zero-diff"
+    }
+  ],
+  "obsidian": {
+    "syntaxAndLinks": "pass",
+    "nativeApplication": "unverified",
+    "reason": "Provider fixture checks do not prove native badges/rendering"
+  },
+  "consumer": {
+    "schema": "nodes/edges fixture tested",
+    "nativeConsumer": "unverified in this run"
+  },
+  "privateCorpus": "unverified"
+}

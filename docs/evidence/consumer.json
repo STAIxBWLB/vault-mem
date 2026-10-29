@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "kind": "actual Maru consumer module",
+  "consumerHead": "1971582255e36fbb09d30ecdec840f79c2ff2fdc",
+  "consumerModuleSha256": "0104a0a49ccb4691932d9fcb7d141b3075509701f1369f7dd760df44cbf2eb51",
+  "fixtureSha256": "1b42b87b9b5b2238a71c9700f70e23f2776cce22e7e352b5f9a619b6c1866549",
+  "function": "enrichGraph",
+  "enriched": true,
+  "nodes": 9,
+  "nativeUI": "unverified"
+}
