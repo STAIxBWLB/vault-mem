@@ -154,3 +154,48 @@ test("credential-free https remote fails without prompting or success", () => {
   expect(sameRemote("git@github.com:Org/Vault.git", "https://github.com/org/vault")).toBe(true);
   expect(sameRemote("https://github.com/org/vault.git", "https://github.com/org/other.git")).toBe(false);
 }, 30_000);
+
+test("dropped links to person, meeting or correspondence notes refuse without leaking their names", () => {
+  const f = fixture();
+  writeFileSync(join(f.personal, "notes", "jane-doe-contact.md"), note("Jane Doe Contact", "Bio.").replace("type: insight", "type: person"));
+  writeFileSync(join(f.personal, "notes", "board-sync-2026.md"), note("Board Sync 2026", "Minutes.", "source: \"meetings/2026-10-01.md\"\n"));
+  writeFileSync(join(f.personal, "notes", "vendor-thread.md"), note("Vendor Thread", "Summary.", "source: \"outlook:thread-9\"\n"));
+  const cases: [string, string][] = [["jane-doe-contact", "personal_data"], ["board-sync-2026", "internal_meeting_notes"], ["vendor-thread", "private_correspondence"]];
+  const before = snapshot(f.org);
+  for (const [linked, category] of cases) {
+    writeFileSync(join(f.personal, "notes", "shared-method.md"), note("Shared Method", `Uses [[org-only]] and [[${linked}|someone]].`));
+    const result = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
+    expect(result.ok, linked).toBe(false);
+    expect(result.screen.passed).toBe(false);
+    expect(result.issues.some(i => i.code === "SCREEN" && i.message.startsWith(category))).toBe(true);
+    expect(JSON.stringify(result.issues)).not.toContain(linked);
+  }
+  expect(snapshot(f.org)).toBe(before);
+  // An ordinary personal note link is still dropped to plain text and allowed.
+  writeFileSync(join(f.personal, "notes", "shared-method.md"), note("Shared Method", "Uses [[org-only]] and [[private-idea]]."));
+  expect(promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env })).toMatchObject({ ok: true, droppedLinks: ["private-idea"] });
+});
+
+test("a failed provenance write is recoverable with a provenance-only rerun", () => {
+  const f = fixture();
+  const preview = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
+  promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team", confirm: true, fingerprint: preview.fingerprint }, { env: f.env });
+  // Simulate the lost provenance write: restore the source without promoted_to.
+  writeFileSync(join(f.personal, "notes", "shared-method.md"), note("Shared Method", "Uses [[org-only]] and [[private-idea|a private idea]] and [[research]]. Code `[[kept]]`."));
+  const orgBefore = readFileSync(join(f.org, "notes", "shared-method.md"), "utf8");
+  const rerun = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
+  expect(rerun).toMatchObject({ ok: true, preview: true, recovery: "provenance-only" });
+  const fixed = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team", confirm: true, fingerprint: rerun.fingerprint }, { env: f.env });
+  expect(fixed).toMatchObject({ ok: true, applied: true, recovery: "provenance-only" });
+  expect(parseFrontmatter(readFileSync(join(f.personal, "notes", "shared-method.md"), "utf8")).data.promoted_to).toBe("team:notes/shared-method.md");
+  expect(readFileSync(join(f.org, "notes", "shared-method.md"), "utf8")).toBe(orgBefore);
+  expect(readLog(f.home, { vault: "team" }).lines).toHaveLength(1);
+  // A foreign org note at the same path is still never overwritten.
+  writeFileSync(join(f.personal, "notes", "org-only.md"), note("Org Only", "Personal copy."));
+  expect(promoteToOrg(f.home, { from: "personal", note: "org-only", to: "team" }, { env: f.env }).issues[0]!.code).toBe("V08");
+});
+
+test("local remote paths compare case-sensitively", () => {
+  expect(sameRemote("/srv/Vault.git", "/srv/vault.git")).toBe(false);
+  expect(sameRemote("file:///srv/vault.git", "/srv/vault")).toBe(true);
+});

@@ -29,14 +29,15 @@ export interface SyncResult {
 }
 type Git = (args: string[], options?: { allowFail?: boolean }) => SpawnSyncReturns<string>;
 const issue = (code: string, message: string): WriteIssue => ({ code, severity: "error", message });
-/** Compare remotes after removing transport noise: scheme, credentials, trailing .git and slash. */
+/** Compare remotes after removing transport noise: scheme, credentials, trailing .git and slash. Host remotes compare case-insensitively; local paths keep their case. */
 export function sameRemote(a: string, b: string): boolean {
   const norm = (url: string) => {
     let value = url.trim();
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
-      try { const parsed = new URL(value); value = parsed.protocol === "file:" ? parsed.pathname : `${parsed.hostname}${parsed.port && !["22", "443"].includes(parsed.port) ? `:${parsed.port}` : ""}${parsed.pathname}`; }
+      try { const parsed = new URL(value); if (parsed.protocol === "file:") return decodeURIComponent(parsed.pathname).replace(/\/+$/, "").replace(/\.git$/, ""); value = `${parsed.hostname}${parsed.port && !["22", "443"].includes(parsed.port) ? `:${parsed.port}` : ""}${parsed.pathname}`; }
       catch { return value; }
-    } else if (/^[^/@:]+@[^:]+:/.test(value) || /^[^/:]+:[^/]/.test(value)) value = value.replace(/^[^@]+@/, "").replace(":", "/");
+    } else if (value.startsWith("/")) return value.replace(/\/+$/, "").replace(/\.git$/, "");
+    else if (/^[^/@:]+@[^:]+:/.test(value) || /^[^/:]+:[^/]/.test(value)) value = value.replace(/^[^@]+@/, "").replace(":", "/");
     return value.replace(/\/+$/, "").replace(/\.git$/, "").toLowerCase();
   };
   return norm(a) === norm(b);

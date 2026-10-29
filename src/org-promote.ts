@@ -42,6 +42,8 @@ export interface OrgPromoteResult {
   provenance?: WriteReceipt;
   logs?: { source: LogReceipt | null; target: LogReceipt | null };
   lint?: { passed: boolean; issues: WriteIssue[] };
+  /** Set when the org note already exists from this source and only the source provenance is missing. */
+  recovery?: "provenance-only";
 }
 const issue = (code: string, message: string, path?: string): WriteIssue => ({ code, severity: "error", message, ...(path ? { path } : {}) });
 const sha = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -64,6 +66,32 @@ export function screenForOrg(text: string, data: Record<string, unknown>, target
   return issues;
 }
 
+/** Categories that make a linked source-vault note unpublishable; its name must not reach the org vault either. */
+export function sensitiveCategory(data: Record<string, unknown>): string | undefined {
+  if (data.type === "person" || data.domain === "people") return "personal_data";
+  const sources = [...strings(data.source), ...strings(data.source_ref)];
+  if (sources.some(value => MEETING.some(pattern => pattern.test(value)))) return "internal_meeting_notes";
+  if (sources.some(value => CORRESPONDENCE.some(pattern => pattern.test(value)))) return "private_correspondence";
+  return undefined;
+}
+/** Dropped links resolved in the source vault: any that point at a sensitive note refuse the promotion. */
+function screenDroppedLinks(home: string, source: VaultSpec, all: VaultSpec[], dropped: string[]): WriteIssue[] {
+  if (!dropped.length) return [];
+  const index = new VaultIndex(home, source, all.map(v => v.path)), found = new Map<string, number>();
+  try {
+    index.scan();
+    for (const link of dropped) {
+      let category: string | undefined;
+      try {
+        const note = index.show(link, 65536);
+        category = note.truncated ? "unreadable_link_target" : sensitiveCategory(parseFrontmatter(note.content).data);
+      } catch { category = undefined; } // unresolved in the source too: plain text only
+      if (category) found.set(category, (found.get(category) ?? 0) + 1);
+    }
+  } finally { index.close(); }
+  // Counts and categories only: the linked names are exactly what must not be echoed.
+  return [...found].map(([category, count]) => issue("SCREEN", `${category}: ${count} body link${count === 1 ? "" : "s"} point at notes that are never promoted; remove those links from the source note first`));
+}
 /** Replace visible wiki links whose target does not resolve in the target vault with their plain text. */
 export function dropUnresolvedLinks(body: string, resolves: (target: string) => boolean): { body: string; dropped: string[] } {
   const prose = proseLines(body), raw = body.split("\n"), dropped: string[] = [];
@@ -149,7 +177,21 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   const fieldLinks = ["project", "superseded_by", "supersedes", "source_ref"].flatMap(key => strings(parsed.data[key]).filter(value => value.includes("[[")).map(linkKey));
   const targetNotes = targetFacts(home, target, all, [...bodyLinks, ...fieldLinks], targetPath);
   // The org note is never overwritten; a repeat promotion (--again) needs the earlier org copy moved or deleted first.
-  if (targetNotes.exists) return fail(issue("V08", `${target.id} already has ${targetPath}; move or delete it in the org vault first`, targetPath));
+  if (targetNotes.exists) {
+    // Recovery: an earlier confirm created this org note but the source provenance write failed.
+    let existing: Record<string, unknown> = {};
+    try { existing = parseFrontmatter(readSource(target, targetPath)).data; } catch { /* unreadable: treated as foreign */ }
+    if (existing.promoted_from !== result.source || prior.includes(promotedTo)) return fail(issue("V08", `${target.id} already has ${targetPath}; move or delete it in the org vault first`, targetPath));
+    const set = { promoted_to: prior.length ? [...prior, promotedTo] : promotedTo };
+    const plan = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env });
+    const fingerprint = sha({ recover: plan.fingerprint, promotedTo });
+    const recovery: OrgPromoteResult = { ...result, target: `${target.id}:${targetPath}`, screen: { passed: true, issues: [] }, fingerprint, recovery: "provenance-only" };
+    if (!plan.ok) return { ...recovery, issues: plan.issues };
+    if (request.confirm !== true) return { ...recovery, ok: true, preview: true };
+    if (request.fingerprint !== fingerprint) return { ...recovery, issues: [issue("V09", "stale or missing preview fingerprint")] };
+    const provenance = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set }, channel: request.channel ?? "cli", log: false }, { env: options.env });
+    return { ...recovery, ok: provenance.ok, applied: provenance.applied, provenance, issues: provenance.ok ? [] : provenance.issues };
+  }
   const missingTopics = topics.filter(topic => !targetNotes.mocs.has(linkKey(topic)));
   if (!topics.length || missingTopics.length) return fail(issue("V02", `target topics must name existing MOCs in ${target.id}${missingTopics.length ? `: missing ${missingTopics.join(", ")}` : ""}; use --topics`));
   const transformed = dropUnresolvedLinks(parsed.body, value => targetNotes.resolved.has(linkKey(value)));
@@ -164,7 +206,7 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   }
   const text = emitFrontmatter(parseFrontmatter(parsed.source.slice(0, parsed.source.length - parsed.body.length) + body), frontmatter);
   result.target = `${target.id}:${targetPath}`; result.text = text; result.droppedLinks = transformed.dropped;
-  const screen = screenForOrg(text, parsed.data, target, config);
+  const screen = [...screenForOrg(text, parsed.data, target, config), ...screenDroppedLinks(home, source, all, transformed.dropped.filter(link => !link.includes(":")))];
   result.screen = { passed: screen.length === 0, issues: screen };
   if (screen.length) return { ...result, issues: screen };
   const planned = applyWrite(home, { vault: target.id, operation: { op: "create", path: targetPath, frontmatter: {}, body: text }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env });
