@@ -2,7 +2,8 @@ import { runLogCommand } from "./log-commands.ts";
 import { isWriteCommand, runWriteCommand } from "./write-commands.ts";
 import { isReadCommand, runReadCommand } from "./read-commands.ts";
 import { version } from "../package.json";
-import { help } from "./commands-table.ts";
+import { completionScript, help } from "./commands-table.ts";
+import { runSetup, type SetupMode } from "./setup.ts";
 import { resolveHome } from "./home.ts";
 import { addVault, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault } from "./registry.ts";
 function parse(args: string[], allowed: string[], values: string[]) {
@@ -22,6 +23,17 @@ function parse(args: string[], allowed: string[], values: string[]) {
 export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
   if (!args.length || (args.length === 1 && ["--help", "-h", "help"].includes(args[0]!))) return { text: help(), code: 0 };
   if (args.length === 1 && args[0] === "--version") return { text: version, code: 0 };
+  if (args[0] === "setup") {
+    const rest = args.slice(1), flags = rest.filter(a => a.startsWith("--")), positional = rest.filter(a => !a.startsWith("--"));
+    if (positional.length !== 1 || flags.some(f => !["--apply", "--undo", "--json"].includes(f)) || new Set(flags).size !== flags.length || (flags.includes("--apply") && flags.includes("--undo"))) throw new Error("setup: requires one target and at most one of --apply/--undo");
+    const mode: SetupMode = flags.includes("--apply") ? "apply" : flags.includes("--undo") ? "undo" : "dry-run";
+    const report = runSetup(positional[0]!, mode, { home: resolveHome(env).home, env });
+    return { text: JSON.stringify(report, null, flags.includes("--json") ? undefined : 2), code: report.actions.some(a => a.change === "refused") ? 1 : 0 };
+  }
+  if (args[0] === "completion") {
+    if (args.length !== 2) throw new Error("completion: requires bash, zsh or fish");
+    return { text: completionScript(args[1]!).trimEnd(), code: 0 };
+  }
   if (args[0] === "log") return runLogCommand(args.slice(1), resolveHome(env).home, env);
   if (isWriteCommand(args[0]!)) return runWriteCommand(args[0]!, args.slice(1), resolveHome(env).home, env);
   if (isReadCommand(args[0]!)) return runReadCommand(args[0]!, args.slice(1), resolveHome(env).home);
@@ -62,6 +74,12 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
     default: throw new Error(`unknown command: ${command}; use --help`);
   }
   return { text: JSON.stringify(result, null, flags["--json"] ? undefined : 2), code };
+}
+/** `vmem mcp`: the vault set is fixed now; stdout carries protocol frames only. */
+export async function runMcp(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const [{ serveMcp }, { createVaultMcp }] = await Promise.all([import("./mcp.ts"), import("./mcp-vault.ts")]);
+  const server = createVaultMcp(resolveHome(env).home, env);
+  await serveMcp({ tools: server.tools, handlers: server.handlers, name: "vmem", version });
 }
 export function main(args: string[]): number {
   try { const output = run(args); console.log(output.text); return output.code; }

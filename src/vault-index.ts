@@ -176,6 +176,41 @@ export class VaultIndex {
     const bounded = boundedText(Buffer.from(note.prefix).toString("utf8"), maxBytes);
     return { path, hash: note.hash, content: bounded.content, truncated: note.bytes > maxBytes };
   }
+  /** Indexed notes (paths relative to notes/) ordered by path, optionally filtered by a literal stem prefix. */
+  list(prefix = "", limit = 50): { path: string; title: string; type: string; domain: string; description: string }[] {
+    if (Buffer.byteLength(prefix) > 1024) throw new Error("prefix: expected <=1024 bytes");
+    const key = prefix.replace(/^notes\//i, "");
+    return this.db.query<{ path: string; title: string; type: string; domain: string; description: string }, [number, string, number]>(
+      "SELECT path,title,type,domain,substr(description,1,512) AS description FROM notes WHERE substr(path,1,?)=? ORDER BY path LIMIT ?"
+    ).all(key.length, key, resultLimit(limit)).map(row => ({ ...row, title: boundedText(row.title, 512).content, type: boundedText(row.type, 256).content, domain: boundedText(row.domain, 256).content, description: boundedText(row.description, 512).content }));
+  }
+  /** Links that resolve to the target note, ordered by source. */
+  backlinks(target: string, limit = 50): ResolvedLink[] {
+    const path = this.find(target), max = resultLimit(limit), out: ResolvedLink[] = [];
+    const rows = this.db.prepare<{ data: string }, []>("SELECT data FROM links ORDER BY source,ordinal");
+    try {
+      for (const row of rows.iterate()) {
+        const link = JSON.parse(row.data) as ResolvedLink;
+        if (link.resolved !== path) continue;
+        out.push({ ...link, target: boundedText(link.target, 1024).content, label: link.label === null ? null : boundedText(link.label, 1024).content, heading: null, block: null });
+        if (out.length >= max) break;
+      }
+    } finally { rows.finalize(); }
+    return out;
+  }
+  /** MOC notes with the number of resolved links pointing at each. */
+  mocs(limit = 200): { path: string; title: string; description: string; count: number }[] {
+    const mocs = this.db.query<{ path: string; title: string; description: string }, [number]>("SELECT path,title,substr(description,1,512) AS description FROM notes WHERE type='moc' ORDER BY path LIMIT ?").all(resultLimit(limit));
+    const counts = new Map(mocs.map(moc => [moc.path, 0]));
+    const rows = this.db.prepare<{ data: string }, []>("SELECT data FROM links");
+    try {
+      for (const row of rows.iterate()) {
+        const resolved = (JSON.parse(row.data) as ResolvedLink).resolved;
+        if (resolved && counts.has(resolved)) counts.set(resolved, counts.get(resolved)! + 1);
+      }
+    } finally { rows.finalize(); }
+    return mocs.map(moc => ({ path: moc.path, title: boundedText(moc.title, 512).content, description: boundedText(moc.description, 512).content, count: counts.get(moc.path) ?? 0 }));
+  }
   links(target: string, limit = 50): ResolvedLink[] {
     const path = this.find(target);
     return this.db.query<{ data: string }, [string, number]>("SELECT data FROM links WHERE source=? ORDER BY ordinal LIMIT ?").all(path, resultLimit(limit)).map(row => JSON.parse(row.data) as ResolvedLink).map(link => ({ ...link, target: boundedText(link.target, 1024).content, label: link.label === null ? null : boundedText(link.label, 1024).content, heading: link.heading === null ? null : boundedText(link.heading, 1024).content, block: link.block === null ? null : boundedText(link.block, 1024).content }));

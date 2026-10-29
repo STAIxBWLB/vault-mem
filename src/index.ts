@@ -15,3 +15,10 @@ export type { WriteOp, WriteRequest, WriteReceipt, WriteIssue, PlannedChange, Va
 export { appendLog, readLog, LOG_LOCK, MAX_LOG_READ_BYTES, MAX_LOG_RESULT_BYTES, LARGE_LOG_LINES } from "./vault-log.ts";
 export { formatLogEvent, LOG_TYPES, AGENT_MARKERS } from "./log-format.ts";
 export type { LogEvent, LogRequest, LogContext, LogReceipt, LogReadOptions, LogReadResult, LogBinding } from "./log-types.ts";
+export { serveMcp, validArguments, FRAME_BYTES, RESULT_BYTES } from "./mcp.ts";
+export type { McpTool, McpHandler, McpServerOptions } from "./mcp.ts";
+export { createVaultMcp, vaultTools, VMEM_TOOL_NAMES } from "./mcp-vault.ts";
+export { runSetup, defaultEntry, SETUP_TARGETS, SERVER_NAME } from "./setup.ts";
+export type { SetupTarget, SetupMode, SetupReport, SetupAction, McpEntry } from "./setup.ts";
+export { COMMANDS, completionDefinitions, completionScript } from "./commands-table.ts";
+export type { CompletionDefinition } from "./commands-table.ts";
