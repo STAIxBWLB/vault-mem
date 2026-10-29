@@ -27,14 +27,14 @@ function input(file: string, home: string): string {
     return text;
   } finally { if (file !== "-") closeSync(fd); }
 }
-export function runWriteCommand(command: string, args: string[], home: string): { text: string; code: number } {
+export function runWriteCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
   const valueOptions: Record<string, string[]> = {
     new: ["--type", "--domain", "--topics", "--description", "--title", "--source", "--confidence", "--status", "--extra", "--body"],
     patch: ["--old", "--new", "--expected-sha"], append: ["--section", "--markdown", "--expected-sha"],
     frontmatter: ["--set", "--unset", "--expected-sha"], link: ["--relation", "--context"],
     move: ["--fingerprint"], delete: ["--fingerprint"], tidy: ["--fingerprint"], report: ["--body"], check: ["--path"], supersede: [],
   };
-  const values = valueOptions[command];
+  const values = valueOptions[command] ? [...valueOptions[command]!, "--log"] : undefined;
   if (!values) throw new Error("unknown writer command");
   const twoStep = ["move", "delete", "tidy"].includes(command);
   const booleans = ["--json", "--dry-run", ...(twoStep ? ["--confirm"] : []), ...(command === "link" ? ["--one-way"] : []), ...(command === "tidy" ? ["--connections"] : [])];
@@ -75,7 +75,7 @@ export function runWriteCommand(command: string, args: string[], home: string): 
     case "check": operation = { op: "check", path: notePath(optional("--path") ?? (target === "-" ? "checked-note" : basename(target))), text: input(target, home) }; break;
     default: throw new Error("unknown writer command");
   }
-  const request: WriteRequest = { vault, operation, channel: "cli", dryRun: flags["--dry-run"] === true, confirm: flags["--confirm"] === true, fingerprint: optional("--fingerprint") };
-  const result = applyWrite(home, request);
-  return { text: JSON.stringify(result, null, flags["--json"] ? undefined : 2), code: result.ok ? 0 : 1 };
+  const request: WriteRequest = { vault, operation, channel: "cli", dryRun: flags["--dry-run"] === true, confirm: flags["--confirm"] === true, fingerprint: optional("--fingerprint"), ...(optional("--log") ? { log: object(required("--log"), "log") as unknown as import("./log-types.ts").LogEvent } : {}) };
+  const result = applyWrite(home, request, { env });
+  return { text: JSON.stringify(result, null, flags["--json"] ? undefined : 2), code: result.ok && result.log?.ok !== false ? 0 : 1 };
 }

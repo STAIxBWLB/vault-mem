@@ -1,3 +1,5 @@
+import { appendLog } from "./vault-log.ts";
+import type { LogEvent } from "./log-types.ts";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -101,7 +103,7 @@ function duplicateWarnings(request: WriteRequest, notes: Map<string, string>, ch
   } finally { db.close(); }
 }
 /** Single mutation entry point. Preview/dry-run perform no writes, including locks and caches. */
-export function applyWrite(home: string, request: WriteRequest): WriteReceipt {
+export function applyWrite(home: string, request: WriteRequest, options: { env?: NodeJS.ProcessEnv } = {}): WriteReceipt {
   let lockFd: number | undefined, lockFile: string | undefined, lockIdentity: { ino: number; dev: number } | undefined;
   let index: VaultIndex | undefined;
   const temps = new Set<string>(), createdDirs: string[] = [], committed: PlannedChange[] = [];
@@ -110,7 +112,7 @@ export function applyWrite(home: string, request: WriteRequest): WriteReceipt {
   const recordError = (code: string, message: string, path?: string) => issues.push({ code, severity: "error", message, ...(path ? { path } : {}) });
   try {
     if (!request || typeof request !== "object" || !request.operation || typeof request.operation !== "object" || typeof request.vault !== "string") refuse("V01", "invalid write request");
-    if (Object.keys(request).some(key => !["vault", "operation", "channel", "dryRun", "confirm", "fingerprint", "expectedShas"].includes(key)) || [request.dryRun, request.confirm].some(value => value !== undefined && typeof value !== "boolean")) refuse("V01", "unknown request option or invalid boolean");
+    if (Object.keys(request).some(key => !["vault", "operation", "channel", "dryRun", "confirm", "fingerprint", "expectedShas", "log"].includes(key)) || [request.dryRun, request.confirm].some(value => value !== undefined && typeof value !== "boolean")) refuse("V01", "unknown request option or invalid boolean");
     if (request.expectedShas !== undefined && (!request.expectedShas || typeof request.expectedShas !== "object" || Array.isArray(request.expectedShas))) refuse("V09", "expectedShas must be a mapping");
     if (request.channel !== undefined && !["cli", "mcp"].includes(request.channel)) refuse("POLICY", "unknown write channel");
     const config = loadRegistry(home), vault = config.vaults.find(value => value.id === request.vault);
@@ -142,7 +144,7 @@ export function applyWrite(home: string, request: WriteRequest): WriteReceipt {
     for (const change of changes) if (isDenied(join(root, change.path), config.denyPaths)) refuse("V06", "planned mutation path is denied", change.path);
     issues = validateWrite(changes, { vault, config, notes, operation: request.operation });
     if (!issues.some(issue => issue.severity === "error")) issues.push(...duplicateWarnings(request, notes, changes));
-    const input = { vault: request.vault, channel: request.channel ?? "cli", operation: request.operation, expectedShas: request.expectedShas ?? {} };
+    const input = { vault: request.vault, channel: request.channel ?? "cli", operation: request.operation, expectedShas: request.expectedShas ?? {}, log: request.log ?? null };
     const identity = lstatSync(root);
     fingerprint = sha256(canonical({ input, vault, policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [] }, root, identity: [identity.dev, identity.ino], files: [...notes].map(([path, text]) => [path, sha256(text)]), changes: receipts(changes) }));
     if (twoStep && request.confirm === true && (typeof request.fingerprint !== "string" || request.fingerprint !== fingerprint)) refuse("V09", "stale or missing preview fingerprint");
@@ -209,6 +211,16 @@ export function applyWrite(home: string, request: WriteRequest): WriteReceipt {
       throw error;
     }
     result = { ok: true, applied, issues, changes: receipts(changes), fingerprint, indexUpdated };
+    if (request.log !== false) {
+      const op = request.operation;
+      const type = op.op === "link" ? "CONNECT" : op.op === "move" ? "ROUTE" : ["supersede", "tidy"].includes(op.op) ? "RETHINK" : "EXTRACT";
+      const source = op.op === "move" || op.op === "link" ? notePath(op.from) : op.op === "supersede" ? notePath(op.old) : op.op === "delete" ? notePath(op.path) : `vmem:${op.op}`;
+      const dest = op.op === "move" || op.op === "link" ? notePath(op.to) : op.op === "supersede" ? notePath(op.next) : op.op === "delete" ? undefined : changes.find(change => change.after !== null)?.path;
+      const event: LogEvent = request.log ?? { type, project: "-", source, ...(dest ? { dest } : {}), note: op.op };
+      try { result.log = appendLog(home, { vault: request.vault, event, channel: request.channel }, { env: options.env, binding: { vault, denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], dev: Number(identity.dev), ino: Number(identity.ino) } }); }
+      catch { result.log = { ok: false, appended: null, synced: false, bytesWritten: null, issues: [{ code: "LOG_IO", severity: "error", message: "log append failed after successful mutation" }] }; }
+      result.logged = result.log.appended === true && result.log.synced;
+    }
   } catch (error) {
     if (error instanceof WriteRefusal) issues.push(...error.issues);
     else recordError("IO", "write operation failed; inspect filesystem permissions and retry");

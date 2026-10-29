@@ -28,7 +28,9 @@ function issue(code: string, message: string, severity: WriteIssue["severity"] =
   return { code, severity, message, ...(path ? { path } : {}) };
 }
 function hasPhone(text: string): boolean {
-  for (const match of text.matchAll(/(?<![\p{L}\p{N}])\+?\d(?:[\d ().-]{6,}\d)(?![\p{L}\p{N}])/gu)) {
+  // A complete ISO calendar timestamp is metadata, not a phone-number candidate.
+  const withoutTimestamps = text.replace(/\b[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])[ T](?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\.[0-9]{1,3})?)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])?\b/g, " ");
+  for (const match of withoutTimestamps.matchAll(/(?<![\p{L}\p{N}])\+?\d(?:[\d ().-]{6,}\d)(?![\p{L}\p{N}])/gu)) {
     const count = match[0].replace(/\D/g, "").length;
     if (count >= 9 && count <= 15) return true;
   }

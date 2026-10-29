@@ -12,3 +12,6 @@ export type { IndexedNote, SearchOptions, SearchResult } from "./vault-index.ts"
 export { applyWrite, sha256, MUTATION_LOCK, MAX_WRITE_BYTES } from "./writer.ts";
 export { validateWrite, screenContent } from "./write-validation.ts";
 export type { WriteOp, WriteRequest, WriteReceipt, WriteIssue, PlannedChange, ValidationContext, ChangeReceipt } from "./write-types.ts";
+export { appendLog, readLog, LOG_LOCK, MAX_LOG_READ_BYTES, MAX_LOG_RESULT_BYTES, LARGE_LOG_LINES } from "./vault-log.ts";
+export { formatLogEvent, LOG_TYPES, AGENT_MARKERS } from "./log-format.ts";
+export type { LogEvent, LogRequest, LogContext, LogReceipt, LogReadOptions, LogReadResult, LogBinding } from "./log-types.ts";

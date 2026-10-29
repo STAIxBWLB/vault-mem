@@ -170,3 +170,11 @@ test("moving legacy notes with an existing normalized H1 duplicate does not intr
   expect(errors(changes, ctx)).toEqual([]);
   expect(errors([create(old, "notes/third.md")], { ...ctx, operation: { op: "create", path: "third", frontmatter: {} } }).some(value => value.code === "V08")).toBe(true);
 });
+
+test("ISO timestamps are metadata, while nearby telephone numbers still trigger denied PII", () => {
+  const privateVault = { ...vault, kind: "org" as const };
+  for (const text of ["2026-10-29 09:32", "2026-10-29T09:32:18Z", "2026-10-29T09:32:18.123+09:00"]) {
+    expect(screenContent(text, privateVault, config)).toEqual([]);
+    expect(screenContent(`${text} call +82 10-1234-5678`, privateVault, config).some(issue => issue.code === "V07")).toBe(true);
+  }
+});
