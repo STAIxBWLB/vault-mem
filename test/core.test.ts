@@ -52,6 +52,10 @@ test("incremental metadata scan matches clean rebuild after create/edit/delete/r
       () => rmSync(join(notes, "method.md")),
       () => renameSync(join(notes, "new.md"), join(notes, "renamed.md")),
       () => writeFileSync(join(notes, "projects.md"), "---\ntitle: Map\n---\n[[NewAlias]] [[Tea#Connections]]\n"),
+      // Unchanged sources re-resolve when a target loses an alias, regains it without the heading, or an alias turns ambiguous.
+      () => writeFileSync(join(notes, "café.md"), "---\ntitle: New Coffee\n---\n# Connections\nEdited synthetic discovery ^summary\n"),
+      () => writeFileSync(join(notes, "café.md"), "---\ntitle: New Coffee\naliases: [Tea]\n---\nEdited synthetic discovery ^summary\n"),
+      () => writeFileSync(join(notes, "dup.md"), "---\ntitle: Dup\naliases: [NewAlias]\n---\nDuplicate synthetic alias.\n"),
     ];
     for (const change of steps) {
       change(); index.scan(); const incremental = snapshot(index);
@@ -149,8 +153,8 @@ test("anchor indexes are built once for thousands of heading and block links", (
   const links = resolveLinks([note]);
   expect(links).toHaveLength(8000);
   expect(links.every(link => link.resolved === "anchors.md" && link.reason === null)).toBe(true);
-  // One anchor-index pass and one outgoing-link pass, independent of link count.
-  expect(reads).toBe(2);
+  // One body read shared by the anchor-index and outgoing-link passes, independent of link count.
+  expect(reads).toBe(1);
 });
 
 test("ATX closing hashes require whitespace and preserve literal heading hashes", () => {

@@ -95,7 +95,7 @@ export function rewriteLinkTargets(body: string, replace: (target: string) => st
     return output;
   }).join("");
 }
-function noteKey(value: string): string {
+export function noteKey(value: string): string {
   return normalizeTarget(value.replace(/^\.\//, "").replace(/^notes\//i, "").replace(/\.md$/i, ""));
 }
 function anchorIndex(body: string): { headings: Set<string>; blocks: Set<string> } {
@@ -109,25 +109,42 @@ function anchorIndex(body: string): { headings: Set<string>; blocks: Set<string>
   }
   return { headings, blocks };
 }
-/** Additional outgoing links share the real target anchor index but never the body code state. */
-export function resolveLinks(notes: LinkNote[], additionalLinks?: ReadonlyMap<string, readonly Link[]>): ResolvedLink[] {
+type Analysis = { body: string; links?: Link[]; anchors?: ReturnType<typeof anchorIndex> };
+// Per-note memo: callers that pass the same LinkNote object again (old/new validation snapshots) skip re-analysis.
+const memo = new WeakMap<LinkNote, Analysis>();
+/** Additional outgoing links share the real target anchor index but never the body code state. `sources` limits output to those source paths. */
+export function resolveLinks(notes: LinkNote[], additionalLinks?: ReadonlyMap<string, readonly Link[]>, sources?: ReadonlySet<string>): ResolvedLink[] {
   const names = new Map<string, Set<LinkNote>>();
-  const anchors = new Map<LinkNote, ReturnType<typeof anchorIndex>>();
   for (const note of notes) {
-    anchors.set(note, anchorIndex(note.body));
     for (const name of [note.path, ...note.aliases]) {
       const key = noteKey(name), candidates = names.get(key) ?? new Set<LinkNote>();
       candidates.add(note); names.set(key, candidates);
     }
   }
+  // Each body is read once per call; a memo entry is reused only while that body is unchanged.
+  const seen = new Map<LinkNote, Analysis>();
+  const analysis = (note: LinkNote): Analysis => {
+    let entry = seen.get(note);
+    if (entry) return entry;
+    const body = note.body;
+    entry = memo.get(note);
+    if (entry?.body !== body) memo.set(note, entry = { body });
+    seen.set(note, entry);
+    return entry;
+  };
+  const anchors = (note: LinkNote) => { const entry = analysis(note); return entry.anchors ??= anchorIndex(entry.body); };
   const result: ResolvedLink[] = [];
-  for (const note of notes) for (const link of [...extractLinks(note.body), ...(additionalLinks?.get(note.path) ?? [])]) {
-    const candidates = link.target ? [...(names.get(noteKey(link.target)) ?? [])] : [note];
-    const target = candidates.length === 1 ? candidates[0]! : undefined;
-    let reason: ResolvedLink["reason"] = candidates.length > 1 ? "ambiguous-note" : target ? null : "missing-note";
-    if (target && link.heading && !anchors.get(target)!.headings.has(normalizeTarget(link.heading))) reason = "missing-heading";
-    if (target && link.block && !anchors.get(target)!.blocks.has(normalizeTarget(link.block))) reason = "missing-block";
-    result.push({ ...link, source: note.path, resolved: reason ? null : target!.path, reason });
+  for (const note of notes) {
+    if (sources && !sources.has(note.path)) continue;
+    const entry = analysis(note);
+    for (const link of [...(entry.links ??= extractLinks(entry.body)), ...(additionalLinks?.get(note.path) ?? [])]) {
+      const candidates = link.target ? [...(names.get(noteKey(link.target)) ?? [])] : [note];
+      const target = candidates.length === 1 ? candidates[0]! : undefined;
+      let reason: ResolvedLink["reason"] = candidates.length > 1 ? "ambiguous-note" : target ? null : "missing-note";
+      if (target && link.heading && !anchors(target).headings.has(normalizeTarget(link.heading))) reason = "missing-heading";
+      if (target && link.block && !anchors(target).blocks.has(normalizeTarget(link.block))) reason = "missing-block";
+      result.push({ ...link, source: note.path, resolved: reason ? null : target!.path, reason });
+    }
   }
   return result;
 }

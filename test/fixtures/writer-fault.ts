@@ -33,6 +33,11 @@ mock.module("node:fs", () => ({ ...original,
     return original.writeFileSync(...args);
   },
   fsyncSync: (fd: number) => {
+    if (tempFds.has(fd) && mode === "silent-edit" && !injected) {
+      // Same size and restored mtime: only ctime records the unrelated edit.
+      injected = true; const other = `${vault}/notes/next.md`, text = original.readFileSync(other, "utf8");
+      original.writeFileSync(other, text.replace("Replacement", "Replacemant")); original.utimesSync(other, 1_700_000_000, 1_700_000_000);
+    }
     if (tempFds.has(fd) && mode === "temp-fsync" && !injected) { injected = true; throw new Error("injected temp flush failure"); }
     if (mode === "directory-fsync" && original.fstatSync(fd).isDirectory() && !injected) { injected = true; throw new Error("injected directory flush failure"); }
     return original.fsyncSync(fd);
@@ -56,6 +61,8 @@ mock.module("node:fs", () => ({ ...original,
     return original.unlinkSync(...args);
   },
 }));
+// Whole-second mtime, so restoring it after the silent edit is exact to the nanosecond.
+if (mode === "silent-edit") original.utimesSync(`${vault}/notes/next.md`, 1_700_000_000, 1_700_000_000);
 if (mode === "index") {
   const { VaultIndex } = await import("../../src/vault-index.ts");
   const scan = VaultIndex.prototype.scan;
