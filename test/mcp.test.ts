@@ -45,16 +45,16 @@ test("tools/list: vault enum is the registered ids, default is first personal, e
   expect(tools.map(t => t.name)).toEqual([...VMEM_TOOL_NAMES]);
   for (const t of tools) {
     expect(t.inputSchema.additionalProperties).toBe(false);
-    if (t.name !== "vmem_status") expect(t.inputSchema.properties.vault.enum).toEqual(["team", "mine"]);
+    if (!["vmem_status", "vmem_promote"].includes(t.name)) expect(t.inputSchema.properties.vault.enum).toEqual(["team", "mine"]);
     for (const [key, schema] of Object.entries<any>(t.inputSchema.properties)) {
       if (schema.type === "string" && !schema.enum) expect(schema.maxLength, `${t.name}.${key}`).toBeLessThanOrEqual(262144);
       if (schema.type === "array") expect(schema.maxItems).toBeLessThanOrEqual(64);
     }
   }
-  expect(tools.filter(t => t.annotations.destructiveHint).map(t => t.name)).toEqual(["vmem_move", "vmem_delete", "vmem_promote_from_amem"]);
-  // Graph and agent-mem providers are implemented; org promotion lands separately.
+  expect(tools.filter(t => t.annotations.destructiveHint).map(t => t.name)).toEqual(["vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_promote"]);
+  // Graph, agent-mem and org-promotion providers are implemented; the org target is an enum of registered org vaults.
   expect(tools.filter(t => /graph/.test(t.name)).map(t => t.name)).toEqual(["vmem_graph_build", "vmem_graph_neighbors"]);
-  expect(tools.some(t => t.name === "vmem_promote")).toBe(false);
+  expect(tools.find(t => t.name === "vmem_promote").inputSchema.properties.to.enum).toEqual(["team"]);
 });
 
 test("reads go through the index with defaults and bounds", async () => {

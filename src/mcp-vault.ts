@@ -25,14 +25,15 @@ const note = string(1024), sha = { type: "string", minLength: 64, maxLength: 64 
 const logEvent = object({ type: { type: "string", enum: LOG_TYPES }, project: string(64), source: string(512), dest: string(512), note: string(500) }, ["type", "project", "source", "note"]);
 const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLength: 4096, maxItems: 64, items: { type: ["string", "number", "boolean"], maxLength: 1024 } };
 
-/** Tool names for implemented read, write, log and analysis providers. Org promotion lands separately. */
+/** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors"] as const;
+  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote"] as const;
 
 /** Tool definitions for a fixed vault set: `vault` is an enum of the registered ids. */
-export function vaultTools(ids: readonly string[]): McpTool[] {
+export function vaultTools(ids: readonly string[], orgIds: readonly string[] = []): McpTool[] {
   const vault = ids.length ? { type: "string", enum: [...ids] } : string(32);
   const twoStep = { confirm: { type: "boolean" }, fingerprint: sha };
+  const orgVault = orgIds.length ? { type: "string", enum: [...orgIds] } : string(32);
   return [
     tool("vmem_status", "Registered vaults with health, write policy and effective pii.", object({})),
     tool("vmem_search", "Full-text (BM25) search over indexed notes. Literal AND terms.", object({ query: string(1000), vault, limit: integer(1, 50), type: string(64), domain: string(64) }, ["query"])),
@@ -57,6 +58,8 @@ export function vaultTools(ids: readonly string[]): McpTool[] {
     tool("vmem_lint", "Lint a private derived snapshot; write=true writes a screened report.", object({ vault, write: { type: "boolean" }, dryRun: { type: "boolean" } }), "write"),
     tool("vmem_graph_build", "Build a deterministic graph and screened reports; dryRun changes nothing.", object({ vault, dryRun: { type: "boolean" } }), "write"),
     tool("vmem_graph_neighbors", "Read a bounded graph neighborhood.", object({ vault, path: note, hops: integer(1,2), limit: integer(1,500) }, ["path"])),
+    tool("vmem_promote", "Two-step promotion of a personal note into a local org vault clone (never pushes): without confirm returns the full transformed text, dropped links, screen result and fingerprint; confirm=true with that fingerprint writes the org note, source provenance and SYNC log lines. Publishing is the separate `vmem sync` CLI.",
+      object({ path: note, to: orgVault, topics: { type: "array", maxItems: 32, items: string(200) }, again: { type: "boolean" }, ...twoStep }, ["path", "to"]), "confirm"),
   ];
 }
 type Issue = { code: string; severity: "error"; message: string };
@@ -92,6 +95,14 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     return { path, sha256: hash, truncated, frontmatter: parsed.data, body: parsed.body };
   };
   const handlers: Record<string, McpHandler> = {
+    vmem_promote: async args => {
+      const { promoteToOrg } = await import("./org-promote.ts");
+      const source = vaults.find(v => v.id === defaultVault && v.kind === "personal");
+      if (!source) return refusal("POLICY", "no personal vault registered");
+      const result = promoteToOrg(home, { from: source.id, note: str(args.path)!, to: str(args.to)!, channel: "mcp", again: args.again === true, confirm: args.confirm === true,
+        ...(Array.isArray(args.topics) ? { topics: args.topics as string[] } : {}), ...(str(args.fingerprint) ? { fingerprint: str(args.fingerprint) } : {}) }, { env });
+      return result.ok ? result : { ...result, refused: true };
+    },
     vmem_promote_from_amem: async args => {
       const { promoteFromAmem } = await import("./promote.ts");
       const id = str(args.id)!.replace(/^mem:/, "");
@@ -150,5 +161,5 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     try { return await handler(args); }
     catch (error) { return refusal((error as { code?: unknown }).code === "V04" ? "V04" : "REFUSED", error instanceof Error ? error.message.slice(0, 500) : "operation refused"); }
   };
-  return { tools: vaultTools(ids), handlers: guarded, vaults, defaultVault };
+  return { tools: vaultTools(ids, vaults.filter(v => v.kind === "org").map(v => v.id)), handlers: guarded, vaults, defaultVault };
 }
