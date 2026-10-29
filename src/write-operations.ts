@@ -22,7 +22,7 @@ function needed(notes: Map<string, string>, path: string): string {
 function document(source: string, path: string) {
   try { return parseFrontmatter(source); } catch { return refuse("V01", "invalid frontmatter", path); }
 }
-function h2Sections(body: string): { name: string; start: number; end: number }[] {
+export function h2Sections(body: string): { name: string; start: number; end: number }[] {
   const visible = proseLines(body), raw = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
   const sections: { name: string; start: number; end: number }[] = [];
   let offset = 0;
@@ -36,7 +36,7 @@ function h2Sections(body: string): { name: string; start: number; end: number }[
   }
   return sections;
 }
-function appendSection(source: string, section: string, markdown: string, path: string): string {
+export function appendSection(source: string, section: string, markdown: string, path: string): string {
   if (typeof section !== "string" || !section.trim() || section.length > 120 || /[\r\n]/.test(section) || section.trim().replace(/[ \t]+#+$/, "").trim().toLowerCase() === "topics") refuse("V05", "append cannot target Topics or an invalid section");
   if (typeof markdown !== "string" || Buffer.byteLength(markdown) > 16384 || proseLines(markdown).some(line => /^ {0,3}##[ \t]+Topics(?:[ \t]+#+)?[ \t]*$/i.test(line))) refuse("V05", "append cannot introduce a Topics section or exceed 16384 bytes");
   const doc = document(source, path), sections = h2Sections(doc.body);
@@ -46,7 +46,8 @@ function appendSection(source: string, section: string, markdown: string, path: 
   const addition = found.length ? `\n${markdown.trimEnd()}\n\n` : `\n## ${section.trim()}\n\n${markdown.trimEnd()}\n\n`;
   return (doc.frontmatter ?? "") + doc.body.slice(0, end).trimEnd() + "\n" + addition + doc.body.slice(end);
 }
-function tidy(source: string, path: string): string {
+/** Fold scattered `## Connections (...)` sections into `## Relevant Notes`. */
+export function foldConnections(source: string, path: string): string {
   const doc = document(source, path), sections = h2Sections(doc.body);
   const connections = sections.filter(section => /^Connections(?:\s*\(.*\))?$/i.test(section.name));
   if (!connections.length) return source;
@@ -167,7 +168,11 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
       }
       break;
     }
-    case "tidy": { for (const [path, source] of notes) set(path, tidy(source, path)); break; }
+    case "tidy": { for (const [path, source] of notes) set(path, foldConnections(source, path)); break; }
+    case "sanitize": {
+      if (typeof operation.path !== "string" || !notes.has(operation.path) || typeof operation.text !== "string") refuse("V04", "sanitize requires an existing snapshot note path and text");
+      set(operation.path, operation.text); break;
+    }
     case "report": {
       if (typeof operation.path !== "string" || !/^(?:reports|ops)\/[a-z0-9][a-z0-9./-]*$/.test(operation.path) || operation.path.split("/").some(part => !part || part === "." || part === "..") || Buffer.byteLength(operation.path) > 200 || typeof operation.text !== "string") refuse("V04", "invalid report path");
       set(operation.path, operation.text); break;

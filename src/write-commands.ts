@@ -5,6 +5,7 @@ import { basename } from "node:path";
 import { applyWrite, MAX_WRITE_BYTES } from "./writer.ts";
 import { notePath } from "./write-operations.ts";
 import type { WriteOp, WriteRequest } from "./write-types.ts";
+import { parseTidyMap, tidyVault, TIDY_RULES } from "./tidy.ts";
 const COMMANDS = new Set(["new", "patch", "append", "frontmatter", "link", "supersede", "move", "delete", "tidy", "report", "check"]);
 export function isWriteCommand(command: string): boolean { return COMMANDS.has(command); }
 function object(text: string, label: string): Record<string, unknown> {
@@ -32,12 +33,13 @@ export function runWriteCommand(command: string, args: string[], home: string, e
     new: ["--type", "--domain", "--topics", "--description", "--title", "--source", "--confidence", "--status", "--extra", "--body"],
     patch: ["--old", "--new", "--expected-sha"], append: ["--section", "--markdown", "--expected-sha"],
     frontmatter: ["--set", "--unset", "--expected-sha"], link: ["--relation", "--context"],
-    move: ["--fingerprint"], delete: ["--fingerprint"], tidy: ["--fingerprint"], report: ["--body"], check: ["--path"], supersede: [],
+    move: ["--fingerprint"], delete: ["--fingerprint"], tidy: ["--fingerprint", "--map"], report: ["--body"], check: ["--path"], supersede: [],
   };
-  const values = valueOptions[command] ? [...valueOptions[command]!, "--log"] : undefined;
+  // For tidy, --log selects the log-redaction rule; tidy always writes its own LINT event.
+  const values = valueOptions[command] ? [...valueOptions[command]!, ...(command === "tidy" ? [] : ["--log"])] : undefined;
   if (!values) throw new Error("unknown writer command");
   const twoStep = ["move", "delete", "tidy"].includes(command);
-  const booleans = ["--json", "--dry-run", ...(twoStep ? ["--confirm"] : []), ...(command === "link" ? ["--one-way"] : []), ...(command === "tidy" ? ["--connections"] : [])];
+  const booleans = ["--json", "--dry-run", ...(twoStep ? ["--confirm"] : []), ...(command === "link" ? ["--one-way"] : []), ...(command === "tidy" ? TIDY_RULES.map(rule => `--${rule}`).concat("--all") : [])];
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
@@ -55,6 +57,15 @@ export function runWriteCommand(command: string, args: string[], home: string, e
   const count = ["move", "link", "supersede"].includes(command) ? 3 : command === "tidy" ? 1 : 2;
   if (positional.length !== count) throw new Error(`${command}: requires vault id${count > 1 ? " and target(s)" : ""}`);
   const vault = positional[0]!, target = positional[1]!;
+  if (command === "tidy") {
+    const all = flags["--all"] === true, rules = TIDY_RULES.filter(rule => all || flags[`--${rule}`] === true);
+    if (all && TIDY_RULES.some(rule => flags[`--${rule}`] === true)) throw new Error("tidy: use rule flags or --all, not both");
+    if (!rules.length) throw new Error("tidy: select at least one rule (--connections --escapes --enums --keys --sources --topics --secrets --log) or --all");
+    if (flags["--dry-run"] && flags["--confirm"]) throw new Error("tidy: --dry-run and --confirm are exclusive");
+    const mapText = optional("--map") !== undefined ? input(required("--map"), home) : undefined;
+    const result = tidyVault(home, { vault, rules, ...(mapText !== undefined ? { map: parseTidyMap(mapText), mapText } : {}), confirm: flags["--confirm"] === true && !flags["--dry-run"], fingerprint: optional("--fingerprint"), channel: "cli" }, { env });
+    return { text: JSON.stringify(result, null, flags["--json"] ? undefined : 2), code: result.ok ? 0 : 1 };
+  }
   let operation: WriteOp;
   switch (command) {
     case "new": {

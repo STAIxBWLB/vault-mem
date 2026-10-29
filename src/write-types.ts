@@ -11,6 +11,8 @@ export type WriteOp =
   | { op: "move"; from: string; to: string }
   | { op: "delete"; path: string }
   | { op: "tidy" }
+  /** Whole-note replacement used by `tidy` rules; the text is validated like any other write. */
+  | { op: "sanitize"; path: string; text: string }
   | { op: "report"; path: string; text: string };
 export interface WriteRequest {
   vault: string;

@@ -40,3 +40,5 @@ export type { SyncResult } from "./sync.ts";
 
 export { normalizeSource, sourceReferences } from "./source.ts";
 export type { SourceValue, SourceReference } from "./source.ts";
+export { tidyVault, parseTidyMap, TIDY_RULES } from "./tidy.ts";
+export type { TidyRequest, TidyResult, TidyRule, TidyMap } from "./tidy.ts";
