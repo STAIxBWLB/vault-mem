@@ -2,7 +2,7 @@
 
 An Obsidian-compatible knowledge vault tool for agents and people. Requires Bun >=1.4.2. The full check (`bun run check`) needs only Bun: package validation uses `bun pm pack --dry-run`, so Node and npm are not required. CI runs on Ubuntu and macOS for pull requests and for pushes to `main`.
 
-Implemented: configuration, vault registration, lossless frontmatter parsing/emission, wiki-link resolution and derived SQLite FTS5 indexing with bounded read commands. Validated note writes are also implemented below. MCP, lint/graph, promotion, sync, setup and the `acon` console remain planned under issues [#1](https://github.com/STAIxBWLB/vault-mem/issues/1) and [#2](https://github.com/STAIxBWLB/vault-mem/issues/2). Do not use this increment to replace an existing vault writer.
+Implemented: configuration, vault registration, lossless frontmatter parsing/emission, wiki-link resolution and derived SQLite FTS5 indexing with bounded read commands. Validated note writes, the append-only log, the `vmem mcp` stdio server and reversible `vmem setup` host registration are also implemented below. Lint/graph, promotion, sync and the `acon` console remain planned under issues [#1](https://github.com/STAIxBWLB/vault-mem/issues/1) and [#2](https://github.com/STAIxBWLB/vault-mem/issues/2). Do not use this increment to replace an existing vault writer.
 
 ```sh
 bun install
@@ -57,7 +57,7 @@ Link resolution uses NFC and case-insensitive filename stems or frontmatter `ali
 
 # Validated writes
 
-All mutations use `applyWrite(home, request)`: per-vault `mutation.lock`, current-SHA checks, in-memory planning, final-snapshot validation/screening, same-directory flushed temporary files and atomic renames, directory flushes, derived-index refresh and a structured receipt. `write: mcp` allows CLI and future MCP providers; `cli` allows CLI only; `none` refuses mutations. `check` is read-only and works with `none`. No command requires a TTY or rejects agent environments. This increment runs on fixtures; it does not authorize a live vault cutover.
+All mutations use `applyWrite(home, request)`: per-vault `mutation.lock`, current-SHA checks, in-memory planning, final-snapshot validation/screening, same-directory flushed temporary files and atomic renames, directory flushes, derived-index refresh and a structured receipt. `write: mcp` allows CLI and MCP writes; `cli` allows CLI only; `none` refuses mutations. `check` is read-only and works with `none`. No command requires a TTY or rejects agent environments. This increment runs on fixtures; it does not authorize a live vault cutover.
 
 ```sh
 vmem new personal example-finding --type insight --domain research --topics research --description "A distinct supporting observation."
@@ -101,3 +101,47 @@ Every MCP log append and CLI call with a nonempty `AGENTHUB_PEER_ID`, `CLAUDECOD
 Successful changed mutations default to EXTRACT, link to CONNECT, move to ROUTE, and supersede/tidy to RETHINK. Default events use project `-`, affected paths and the operation name rather than note text. Library callers can supply `WriteRequest.log` to override the event or `false` to disable it; CLI writers accept `--log JSON` for overrides. Preview/check/no-op/refused mutations never append. The append is bound to the mutation's resolved vault identity/policy, so re-registration cannot route its event to another vault. After a committed mutation, log append is independent: `ok`/`applied` describe the note operation, `log` holds its append receipt, and `logged` is true only when the event was appended and synced. A log error does not roll back a successfully saved note. CLI exits 1 for a log failure even when the note receipt says `ok: true`; inspect the receipt before retrying to avoid duplicate mutations/events. An override is validated at append time, not during a note-only dry run.
 
 Readers never create a home, log or lock, and work with `write: none`. They skip blank/comment lines, return the last matching 1..200 records (default 50), accept an optional canonical TYPE and non-backtracking regex subset up to 256 characters (`|`, `^`, `$`, `.`, character classes, `\d`/`\s`/`\w` and their inverses, escaped literals, and atom `*`/`+`/`?`; groups, backreferences and brace quantifiers are refused), and scan a fixed descriptor-size snapshot. Streaming is capped at 32 MiB; individual historical lines over 4096 bytes and incomplete final lines are omitted with warnings, and the serialized line array stays within 128 KiB. Above 20000 data lines, the manual-archival warning is preserved. Read failure returns `dataLines: null` rather than claiming a count. Golden synthetic fixtures and concurrent/fault persistence tests cover the format and actual append state; no live vault log was read or modified for this increment.
+
+# MCP server
+
+`vmem mcp` serves newline-delimited JSON-RPC 2.0 (MCP tools, protocol 2025-06-18 and earlier) on stdio. stdout carries protocol messages only; it needs no TTY and runs in agent sessions. Requests are limited to 64 KiB per frame and results to 256 KiB (a larger result becomes a structured `LIMIT` refusal). Arguments are validated against each tool's bounded schema (`additionalProperties: false`, string/array/integer caps); invalid arguments or unknown tools return JSON-RPC `-32602`, unknown methods `-32601`, malformed frames `-32700`/`-32600`. The `@staix/agent-mem` root is never loaded at startup.
+
+The vault set is read once at startup: every tool's `vault` property is an enum of the registered ids and defaults to the first `personal` vault. Restart the host session after `vaults add/remove`. Reads go through the same index as the CLI; writes go through `applyWrite`/`appendLog` with channel `mcp`, so they require `write: mcp` and pass the same V01-V10 gates. Every tool returns a JSON result: a receipt, or `{refused: true, issues}` for policy, validation or lookup failures.
+
+| tool | arguments (caps) |
+|---|---|
+| `vmem_status` | none; vaults with health, write policy and effective pii |
+| `vmem_search` | `query`<=1000, `vault`, `limit`<=50, `type`, `domain` |
+| `vmem_read` | `path` (stem, alias or `notes/` path), `vault`, `maxBytes`<=65536; returns `{path, frontmatter, body, sha256, truncated}` |
+| `vmem_read_many` | `paths`<=20 (8 KiB each), `vault` |
+| `vmem_list` | `vault`, `prefix`, `limit`<=500 |
+| `vmem_links` | `path`, `vault`, `direction` out/in/both, `limit`<=200; returns `{out, dead, in}` |
+| `vmem_mocs` | `vault`; MOC notes with incoming link counts |
+| `vmem_check` | `vault`, `path`, `text`<=256 KiB; validation only |
+| `vmem_log_tail` | `vault`, `n`<=200, `type`, `grep`<=256 |
+| `vmem_create` | `stem`, `type`, `domain`, `description`, `topics[]`<=32, `title`, `body`<=65536, `source`, `confidence`, `status`, `extra`, `log` |
+| `vmem_patch` | `path`, `oldString`<=8192, `newString`<=8192, `expectedSha` |
+| `vmem_append` | `path`, `section`<=120, `markdown`<=16384, `expectedSha` |
+| `vmem_set_frontmatter` | `path`, `set`, `unset[]`, `expectedSha` |
+| `vmem_link` | `from`, `to`, `relation`, `context`, `bidirectional` (default true), `log` |
+| `vmem_supersede` | `old`, `next`, `log` |
+| `vmem_log_append` | `type`, `project`, `source`, `dest`, `note`<=500 |
+| `vmem_move` | `from`, `to`, `confirm`, `fingerprint` (two-step) |
+| `vmem_delete` | `path`, `confirm`, `fingerprint` (two-step; the preview lists backlinks) |
+
+Move and delete without `confirm` write nothing and return the preview and `fingerprint`; `confirm: true` requires the fingerprint recomputed on the current state, otherwise the call is refused with `V09`. Graph (`vmem_graph`) and promotion (`vmem_promote`, `vmem_promote_from_amem`) tools are not advertised until their providers land (#8-#10). Note paths in read results are relative to `notes/`.
+
+# Host setup
+
+```sh
+vmem setup claude            # dry-run: lists the file and change per host, writes nothing
+vmem setup all --apply       # claude codex kimi pi qwen jcode
+vmem setup agy --apply       # run inside the workspace; writes ./.agents/mcp_config.json
+vmem setup all --undo
+```
+
+Setup registers one server entry named `vmem` (`<bun> --smol <package>/bin/vmem.js mcp`) by editing the host's own MCP configuration: `~/.claude.json` (`mcpServers`; `$CLAUDE_CONFIG_DIR/.claude.json` when set), `$CODEX_HOME/config.toml` (`[mcp_servers.vmem]`), `$KIMI_CODE_HOME/mcp.json`, `$PI_CODING_AGENT_DIR/mcp.json`, `$QWEN_HOME/settings.json` (all `mcpServers`), `$JCODE_HOME/mcp.json` (`servers`) and the workspace's `.agents/mcp_config.json` for Antigravity. Defaults are `~/.codex`, `~/.kimi-code`, `~/.pi/agent`, `~/.qwen` and `~/.jcode`; overrides must be absolute. It does not call host CLIs and does not need a TTY.
+
+Apply is idempotent and touches only the `vmem` entry: other servers and settings are preserved (TOML is edited textually, so comments and other tables stay byte-identical; JSON is re-serialized with its indentation). Configuration files must be plain strict JSON or TOML; links, JSONC and unparsable files are refused per host without writing, and the command exits 1. Apply records the prior `vmem` value in `$VMEM_HOME/setup/<host>.json`. Undo restores that prior value (or removes the entry, and the file if setup created it and nothing else was added) only while the entry is still the one setup installed; an entry edited later is left alone and reported as `refused`. No console plugin manifest is written because vmem ships no console plugin yet.
+
+`vmem completion bash|zsh|fish` prints a completion script generated from the same command table as `--help`.
