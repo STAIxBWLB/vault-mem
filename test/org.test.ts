@@ -164,6 +164,12 @@ test("a link that matches an org note only by alias is dropped, as Obsidian woul
   const preview = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
   expect(preview).toMatchObject({ ok: true, droppedLinks: ["Org Alias"] });
   expect(preview.text).toContain("Uses [[org-only]] and Org Alias and [[research]].");
+  // Another note's alias equal to a real stem must not make that path link ambiguous.
+  writeFileSync(join(f.org, "notes", "shadow.md"), note("Shadow", "Shadow text.", "aliases: [org-only]\n"));
+  git(f.org, "add", "."); git(f.org, "commit", "--quiet", "-m", "shadow"); git(f.org, "push", "--quiet", "origin", "main");
+  const shadowed = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
+  expect(shadowed).toMatchObject({ ok: true, droppedLinks: ["Org Alias"] });
+  expect(shadowed.text).toContain("Uses [[org-only]] and Org Alias and [[research]].");
 });
 test("dropped links to person, meeting or correspondence notes refuse without leaking their names", () => {
   const f = fixture();

@@ -331,6 +331,12 @@ export class VaultIndex {
     return out;
   }
   /** MOC notes with the number of resolved links pointing at each. */
+  /** Link keys that name exactly one indexed note path (aliases excluded), as wiki links resolve. */
+  linkTargets(): Set<string> {
+    const counts = new Map<string, number>();
+    for (const row of this.db.query<{ path: string }, []>("SELECT path FROM notes").all()) { const key = noteKey(row.path); counts.set(key, (counts.get(key) ?? 0) + 1); }
+    return new Set([...counts].filter(([, count]) => count === 1).map(([key]) => key));
+  }
   mocs(limit = 200): { path: string; title: string; description: string; count: number }[] {
     const mocs = this.db.query<{ path: string; title: string; description: string }, [number]>("SELECT path,title,substr(description,1,512) AS description FROM notes WHERE type='moc' ORDER BY path LIMIT ?").all(resultLimit(limit));
     const counts = new Map(mocs.map(moc => [moc.path, 0]));
