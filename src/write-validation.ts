@@ -3,7 +3,7 @@ import { sourceReferences, sourceWorkspaceRoot, missingSourceWarnings } from "./
 import { basename, resolve } from "node:path";
 import type { VaultSpec, VmemConfig } from "./config.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { extractLinks, normalizeTarget, proseLines, resolveLinks, type LinkNote, type ResolvedLink } from "./links.ts";
+import { extractLinks, normalizeTarget, proseLines, resolveLinks, type Link, type LinkNote, type ResolvedLink } from "./links.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import type { PlannedChange, ValidationContext, WriteIssue } from "./write-types.ts";
 
@@ -101,9 +101,12 @@ function strings(value: unknown): string[] {
   return typeof value === "string" ? [value] : Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 function fold(value: string): string { return value.normalize("NFKC").toLowerCase().replace(/[-_\s]+/g, " ").trim(); }
-function parseNotes(notes: Map<string, string>): Map<string, ParsedNote> {
+/** Notes whose path and text match `reuse` keep that parsed object, so link analysis is shared too. */
+function parseNotes(notes: Map<string, string>, reuse?: Map<string, ParsedNote>): Map<string, ParsedNote> {
   const parsed = new Map<string, ParsedNote>();
   for (const [path, text] of notes) {
+    const previous = reuse?.get(path);
+    if (previous?.text === text) { parsed.set(path, previous); continue; }
     try {
       const { data, body } = parseFrontmatter(text);
       const h1 = proseLines(body).map(line => /^ {0,3}#(?:[ \t]+(.*)|[ \t]*)$/.exec(line)).find(match => match)?.[1]?.replace(/[ \t]+#+[ \t]*$/, "").trim() ?? "";
@@ -130,10 +133,13 @@ function target(value: unknown, index: Map<string, Set<ParsedNote>>): ParsedNote
   const candidates = index.get(noteKey(wiki[1]!.trim()));
   return candidates?.size === 1 ? candidates.values().next().value : undefined;
 }
+const metadataLinks = new WeakMap<ParsedNote, Link[]>();
 function references(notes: Map<string, ParsedNote>): ResolvedLink[] {
-  const metadata = new Map([...notes].map(([path, note]) => [path,
-    WIKI_FIELDS.flatMap(key => strings(note.data[key]).flatMap(value => extractLinks(value))),
-  ]));
+  const metadata = new Map([...notes].map(([path, note]) => {
+    let links = metadataLinks.get(note);
+    if (!links) metadataLinks.set(note, links = WIKI_FIELDS.flatMap(key => strings(note.data[key]).flatMap(value => extractLinks(value))));
+    return [path, links];
+  }));
   return resolveLinks([...notes.values()], metadata);
 }
 function linkSignature(link: ResolvedLink, source: string = link.source): string {
@@ -232,7 +238,7 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
     try{issues.push(...screenMetadata(parseFrontmatter(change.after).data,context,change.path));}catch{ /* Invalid note YAML is reported separately; reports remain schema-exempt. */ }
   }
   const sourceRoot=sourceWorkspaceRoot(context.vault);
-  const oldNotes = parseNotes(context.notes), newNotes = parseNotes(final), oldNames = names(oldNotes), newNames = names(newNotes);
+  const oldNotes = parseNotes(context.notes), newNotes = parseNotes(final, oldNotes), oldNames = names(oldNotes), newNames = names(newNotes);
   const candidates=[...changes];
   if(context.operation.op==="frontmatter"){
     const key=noteKey(context.operation.path),existing=[...newNotes.values()].find(note=>noteKey(note.path)===key);

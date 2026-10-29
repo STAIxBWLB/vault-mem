@@ -35,22 +35,26 @@ function safePath(root: string, path: string): string {
   }
   return current;
 }
+/** Nanosecond file identity used to detect a write racing a single read. */
+function stamp(stat: { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint }): string {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+}
 function readPlain(root: string, path: string): string | null {
   const file = safePath(root, path);
   let fd: number;
   try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   try {
-    const before = fstatSync(fd);
-    if (!before.isFile() || before.size > MAX_NOTE_BYTES) refuse("V09", "file exceeds read bound or is not regular", path);
-    const bytes = Buffer.alloc(Math.min(before.size + 1, MAX_NOTE_BYTES + 1));
+    const before = fstatSync(fd, { bigint: true });
+    if (!before.isFile() || before.size > BigInt(MAX_NOTE_BYTES)) refuse("V09", "file exceeds read bound or is not regular", path);
+    const bytes = Buffer.alloc(Math.min(Number(before.size) + 1, MAX_NOTE_BYTES + 1));
     let size = 0;
     while (size < bytes.length) {
       const count = readSync(fd, bytes, size, bytes.length - size, null); size += count;
       if (!count) break;
     }
-    const after = fstatSync(fd);
-    if (size > MAX_NOTE_BYTES || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) refuse("V09", "file changed during read", path);
+    const after = fstatSync(fd, { bigint: true });
+    if (size > MAX_NOTE_BYTES || stamp(before) !== stamp(after)) refuse("V09", "file changed during read", path);
     const buffer = bytes.subarray(0, size), text = buffer.toString("utf8");
     if (!Buffer.from(text).equals(buffer)) refuse("V01", "note must be valid UTF-8", path);
     return text;
@@ -181,8 +185,9 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       // Detect non-cooperating writers before any rename; cooperating callers use our lock.
       const currentRoot = lstatSync(root);
       if (currentRoot.dev !== identity.dev || currentRoot.ino !== identity.ino) refuse("V09", "vault identity changed while staging");
+      // Full content recheck: shared mmap writes can change bytes without moving any stat field.
       const current = snapshot(root, config.denyPaths);
-      if (canonical([...current].map(([path, text]) => [path, sha256(text)])) !== canonical([...notes].map(([path, text]) => [path, sha256(text)]))) refuse("V09", "vault changed while staging");
+      if (current.size !== notes.size || [...current].some(([path, text]) => notes.get(path) !== text)) refuse("V09", "vault changed while staging");
       for (const change of changes) {
         const file = safePath(root, change.path);
         if (readPlain(root, change.path) !== change.before) refuse("V09", "file changed while staging", change.path);

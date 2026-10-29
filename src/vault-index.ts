@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { AnalysisSnapshot } from "./analysis-types.ts";
 import type { VaultSpec } from "./config.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { normalizeTarget, proseLines, resolveLinks, type LinkNote, type ResolvedLink } from "./links.ts";
+import { normalizeTarget, noteKey, proseLines, resolveLinks, type LinkNote, type ResolvedLink } from "./links.ts";
 
 export const MAX_NOTE_BYTES = 2 * 1024 * 1024;
 export const MAX_RESULTS = 500;
@@ -162,8 +162,8 @@ export class VaultIndex {
     }
   }
   close(): void { this.db.close(); }
-  private stored(): StoredNote[] {
-    return this.db.query< Omit<StoredNote, "aliases"> & { aliases: string }, []>("SELECT * FROM notes ORDER BY path").all().map(row => ({ ...row, aliases: JSON.parse(row.aliases) as string[] }));
+  private stored(): LinkNote[] {
+    return this.db.query<Omit<LinkNote, "aliases"> & { aliases: string }, []>("SELECT path,title,aliases,body FROM notes ORDER BY path").all().map(row => ({ ...row, aliases: JSON.parse(row.aliases) as string[] }));
   }
   /** Scan metadata each call; hash only new or metadata-changed files. Atomic cache update. */
   scan(rebuild = false, options: { skipInvalidFrontmatter?: boolean; captureInvalidFrontmatter?: boolean } = {}): { notes: number; changed: number; removed: number; skipped?: string[] } {
@@ -174,7 +174,13 @@ export class VaultIndex {
       if (rebuild) this.db.run("DELETE FROM fts");
       const live = new Set<string>(), present = new Set<string>();
       let changed = 0, analysisBytes = 0;
-      const skipped: string[] = [];
+      const skipped: string[] = [], touched = new Set<string>(), keys = new Set<string>();
+      // Link resolution of other notes can change only through names a touched note had or now has.
+      const touch = (path: string, names?: string[]) => {
+        touched.add(path); keys.add(noteKey(path));
+        const row = this.db.query<{ aliases: string }, [string]>("SELECT aliases FROM notes WHERE path=?").get(path);
+        for (const alias of [...(row ? JSON.parse(row.aliases) as string[] : []), ...(names ?? [])]) keys.add(noteKey(alias));
+      };
       for (const entry of readdirSync(notesDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
         if (!entry.name.endsWith(".md") || !entry.isFile()) continue;
         const path = entry.name, file = join(notesDir, path), before = lstatSync(file);
@@ -213,6 +219,7 @@ export class VaultIndex {
           live.delete(path); skipped.push(path); continue;
         }
         const { data, body } = document;
+        touch(path, aliases(data.aliases ?? data.alias));
         this.db.query("INSERT OR REPLACE INTO notes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(path, hash, stamp,
           text(data.title) || path.slice(0, -3), text(data.description), body, text(data.type), text(data.domain), JSON.stringify(aliases(data.aliases ?? data.alias)), buffer.toString("utf8"));
         this.db.query("DELETE FROM fts WHERE path=?").run(path);
@@ -221,11 +228,22 @@ export class VaultIndex {
       }
       for (const row of this.db.query<{path:string}, []>("SELECT path FROM analysis_notes").all()) if (!present.has(row.path)) this.db.query("DELETE FROM analysis_notes WHERE path=?").run(row.path);
       let removed = 0;
-      for (const path of previous.keys()) if (!live.has(path)) { this.db.query("DELETE FROM notes WHERE path=?").run(path); this.db.query("DELETE FROM fts WHERE path=?").run(path); removed++; }
+      for (const path of previous.keys()) if (!live.has(path)) { touch(path); this.db.query("DELETE FROM notes WHERE path=?").run(path); this.db.query("DELETE FROM fts WHERE path=?").run(path); removed++; }
+      if (rebuild) this.db.run("DELETE FROM links");
+      else if (changed || removed) {
+        for (const row of this.db.query<{ source: string; data: string }, []>("SELECT source,data FROM links").all()) {
+          if (!touched.has(row.source) && keys.has(noteKey((JSON.parse(row.data) as ResolvedLink).target))) touched.add(row.source);
+        }
+        const remove = this.db.query("DELETE FROM links WHERE source=?");
+        for (const source of touched) remove.run(source);
+      }
       if (changed || removed || rebuild) {
-        this.db.run("DELETE FROM links");
-        const insert = this.db.query("INSERT INTO links VALUES (?, ?, ?)");
-        for (const [ordinal, link] of resolveLinks(this.stored()).entries()) insert.run(link.source, ordinal, JSON.stringify(link));
+        // Ordinals count per source, so a partial refresh orders exactly like a rebuild.
+        const insert = this.db.query("INSERT INTO links VALUES (?, ?, ?)"), next = new Map<string, number>();
+        for (const link of resolveLinks(this.stored(), undefined, rebuild ? undefined : touched)) {
+          const ordinal = next.get(link.source) ?? 0;
+          next.set(link.source, ordinal + 1); insert.run(link.source, ordinal, JSON.stringify(link));
+        }
       }
       return { notes: live.size, changed, removed, ...(skipped.length ? { skipped } : {}) };
     }).immediate();

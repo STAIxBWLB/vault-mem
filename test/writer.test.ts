@@ -170,6 +170,17 @@ test("failed rollback retains original backups and never overwrites external edi
     if (mode === "external-edit") expect(readFileSync(join(f.notes, "next.md"), "utf8")).toContain("External edit preserved.");
   }
 });
+test("an unrelated note edited during staging refuses the commit, even when no stat field moves", () => {
+  for (const mode of ["silent-edit", "mmap-edit"]) {
+    const f = fixture();
+    const output = Bun.spawnSync([process.execPath, "test/fixtures/writer-fault.ts", f.home, f.vault, mode, JSON.stringify({ op: "patch", path: "old", oldString: "Original text.", newString: "Changed text." })], { stdout: "pipe", stderr: "pipe" });
+    expect(output.exitCode).toBe(0); const result = JSON.parse(output.stdout.toString());
+    expect(result.ok).toBe(false); expect(result.applied).toBe(false);
+    expect(result.issues.some((issue: { code: string; message: string }) => issue.code === "V09" && issue.message === "vault changed while staging")).toBe(true);
+    expect(readFileSync(join(f.notes, "old.md"), "utf8")).toContain("Original text.");
+    expect(readFileSync(join(f.notes, "next.md"), "utf8")).toContain("Replacemant");
+  }
+});
 test("cleanup errors report retained files/locks without hiding the operation result", () => {
   for (const mode of ["temp-cleanup", "lock-cleanup"]) {
     const f = fixture();
