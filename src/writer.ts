@@ -152,8 +152,8 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     fingerprint = sha256(canonical({ input, vault, policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [] }, root, identity: [identity.dev, identity.ino], files: [...notes].map(([path, text]) => [path, sha256(text)]), changes: receipts(changes) }));
     if (twoStep && request.confirm === true && (typeof request.fingerprint !== "string" || request.fingerprint !== fingerprint)) refuse("V09", "stale or missing preview fingerprint");
     if (issues.some(issue => issue.severity === "error")) return result = { ok: false, applied: false, issues, changes: receipts(changes), fingerprint, indexUpdated: false };
-    if (preview) return result = { ok: true, applied: false, preview: true, issues, changes: receipts(changes), fingerprint, indexUpdated: false };
-    if (!changes.length) return result = { ok: true, applied: false, issues, changes: [], fingerprint, indexUpdated: false };
+    if (preview) return result = { ok: true, applied: false, preview: true, ...(request.operation.op === "link" && !changes.length ? {unchanged:true} : {}), issues, changes: receipts(changes), fingerprint, indexUpdated: false };
+    if (!changes.length) return result = { ok: true, applied: false, ...(request.operation.op === "link" ? {unchanged:true} : {}), issues, changes: [], fingerprint, indexUpdated: false };
     index = new VaultIndex(home, vault, config.vaults.map(value => value.path));
     const backups = new Map<string, string>(), staged = new Map<string, string>();
     const ensureDir = (dir: string) => {

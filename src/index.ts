@@ -37,3 +37,6 @@ export { promoteToOrg, screenForOrg, dropUnresolvedLinks, lintPromoted } from ".
 export type { OrgPromoteRequest, OrgPromoteResult } from "./org-promote.ts";
 export { syncVault, sameRemote } from "./sync.ts";
 export type { SyncResult } from "./sync.ts";
+
+export { normalizeSource, sourceReferences } from "./source.ts";
+export type { SourceValue, SourceReference } from "./source.ts";

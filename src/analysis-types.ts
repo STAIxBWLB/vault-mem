@@ -6,8 +6,10 @@ export interface AnalysisSnapshot {
   log: string | null;
   registryIds: string[] | null;
   reports: Record<string, string>;
+  /** Bounded auxiliary source-path existence warnings captured outside the pure lint transform. */
+  sourceWarnings?: Record<string,string[]>;
 }
-export type LintCode = "L01" | "L02" | "L03" | "L09" | "L10" | "L11" | "L12" | "L13";
+export type LintCode = "L01" | "L02" | "L03" | "L09" | "L10" | "L11" | "L12" | "L13" | "L14";
 export interface LintReport {
   findings: Record<LintCode, string[]>;
   errors: number;

@@ -1,5 +1,6 @@
+import { normalizeSource } from "./source.ts";
 import { parseFrontmatter, emitFrontmatter } from "./frontmatter.ts";
-import { normalizeTarget, proseLines, rewriteLinkTargets } from "./links.ts";
+import { normalizeTarget, proseLines, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
 import type { PlannedChange, WriteIssue, WriteOp } from "./write-types.ts";
 export class WriteRefusal extends Error {
   constructor(readonly issues: WriteIssue[]) { super(issues[0]?.message ?? "write refused"); }
@@ -54,6 +55,23 @@ function tidy(source: string, path: string): string {
   for (const section of [...connections].reverse()) body = body.slice(0, section.start) + body.slice(section.end);
   return appendSection((doc.frontmatter ?? "") + body, "Relevant Notes", collected.join("\n\n"), path);
 }
+function normalizedSourceChanges(data:Record<string,unknown>):Record<string,unknown>{
+  const result={...data};
+  if(Object.hasOwn(result,"source")&&result.source!==undefined)try{result.source=normalizeSource(result.source);}catch{refuse("V01","source must contain workspace-relative paths, mem ids or URLs");}
+  return result;
+}
+function bodyAlreadyLinks(notes:Map<string,string>,from:string,to:string):boolean{
+  const doc=document(needed(notes,from),from);let body=doc.body;
+  for(const section of h2Sections(body).filter(section=>section.name.toLowerCase()==="topics").reverse())body=body.slice(0,section.start)+body.slice(section.start,section.end).replace(/[^\r\n]/g," ")+body.slice(section.end);
+  const references=extractLinks(body).map(link=>({...link,heading:null,block:null}));
+  if(!references.length)return false;
+  const metadata:LinkNote[]=[];
+  for(const [path,source] of notes)try{
+    const parsed=parseFrontmatter(source),aliases=parsed.data.aliases??parsed.data.alias;
+    metadata.push({path,title:typeof parsed.data.title==="string"?parsed.data.title:path,aliases:typeof aliases==="string"?[aliases]:Array.isArray(aliases)?aliases.filter((value):value is string=>typeof value==="string"):[],body:""});
+  }catch{ /* Unrelated malformed legacy YAML cannot resolve an alias. */ }
+  return resolveLinks(metadata,new Map([[from,references]])).some(link=>link.source===from&&link.resolved===to);
+}
 /** Plan transformations in memory. This function never touches files. */
 export function planOperation(operation: WriteOp, notes: Map<string, string>, reportBefore?: string | null): PlannedChange[] {
   const planned = new Map<string, PlannedChange>();
@@ -78,7 +96,7 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
       const topics = Array.isArray(operation.frontmatter.topics) ? operation.frontmatter.topics.filter(v => typeof v === "string").join("\n- ") : "";
       const body = operation.body ?? `# ${title}\n\nThis note argues that ${title}.\n\n## Relevant Notes\n\n## Topics\n\n${topics ? `- ${topics}\n` : ""}`;
       if (typeof body !== "string") refuse("V01", "body must be text");
-      try { set(path, emitFrontmatter(parseFrontmatter(body), operation.frontmatter)); }
+      try { const doc=parseFrontmatter(body),fields={...operation.frontmatter};if(!Object.hasOwn(fields,"source")&&doc.data.source!==undefined)fields.source=doc.data.source;set(path, emitFrontmatter(doc, normalizedSourceChanges(fields))); }
       catch (error) { if (error instanceof WriteRefusal) throw error; refuse("V01", "cannot emit frontmatter", path); }
       break;
     }
@@ -87,6 +105,7 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
       if (typeof operation.oldString !== "string" || !operation.oldString || typeof operation.newString !== "string" || Buffer.byteLength(operation.oldString) > 8192 || Buffer.byteLength(operation.newString) > 8192) refuse("V09", "patch strings must be bounded and oldString nonempty", path);
       const first = source.indexOf(operation.oldString);
       if (first < 0 || source.indexOf(operation.oldString, first + 1) >= 0) refuse("V09", "oldString must match exactly once", path);
+      if(first < (document(source,path).frontmatter?.length ?? 0))refuse("V01","patch cannot target frontmatter; use vmem_set_frontmatter or the frontmatter command",path);
       set(path, source.slice(0, first) + operation.newString + source.slice(first + operation.oldString.length));
       break;
     }
@@ -94,9 +113,9 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
     case "frontmatter": {
       const { path, source } = existing(operation.path);
       if (!operation.set || typeof operation.set !== "object" || Array.isArray(operation.set) || (operation.unset !== undefined && (!Array.isArray(operation.unset) || operation.unset.some(key => typeof key !== "string")))) refuse("V01", "invalid frontmatter update");
-      const changes = { ...operation.set };
+      const changes = {...operation.set};
       for (const key of operation.unset ?? []) changes[key] = undefined;
-      try { set(path, emitFrontmatter(document(source, path), changes)); } catch (error) { if (error instanceof WriteRefusal) throw error; refuse("V01", "cannot emit frontmatter", path); }
+      try { set(path, emitFrontmatter(document(source, path), normalizedSourceChanges(changes))); } catch (error) { if (error instanceof WriteRefusal) throw error; refuse("V01", "cannot emit frontmatter", path); }
       break;
     }
     case "link": {
@@ -105,8 +124,8 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
       if (operation.context !== undefined && (typeof operation.context !== "string" || /[\r\n]/.test(operation.context) || operation.context.length > 500)) refuse("V01", "link context must be one line <=500 characters");
       if (from.path === to.path) refuse("V01", "link endpoints must differ");
       const line = (path: string) => `- [[${path.slice(6, -3)}]] (${operation.relation})${operation.context ? `: ${operation.context}` : ""}`;
-      set(from.path, appendSection(from.source, "Relevant Notes", line(to.path), from.path));
-      if (operation.bidirectional !== false) set(to.path, appendSection(to.source, "Relevant Notes", line(from.path), to.path));
+      if(!bodyAlreadyLinks(notes,from.path,to.path))set(from.path, appendSection(from.source, "Relevant Notes", line(to.path), from.path));
+      if (operation.bidirectional !== false && !bodyAlreadyLinks(notes,to.path,from.path)) set(to.path, appendSection(to.source, "Relevant Notes", line(from.path), to.path));
       break;
     }
     case "supersede": {

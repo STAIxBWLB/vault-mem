@@ -35,6 +35,8 @@ export interface ChangeReceipt { path: string; beforeSha: string | null; sha256:
 export interface WriteReceipt {
   ok: boolean;
   applied: boolean;
+  /** A link request whose requested sides already have body references made no changes. */
+  unchanged?: boolean;
   issues: WriteIssue[];
   changes: ChangeReceipt[];
   fingerprint?: string;

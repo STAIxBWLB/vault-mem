@@ -60,6 +60,7 @@ export function runWriteCommand(command: string, args: string[], home: string, e
     case "new": {
       const frontmatter = optional("--extra") ? object(required("--extra"), "extra") : {};
       for (const key of ["type", "domain", "description", "title", "source", "confidence", "status"]) if (optional(`--${key}`) !== undefined) frontmatter[key] = optional(`--${key}`);
+      if(optional("--source")?.trim().startsWith("["))try{frontmatter.source=JSON.parse(required("--source"));}catch{throw new Error("--source: expected a string or JSON array of strings");}
       if (optional("--topics") !== undefined) frontmatter.topics = required("--topics").split(",").filter(Boolean).map(value => value.startsWith("[[") ? value : `[[${value}]]`);
       operation = { op: "create", path: target, frontmatter, ...(optional("--body") ? { body: input(required("--body"), home) } : {}) }; break;
     }
