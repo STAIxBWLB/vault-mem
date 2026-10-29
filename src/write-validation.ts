@@ -28,9 +28,24 @@ function issue(code: string, message: string, severity: WriteIssue["severity"] =
   return { code, severity, message, ...(path ? { path } : {}) };
 }
 function hasPhone(text: string): boolean {
-  for (const match of text.matchAll(/(?<![\p{L}\p{N}])\+?\d(?:[\d ().-]{6,}\d)(?![\p{L}\p{N}])/gu)) {
-    const count = match[0].replace(/\D/g, "").length;
+  // A complete ISO calendar timestamp is metadata, not a phone-number candidate.
+  const withoutTimestamps = text.replace(/\b[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])[ T](?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\.[0-9]{1,3})?)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])?\b/g, "\n");
+  // The newline replacement is outside the candidate class, so neighbours of a timestamp never merge.
+  const digits = (value: string) => value.replace(/\D/g, "").length;
+  for (const match of withoutTimestamps.matchAll(/(?<![\p{L}\p{N}])\+?\d(?:[\d ().-]{6,}\d)(?![\p{L}\p{N}])/gu)) {
+    const count = digits(match[0]);
     if (count >= 9 && count <= 15) return true;
+    if (count <= 15) continue;
+    // Oversized run, e.g. two phones separated by spaces: evaluate every contiguous run of
+    // whitespace-separated groups alone so each embedded phone is screened (fails closed).
+    const groups = match[0].split(/\s+/).filter(Boolean);
+    for (let start = 0; start < groups.length; start++) {
+      let total = 0;
+      for (let end = start; end < groups.length && total <= 15; end++) {
+        total += digits(groups[end]!);
+        if (total >= 9 && total <= 15) return true;
+      }
+    }
   }
   return false;
 }

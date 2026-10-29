@@ -20,5 +20,8 @@ export const COMMANDS = [
   { name: "tidy", usage: "tidy <vault> --connections [--confirm --fingerprint SHA]", mutates: "confirm" },
   { name: "report", usage: "report <vault> <reports/path|ops/path> --body file|- [--dry-run]", mutates: true },
   { name: "check", usage: "check <vault> <file|-> [--path stem]", mutates: false },
+  { name: "log tail", usage: "log tail <vault> [--limit 1..200] [--type TYPE] [--json]", mutates: false },
+  { name: "log grep", usage: "log grep <vault> <pattern> [--limit 1..200] [--type TYPE] [--json]", mutates: false },
+  { name: "log append", usage: "log append <vault> <TYPE> <project> <source> <note> [--dest PATH] [--json]", mutates: true },
 ] as const;
 export function help(): string { return "vmem - vault registry and indexed reads\n\n" + COMMANDS.map(c => `  vmem ${c.usage}`).join("\n") + "\n\n  vmem --help | --version\n"; }

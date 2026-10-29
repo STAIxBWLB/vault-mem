@@ -1,3 +1,4 @@
+import type { LogEvent, LogReceipt } from "./log-types.ts";
 import type { VaultSpec, VmemConfig } from "./config.ts";
 export type WriteOp =
   | { op: "check"; path: string; text: string }
@@ -19,6 +20,7 @@ export interface WriteRequest {
   confirm?: boolean;
   fingerprint?: string;
   expectedShas?: Record<string, string>;
+  log?: LogEvent | false;
 }
 export interface WriteIssue { code: string; severity: "error" | "warning"; path?: string; message: string }
 export interface PlannedChange { path: string; before: string | null; after: string | null }
@@ -39,4 +41,6 @@ export interface WriteReceipt {
   preview?: boolean;
   possibleDuplicates?: string[];
   indexUpdated: boolean;
+  logged?: boolean;
+  log?: LogReceipt;
 }
