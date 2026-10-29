@@ -1,6 +1,8 @@
 import ts from "typescript";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+// Usage: bun scripts/check-boundary.ts [project-root]; defaults to the current directory.
+const root = process.argv[2] ?? ".";
 import { builtinModules } from "node:module";
 const builtins = new Set(builtinModules.flatMap(name => [name, `node:${name}`]));
 const errors: string[] = [];
@@ -19,8 +21,8 @@ function inspect(dir: string) {
         else {
           const name = spec.text;
           const allowed = name.startsWith(".") || builtins.has(name) || name.startsWith("bun:") ||
-            (name === "@staix/agent-mem/platform" && file === "src/platform.ts") ||
-            (name === "@staix/agent-mem" && file === "src/amem/seam.ts");
+            (name === "@staix/agent-mem/platform" && relative(root, file) === "src/platform.ts") ||
+            (name === "@staix/agent-mem" && relative(root, file) === "src/amem/seam.ts");
           if (!allowed) errors.push(`${file}: forbidden dependency ${name}`);
         }
       }
@@ -29,8 +31,8 @@ function inspect(dir: string) {
     visit(source);
   }
 }
-inspect("src");
-const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+inspect(join(root, "src"));
+const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 if (JSON.stringify(pkg.dependencies) !== JSON.stringify({ "@staix/agent-mem": "0.11.0" })) errors.push("runtime dependency must be exactly @staix/agent-mem 0.11.0");
 if (errors.length) { console.error(errors.join("\n")); process.exit(1); }
 console.log("boundary: ok");

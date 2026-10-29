@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILE, MAX_CONFIG_BYTES, parseConfig, readConfig } from "../src/config.ts";
 import { resolveHome } from "../src/home.ts";
-import { addVault, loadRegistry, removeVault } from "../src/registry.ts";
+import { addVault, loadRegistry, recoverRegistry, removeVault, syncDirectory } from "../src/registry.ts";
 import { run } from "../src/cli.ts";
 const roots: string[] = [];
 function root() { const dir = mkdtempSync(join(tmpdir(), "vmem-test-")); roots.push(dir); return dir; }
@@ -105,7 +105,7 @@ describe("registry", () => {
   test("failed mutation leaves config intact and releases owned lock", () => {
     const { home, spec } = fixture(); addVault(home, spec);
     const before = readFileSync(join(home, CONFIG_FILE), "utf8");
-    expect(() => removeVault(home, "unknown", true)).toThrow("unknown id");
+    expect(() => removeVault(home, "unknown", true)).toThrow("unknown vault id");
     expect(readFileSync(join(home, CONFIG_FILE), "utf8")).toBe(before);
     expect(existsSync(join(home, "config.lock"))).toBe(false);
   });
@@ -133,5 +133,122 @@ describe("CLI", () => {
     const node = Bun.spawnSync(["node", "bin/vmem.js", "--version"], { env, stdout: "pipe", stderr: "pipe" });
     expect(node.exitCode).toBe(1);
     expect(node.stderr.toString()).toContain("Bun >=1.4.2");
+  });
+});
+describe("follow-ups", () => {
+  const lockOf = (home: string) => join(home, "config.lock");
+  test("recover removes a dead same-host lock and leftover temp files only on confirm", () => {
+    const { home, spec } = fixture(); addVault(home, spec);
+    const before = readFileSync(join(home, CONFIG_FILE), "utf8");
+    const dead = Bun.spawnSync([process.execPath, "-e", "console.log(process.pid)"], { stdout: "pipe" });
+    const pid = Number(dead.stdout.toString().trim());
+    writeFileSync(lockOf(home), JSON.stringify({ pid, host: hostname(), created: "2026-01-01T00:00:00.000Z" }));
+    const temp = ".config-00000000-0000-4000-8000-000000000000.tmp";
+    writeFileSync(join(home, temp), "partial");
+    writeFileSync(join(home, "unrelated.tmp"), "keep");
+    const preview = recoverRegistry(home);
+    expect(preview).toMatchObject({ applied: false, lock: { state: "stale", removed: false }, temporaryFiles: [temp] });
+    expect(existsSync(lockOf(home))).toBe(true);
+    expect(() => addVault(home, { ...spec, id: "x" })).toThrow("vmem recover");
+    const done = recoverRegistry(home, true);
+    expect(done).toMatchObject({ applied: true, lock: { removed: true }, removedTemporaryFiles: [temp] });
+    expect(existsSync(lockOf(home)) || existsSync(join(home, temp))).toBe(false);
+    expect(readFileSync(join(home, "unrelated.tmp"), "utf8")).toBe("keep");
+    expect(readFileSync(join(home, CONFIG_FILE), "utf8")).toBe(before);
+  });
+  test("recover never removes a live, foreign-host or unreadable lock", () => {
+    for (const content of [JSON.stringify({ pid: process.pid, host: hostname(), created: "x" }), JSON.stringify({ pid: 1, host: "other-host.invalid", created: "x" }), "legacy"]) {
+      const { home } = fixture(); mkdirSync(home);
+      const temp = join(home, ".config-00000000-0000-4000-8000-000000000001.tmp");
+      writeFileSync(lockOf(home), content); writeFileSync(temp, "partial");
+      const report = recoverRegistry(home, true);
+      expect(report.applied).toBe(false);
+      expect(report.blocked).toBeTruthy();
+      expect(readFileSync(lockOf(home), "utf8")).toBe(content);
+      expect(existsSync(temp)).toBe(true);
+      expect(run(["recover", "--confirm"], { VMEM_HOME: home }).code).toBe(1);
+    }
+  });
+  test("recover on a missing home reports nothing and creates nothing", () => {
+    const home = join(root(), "absent");
+    expect(run(["recover", "--json"], { VMEM_HOME: home }).code).toBe(0);
+    expect(existsSync(home)).toBe(false);
+  });
+  test("written lock records owner; directory fsync works on this platform", () => {
+    const { dir } = fixture();
+    expect(syncDirectory(dir)).toBe(process.platform !== "win32");
+    expect(syncDirectory(dir, "win32")).toBe(false);
+  });
+  test("serialized config overflow refuses without changing config", () => {
+    const { home, vault, spec } = fixture(); mkdirSync(home);
+    // Compact on-disk JSON just under 64 KiB; the pretty-printed rewrite exceeds the limit.
+    const vaults: unknown[] = [];
+    let compact = "";
+    for (let i = 0; JSON.stringify({ vaults }).length < MAX_CONFIG_BYTES - 400; i++) {
+      vaults.push({ id: `v${i}`, path: `/offline/${"x".repeat(80)}/${i}`, kind: "personal", write: "none" });
+      compact = JSON.stringify({ vaults });
+    }
+    writeFileSync(join(home, CONFIG_FILE), compact);
+    expect(loadRegistry(home).vaults.length).toBe(vaults.length);
+    const before = readFileSync(join(home, CONFIG_FILE), "utf8");
+    expect(() => addVault(home, spec)).toThrow("exceeds 64 KiB");
+    expect(readFileSync(join(home, CONFIG_FILE), "utf8")).toBe(before);
+    expect(existsSync(lockOf(home))).toBe(false);
+  });
+  test("vaults list and optional flags round-trip with effective pii", () => {
+    const { home, vault } = fixture();
+    const registry = join(root(), "reg");
+    const added = JSON.parse(run(["vaults", "add", "org", vault, "--kind", "org", "--write", "none", "--pii", "allow", "--remote", "git@example.com:o/v.git", "--registry", registry, "--json"], { VMEM_HOME: home }).text);
+    expect(added.vault).toMatchObject({ pii: "allow", remote: "git@example.com:o/v.git", registry });
+    expect(JSON.parse(run(["vaults", "list", "--json"], { VMEM_HOME: home }).text)).toEqual([{ id: "org", path: realpathSync(vault), kind: "org", write: "none", pii: "allow", remote: "git@example.com:o/v.git", registry }]);
+    const other = fixture();
+    run(["vaults", "add", "team", other.vault, "--kind", "org", "--write", "cli"], { VMEM_HOME: home });
+    expect(JSON.parse(run(["vaults", "list"], { VMEM_HOME: home }).text)[1].pii).toBe("deny");
+    expect(() => run(["vaults", "add", "bad", other.vault, "--kind", "org", "--write", "cli", "--registry", "relative"], { VMEM_HOME: home })).toThrow("absolute");
+    expect(() => run(["vaults", "list", "extra"], { VMEM_HOME: home })).toThrow();
+    rmSync(other.vault, { recursive: true });
+    const status = JSON.parse(run(["status", "--json"], { VMEM_HOME: home }).text);
+    expect(status.vaults[1]).toMatchObject({ healthy: false, pii: "deny" });
+  });
+  test("doctor detects notes directory replaced by a symlink", () => {
+    const { home, vault, spec, dir } = fixture(); addVault(home, spec);
+    const moved = join(dir, "moved-notes");
+    renameSync(join(vault, "notes"), moved); symlinkSync(moved, join(vault, "notes"));
+    expect(run(["doctor"], { VMEM_HOME: home }).code).toBe(1);
+    expect(readFileSync(join(moved, "keep.md"), "utf8")).toBe("# Keep\n");
+  });
+  test("errors carry config context without echoing content", () => {
+    const home = root(), file = join(home, CONFIG_FILE);
+    writeFileSync(file, "{\"vaults\": [SECRET-NOTE-TEXT");
+    expect(() => readConfig(home)).toThrow(`${file}: invalid JSON`);
+    try { readConfig(home); } catch (error) { expect((error as Error).message).not.toContain("SECRET"); }
+    writeFileSync(file, JSON.stringify({ vaults: [], secretKey: 1 }));
+    expect(() => readConfig(home)).toThrow(`${file}: config: unknown key`);
+    expect(() => removeVault(join(root(), "h"), "nope")).toThrow("unknown vault id nope");
+  });
+  test("home paths are normalized", () => {
+    const hub = root();
+    expect(resolveHome({ VMEM_HOME: `${hub}/a/../b/` }).home).toBe(join(hub, "b"));
+    expect(resolveHome({ AGENTHUB_HOME: `${hub}/./x/..` }).home).toBe(join(hub, "vmem"));
+  });
+  test("boundary check rejects forbidden imports in negative fixtures", () => {
+    const pin = JSON.stringify({ dependencies: { "@staix/agent-mem": "0.11.0" } });
+    const cases: [string, Record<string, string>, string, string?][] = [
+      ["third-party", { "src/a.ts": "import x from \"left-pad\";" }, "forbidden dependency left-pad"],
+      ["platform outside seam", { "src/a.ts": "import \"@staix/agent-mem/platform\";" }, "forbidden dependency @staix/agent-mem/platform"],
+      ["root outside seam", { "src/platform.ts": "export * from \"@staix/agent-mem\";" }, "forbidden dependency @staix/agent-mem"],
+      ["dynamic nonliteral", { "src/a.ts": "const m = \"x\"; await import(m);" }, "nonliteral import"],
+      ["require", { "src/a.ts": "require(\"fs-extra\");" }, "forbidden dependency fs-extra"],
+      ["dependency drift", { "src/a.ts": "" }, "exactly @staix/agent-mem 0.11.0", JSON.stringify({ dependencies: { "@staix/agent-mem": "^0.11.0" } })],
+      ["allowed", { "src/platform.ts": "export * from \"@staix/agent-mem/platform\";", "src/amem/seam.ts": "export * from \"@staix/agent-mem\"; import \"node:fs\"; import \"./x.ts\";" }, "boundary: ok"],
+    ];
+    for (const [, files, expected, pkg] of cases) {
+      const dir = root();
+      writeFileSync(join(dir, "package.json"), pkg ?? pin);
+      for (const [name, text] of Object.entries(files)) { mkdirSync(join(dir, name, ".."), { recursive: true }); writeFileSync(join(dir, name), text); }
+      const result = Bun.spawnSync([process.execPath, "scripts/check-boundary.ts", dir], { stdout: "pipe", stderr: "pipe" });
+      expect(result.exitCode).toBe(expected === "boundary: ok" ? 0 : 1);
+      expect(result.stdout.toString() + result.stderr.toString()).toContain(expected);
+    }
   });
 });

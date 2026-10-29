@@ -89,6 +89,11 @@ export function readConfig(home: string): VmemConfig {
       size += n;
     }
     if (size > MAX_CONFIG_BYTES) throw new Error(`${file}: config too large`);
-    return parseConfig(JSON.parse(buffer.subarray(0, size).toString("utf8")));
+    let parsed: unknown;
+    // Do not echo parser messages: they can quote config content.
+    try { parsed = JSON.parse(buffer.subarray(0, size).toString("utf8")); }
+    catch { throw new Error(`${file}: invalid JSON`); }
+    try { return parseConfig(parsed); }
+    catch (error) { throw new Error(`${file}: ${error instanceof Error ? error.message : "invalid config"}`, { cause: error }); }
   } finally { closeSync(fd); }
 }

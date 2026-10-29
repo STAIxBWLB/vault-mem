@@ -11,5 +11,5 @@
   "exports": { ".": "./src/index.ts" },
   "bin": { "vmem": "bin/vmem.js" },
   "files": ["src/", "bin/", "README.md", "LICENSE"],
-  "scripts": { "check": "bun x tsc --noEmit && bun scripts/check-boundary.ts && bun test && npm pack --dry-run" }
+  "scripts": { "check": "bun x tsc --noEmit && bun scripts/check-boundary.ts && bun test && bun pm pack --dry-run" }
 }
