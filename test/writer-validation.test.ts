@@ -176,5 +176,15 @@ test("ISO timestamps are metadata, while nearby telephone numbers still trigger 
   for (const text of ["2026-10-29 09:32", "2026-10-29T09:32:18Z", "2026-10-29T09:32:18.123+09:00"]) {
     expect(screenContent(text, privateVault, config)).toEqual([]);
     expect(screenContent(`${text} call +82 10-1234-5678`, privateVault, config).some(issue => issue.code === "V07")).toBe(true);
+    expect(screenContent(`010-1234-5678 ${text} 010-9876-5432`, privateVault, config).some(issue => issue.code === "V07")).toBe(true);
+    expect(screenContent(`010-1234-5678 ${text}`, privateVault, config).some(issue => issue.code === "V07")).toBe(true);
   }
+});
+
+test("space-separated telephone numbers are screened one by one", () => {
+  const privateVault = { ...vault, kind: "org" as const };
+  for (const text of ["010-1234-5678 010-9876-5432", "+82 10 1234 5678 +82 10 9876 5432", "02 123 4567 02 765 4321"]) {
+    expect(screenContent(text, privateVault, config).some(issue => issue.code === "V07")).toBe(true);
+  }
+  expect(screenContent("2026-10-29 09:32 2026-10-30 10:00", privateVault, config)).toEqual([]);
 });
