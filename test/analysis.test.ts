@@ -125,7 +125,8 @@ test("log failure is reported separately from persisted graph reports",()=>{
 });
 
 test("published synthetic consumer fixture stays in sync with the builder",()=>{
-  expect(buildGraph(analysisCorpus())).toEqual(graphFixture);
+  const built: unknown = JSON.parse(JSON.stringify(buildGraph(analysisCorpus())));
+  expect(built).toEqual(graphFixture);
 });
 test("report snapshot binding refuses registry rebind and preserves concurrent trend history",()=>{
   for(const mode of ["rebind","trend"]) {
