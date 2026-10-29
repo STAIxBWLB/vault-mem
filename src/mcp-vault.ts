@@ -23,7 +23,7 @@ const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLeng
 
 /** Tool names for the implemented Part 1.4 read, write and log tools. Graph and promotion tools land with their providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete"] as const;
+  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem"] as const;
 
 /** Tool definitions for a fixed vault set: `vault` is an enum of the registered ids. */
 export function vaultTools(ids: readonly string[]): McpTool[] {
@@ -48,6 +48,8 @@ export function vaultTools(ids: readonly string[]): McpTool[] {
     tool("vmem_log_append", "Append one validated event line to the vault log.", object({ vault, type: { type: "string", enum: LOG_TYPES }, project: string(64), source: string(512), dest: string(512), note: string(500) }, ["type", "project", "source", "note"]), "write"),
     tool("vmem_move", "Two-step rename with link rewrites: without confirm returns preview and fingerprint; then confirm=true with that fingerprint.", object({ vault, from: note, to: note, ...twoStep }, ["from", "to"]), "confirm"),
     tool("vmem_delete", "Two-step delete: without confirm returns preview (or refusal), backlinks and fingerprint; then confirm=true with that fingerprint.", object({ vault, path: note, ...twoStep }, ["path"]), "confirm"),
+    tool("vmem_promote_from_amem", "Two-step promotion of one durable agent-mem entry (id from amem_vault_candidates) into a vault note: without confirm returns the full note text, possible duplicates and fingerprint; confirm=true with that fingerprint creates the note, logs LEARN and records the agent-mem vault link. linkTo links an existing note instead.",
+      object({ vault, id: { type: "string", minLength: 32, maxLength: 36 }, stem: string(120), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), linkTo: note, project: string(400), ...twoStep }, ["id"]), "confirm"),
   ];
 }
 type Issue = { code: string; severity: "error"; message: string };
@@ -83,6 +85,14 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     return { path, sha256: hash, truncated, frontmatter: parsed.data, body: parsed.body };
   };
   const handlers: Record<string, McpHandler> = {
+    vmem_promote_from_amem: async args => {
+      const { promoteFromAmem } = await import("./promote.ts");
+      const id = str(args.id)!.replace(/^mem:/, "");
+      const result = await promoteFromAmem(home, { vault: pick(args).id, id, channel: "mcp", confirm: args.confirm === true,
+        ...Object.fromEntries(["stem", "type", "domain", "description", "title", "body", "linkTo", "fingerprint"].filter(key => str(args[key]) !== undefined).map(key => [key, str(args[key])])),
+        ...(Array.isArray(args.topics) ? { topics: args.topics as string[] } : {}) }, { env, ...(str(args.project) ? { project: str(args.project) } : {}) });
+      return result.ok ? result : { ...result, refused: true };
+    },
     vmem_status: () => ({ defaultVault: defaultVault ?? null, vaults: registryStatus(home).filter(v => ids.includes(v.id)) }),
     vmem_search: args => read(args, index => ({ hits: index.search(str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }) })),
     vmem_read: args => read(args, index => { const r = index.show(str(args.path)!, (args.maxBytes as number | undefined) ?? 16384); return document(r.path, r.content, r.hash, r.truncated); }),

@@ -2,7 +2,7 @@
 
 An Obsidian-compatible knowledge vault tool for agents and people. Requires Bun >=1.4.2. The full check (`bun run check`) needs only Bun: package validation uses `bun pm pack --dry-run`, so Node and npm are not required. CI runs on Ubuntu and macOS for pull requests and for pushes to `main`.
 
-Implemented: configuration, vault registration, lossless frontmatter parsing/emission, wiki-link resolution and derived SQLite FTS5 indexing with bounded read commands. Validated note writes, the append-only log, the `vmem mcp` stdio server and reversible `vmem setup` host registration are also implemented below. Lint/graph, promotion, sync and the `acon` console remain planned under issues [#1](https://github.com/STAIxBWLB/vault-mem/issues/1) and [#2](https://github.com/STAIxBWLB/vault-mem/issues/2). Do not use this increment to replace an existing vault writer.
+Implemented: configuration, vault registration, lossless frontmatter parsing/emission, wiki-link resolution and derived SQLite FTS5 indexing with bounded read commands. Validated note writes, the append-only log, the `vmem mcp` stdio server, reversible `vmem setup` host registration and promotion from agent-mem (`promote-from-amem`) are also implemented below. Lint/graph, promotion to org vaults (`vmem promote`), sync and the `acon` console remain planned under issues [#1](https://github.com/STAIxBWLB/vault-mem/issues/1) and [#2](https://github.com/STAIxBWLB/vault-mem/issues/2). Do not use this increment to replace an existing vault writer.
 
 ```sh
 bun install
@@ -128,8 +128,9 @@ The vault set is read once at startup: every tool's `vault` property is an enum 
 | `vmem_log_append` | `type`, `project`, `source`, `dest`, `note`<=500 |
 | `vmem_move` | `from`, `to`, `confirm`, `fingerprint` (two-step) |
 | `vmem_delete` | `path`, `confirm`, `fingerprint` (two-step; the preview lists backlinks) |
+| `vmem_promote_from_amem` | `id`, `project`, `stem`, `type`, `domain`, `topics[]`, `description`, `title`, `body`<=65536, `linkTo`, `confirm`, `fingerprint` (two-step) |
 
-Move and delete without `confirm` write nothing and return the preview and `fingerprint`; `confirm: true` requires the fingerprint recomputed on the current state, otherwise the call is refused with `V09`. Graph (`vmem_graph`) and promotion (`vmem_promote`, `vmem_promote_from_amem`) tools are not advertised until their providers land (#8-#10). Note paths in read results are relative to `notes/`.
+Move and delete without `confirm` write nothing and return the preview and `fingerprint`; `confirm: true` requires the fingerprint recomputed on the current state, otherwise the call is refused with `V09`. `vmem_promote_from_amem` is described under Promotion from agent-mem. Graph (`vmem_graph`) and org promotion (`vmem_promote`) tools are not advertised until their providers land (#8, #10). Note paths in read results are relative to `notes/`.
 
 # Host setup
 
@@ -145,3 +146,21 @@ Setup registers one server entry named `vmem` (`<bun> --smol <package>/bin/vmem.
 Apply is idempotent and touches only the `vmem` entry: other servers and settings are preserved (TOML is edited textually, so comments and other tables stay byte-identical; JSON is re-serialized with its indentation). Configuration files must be plain strict JSON or TOML; links, JSONC and unparsable files are refused per host without writing, and the command exits 1. Apply records the prior `vmem` value in a receipt, `$VMEM_HOME/setup/<host>-<hash of the config path>.json`, so separate host profiles (for example two `CODEX_HOME`s) sharing one `VMEM_HOME` keep separate receipts. The receipt is written before the host file; if the host write fails, the receipt is rolled back. In TOML, every `[mcp_servers.vmem]` and `[mcp_servers.vmem.*]` table belongs to the entry, even when other tables sit between them. Undo restores that prior value (or removes the entry, and the file if setup created it and nothing else was added) only while the entry is still the one setup installed; an entry edited later is left alone and reported as `refused`. No console plugin manifest is written because vmem ships no console plugin yet.
 
 `vmem completion bash|zsh|fish` prints a completion script generated from the same command table as `--help`.
+
+# Promotion from agent-mem
+
+`vmem promote-from-amem` turns one durable agent-mem entry into a vault note and records agent-mem's own vault link back to it. Agent memory is never indexed or copied into a second store, and no agent-mem tool is added: candidates come from agent-mem's `vaultCandidates` selection and the link from its `recordVaultLink`.
+
+```sh
+vmem promote-from-amem personal                                  # candidates of the current project (--project KEY | --all-projects, --limit 1..200)
+vmem promote-from-amem personal mem:<id> --type decision --domain research --topics storage   # preview: full note text + fingerprint
+vmem promote-from-amem personal mem:<id> ... --confirm --fingerprint <sha>
+vmem promote-from-amem personal mem:<id> --link-to existing-note  # link an existing note instead of creating one
+```
+
+- `src/amem/seam.ts` is the only module that imports the `@staix/agent-mem` root (exact pin 0.11.0), and it is loaded lazily: `vmem mcp`, reads, writes and every other command never load it. The project defaults to agent-mem's key for the current directory (`--project` overrides); `AMEM_HOME` selects the memory home as in agent-mem.
+- Listing and linking require agent-mem's generation profile; a shared-v1 memory home is refused. Candidate listing applies agent-mem's durable selection and policy (secrets, default PII and the vault config's `piiPatterns`) before ordering and `--limit`; previews screen the requested entry with the same policy.
+- The preview prefills the H1 and stem from the entry title, the body from its text, `about[]` as Relevant Notes hints, and provenance `promoted_from: mem:<id>` plus `promoted_at`. `--stem --type --domain --topics --description --title` and `--body file|-` override it; none of this needs a TTY. When a note with the same stem or title exists, the preview is refused with V08 and lists `link-existing <path>` choices; `--link-to` takes one. `--edit` opens `$VISUAL`/`$EDITOR` on the draft only when stdin is a terminal (the only TTY check); the edited text is previewed and confirmed with `--body`.
+- Confirm requires the preview fingerprint, then creates the note through `applyWrite` (V01-V10), appends one `LEARN  <project>  mem:<id> → notes/<stem>.md  <em-dash> promoted: <kind>` event (`--log-project` sets the project field; it defaults to the last segment of the agent-mem project key) and records the vault link last.
+- If the final link fails, the note stays, the result reports `LINK` and `link-only notes/<stem>.md`, and the entry stays a candidate. A rerun finds the note through `promoted_from` and offers link-only, never a second note or a second LEARN event.
+- `vmem_promote_from_amem` is the same two steps over MCP and needs a vault with `write: mcp`.
