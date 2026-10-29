@@ -156,6 +156,15 @@ test("credential-free https remote fails without prompting or success", () => {
   expect(sameRemote("https://github.com/org/vault.git", "https://github.com/org/other.git")).toBe(false);
 }, 30_000);
 
+test("a link that matches an org note only by alias is dropped, as Obsidian would not resolve it", () => {
+  const f = fixture();
+  writeFileSync(join(f.org, "notes", "org-only.md"), note("Org Only", "Org text.", "aliases: [Org Alias]\n"));
+  git(f.org, "add", "."); git(f.org, "commit", "--quiet", "-m", "alias"); git(f.org, "push", "--quiet", "origin", "main");
+  writeFileSync(join(f.personal, "notes", "shared-method.md"), note("Shared Method", "Uses [[org-only]] and [[Org Alias]] and [[research]]."));
+  const preview = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
+  expect(preview).toMatchObject({ ok: true, droppedLinks: ["Org Alias"] });
+  expect(preview.text).toContain("Uses [[org-only]] and Org Alias and [[research]].");
+});
 test("dropped links to person, meeting or correspondence notes refuse without leaking their names", () => {
   const f = fixture();
   writeFileSync(join(f.personal, "notes", "jane-doe-contact.md"), note("Jane Doe Contact", "Bio.").replace("type: insight", "type: person"));

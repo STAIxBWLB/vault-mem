@@ -128,13 +128,13 @@ export function dropUnresolvedLinks(body: string, resolves: (target: string) => 
   return { body: out.join("\n"), dropped: [...new Set(dropped)].sort() };
 }
 
-/** Target-vault facts read once from its index: link resolution (stems and aliases), MOCs and existing paths. */
+/** Target-vault facts read once from its index: link resolution (path stems only, as Obsidian resolves), MOCs and existing paths. */
 function targetFacts(home: string, spec: VaultSpec, all: VaultSpec[], links: string[], targetPath: string): { resolved: Set<string>; mocs: Set<string>; exists: boolean } {
   const index = new VaultIndex(home, spec, all.map(v => v.path));
   try {
     index.scan();
     const resolved = new Set<string>();
-    for (const link of new Set(links)) { try { index.show(link, 1); resolved.add(linkKey(link)); } catch { /* unresolved or ambiguous */ } }
+    for (const link of new Set(links)) { try { if (linkKey(index.show(link, 1).path) === linkKey(link)) resolved.add(linkKey(link)); } catch { /* unresolved or ambiguous */ } }
     let exists = false;
     try { exists = `notes/${index.show(targetPath, 1).path}` === targetPath; } catch { /* absent */ }
     return { resolved, mocs: new Set(index.mocs(500).map(moc => linkKey(moc.path))), exists };
