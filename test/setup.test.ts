@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSetup, SETUP_TARGETS } from "../src/setup.ts";
@@ -99,7 +99,7 @@ test("all covers user hosts, malformed and linked configs are refused without wr
   expect(report.actions.filter(a => a.change === "add")).toHaveLength(5);
   expect(existsSync(f.files.agy!)).toBe(false);
   expect(report.notes.join(" ")).toContain("No console plugin manifest");
-  expect(readdirSync(join(f.state, "setup")).sort()).toEqual(["claude.json", "codex.json", "jcode.json", "pi.json", "qwen.json"]);
+  expect(readdirSync(join(f.state, "setup")).map(name => name.replace(/-[0-9a-f]{16}\.json$/, "")).sort()).toEqual(["claude", "codex", "jcode", "pi", "qwen"]);
   expect(() => f.setup("cursor", "apply")).toThrow("unknown target");
 });
 
@@ -128,4 +128,50 @@ test("help and completion share one command table", () => {
   const bash = Bun.spawnSync(["bash", "-n"], { stdin: Buffer.from(completionScript("bash")), stdout: "pipe", stderr: "pipe" });
   expect(bash.exitCode).toBe(0);
   expect(() => completionScript("pwsh")).toThrow();
+});
+
+test("host profiles sharing VMEM_HOME keep separate receipts", () => {
+  const f = fixture(), a = join(f.root, "codex-a"), b = join(f.root, "codex-b");
+  const prior = `[mcp_servers.vmem]\ncommand = "/a/old"\nargs = []\n`;
+  mkdirSync(a); mkdirSync(b); writeFileSync(join(a, "config.toml"), prior);
+  const as = (dir: string, mode: "apply" | "undo") => runSetup("codex", mode, { home: f.state, env: { ...f.env, CODEX_HOME: dir }, cwd: f.work, entry });
+  as(a, "apply"); as(b, "apply");
+  expect(as(b, "undo").actions[0]!.change).toBe("remove");
+  expect(existsSync(join(b, "config.toml"))).toBe(false);
+  expect(as(a, "undo").actions[0]!.change).toBe("restore");
+  expect(readFileSync(join(a, "config.toml"), "utf8")).toBe(prior);
+});
+
+// Permission faults cannot be injected as root, where chmod does not restrict writes.
+test.skipIf(process.getuid?.() === 0)("receipt is written before the host file; a failed host write leaves both recoverable", () => {
+  const f = fixture(), dir = join(f.home, ".jcode"); mkdirSync(dir);
+  writeFileSync(f.files.jcode!, `{"servers":{"other":{"command":"x"}}}`);
+  chmodSync(dir, 0o500);
+  try {
+    const report = f.setup("jcode", "apply");
+    expect(report.actions[0]!.change).toBe("refused");
+    expect(JSON.parse(readFileSync(f.files.jcode!, "utf8")).servers.vmem).toBeUndefined();
+    expect(existsSync(join(f.state, "setup")) ? readdirSync(join(f.state, "setup")).filter(n => n.endsWith(".json")) : []).toEqual([]);
+  } finally { chmodSync(dir, 0o700); }
+  // A receipt that cannot be written blocks apply before the host file is touched.
+  const g = fixture(); mkdirSync(join(g.files.jcode!, "..")); writeFileSync(g.files.jcode!, `{"servers":{}}`);
+  const receipts = join(g.state, "setup"); mkdirSync(receipts, { recursive: true }); chmodSync(receipts, 0o500);
+  try {
+    expect(g.setup("jcode", "apply").actions[0]!.change).toBe("refused");
+    expect(readFileSync(g.files.jcode!, "utf8")).toBe(`{"servers":{}}`);
+  } finally { chmodSync(receipts, 0o700); }
+  expect(g.setup("jcode", "apply").actions[0]!.change).toBe("add");
+});
+
+test("TOML subtables of the entry are collected even when separated by another table", () => {
+  const f = fixture(), file = f.files.codex!;
+  const source = `[mcp_servers.vmem]\ncommand = "/old"\nargs = []\n\n[other]\nkeep = 1\n\n[mcp_servers.vmem.env]\nTOKEN_PATH = "/x"\n`;
+  mkdirSync(join(file, ".."), { recursive: true }); writeFileSync(file, source);
+  expect(f.setup("codex", "apply").actions[0]!.change).toBe("replace");
+  const doc = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
+  expect(doc.mcp_servers.vmem).toEqual(entry);
+  expect(doc.other).toEqual({ keep: 1 });
+  expect(f.setup("codex", "undo").actions[0]!.change).toBe("restore");
+  const restored = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
+  expect(restored).toEqual(Bun.TOML.parse(source));
 });

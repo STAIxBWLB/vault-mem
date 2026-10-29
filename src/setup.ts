@@ -1,7 +1,7 @@
 import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 
@@ -60,16 +60,25 @@ const record = (value: unknown, label: string): Record<string, unknown> => {
 
 // TOML: edit only the `[mcp_servers.vmem]` table (and its subtables) textually so unrelated bytes stay identical.
 const tomlHeader = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/;
-function tomlSpan(lines: string[]): [number, number] | undefined {
-  const own = (name: string) => name === `mcp_servers.${SERVER_NAME}` || name.startsWith(`mcp_servers.${SERVER_NAME}.`) || name === `mcp_servers."${SERVER_NAME}"`;
+/** Every table owned by the entry (`[mcp_servers.vmem]` and any `[mcp_servers.vmem.*]`), wherever it appears. */
+function tomlSpans(lines: string[]): [number, number][] {
+  const own = (name: string) => {
+    const key = name.replace(/\s*\.\s*/g, ".").replace(/"vmem"/g, SERVER_NAME);
+    return key === `mcp_servers.${SERVER_NAME}` || key.startsWith(`mcp_servers.${SERVER_NAME}.`);
+  };
+  const spans: [number, number][] = [];
   let start = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const header = tomlHeader.exec(lines[i]!);
-    if (!header) continue;
-    if (start < 0 && own(header[1]!)) start = i;
-    else if (start >= 0 && !own(header[1]!)) return [start, i];
+  for (let i = 0; i <= lines.length; i++) {
+    const header = i < lines.length ? tomlHeader.exec(lines[i]!) : null;
+    if (i < lines.length && !header) continue;
+    if (start >= 0) {
+      let stop = i;
+      while (stop > start && lines[stop - 1]!.trim() === "") stop--;
+      spans.push([start, stop]); start = -1;
+    }
+    if (header && own(header[1]!)) start = i;
   }
-  return start >= 0 ? [start, lines.length] : undefined;
+  return spans;
 }
 function tomlString(value: string): string { return JSON.stringify(value); }
 function readEntry(host: HostFile, text: string | null): unknown {
@@ -84,28 +93,25 @@ function readEntry(host: HostFile, text: string | null): unknown {
   return servers === undefined ? undefined : record(servers, `${host.file} ${host.key}`)[SERVER_NAME];
 }
 function tomlBlock(text: string | null): string[] | undefined {
-  const lines = text ? text.split(/\r?\n/) : [], span = tomlSpan(lines);
-  if (!span) return undefined;
-  let stop = span[1];
-  while (stop > span[0] && lines[stop - 1]!.trim() === "") stop--;
-  return lines.slice(span[0], stop);
+  const lines = text ? text.split(/\r?\n/) : [], spans = tomlSpans(lines);
+  return spans.length ? spans.flatMap(([start, stop]) => lines.slice(start, stop)) : undefined;
 }
 /** Replace the vmem entry. TOML takes either an entry value or the exact prior block lines to restore. */
 function putEntry(host: HostFile, text: string | null, value: unknown, rawToml?: string[], keepKey = false): string | null {
   if (host.format === "toml") {
     const source = text ?? "", newline = source.includes("\r\n") ? "\r\n" : "\n";
     const lines = source.length ? source.split(/\r?\n/) : [];
-    const span = tomlSpan(lines);
+    const spans = tomlSpans(lines);
     let block: string[] = rawToml ?? [];
     if (!rawToml && value !== undefined) {
       const entry = record(value, "entry");
       block = [`[mcp_servers.${SERVER_NAME}]`, ...Object.entries(entry).map(([key, v]) => `${key} = ${Array.isArray(v) ? `[${v.map(item => tomlString(String(item))).join(", ")}]` : typeof v === "string" ? tomlString(v) : JSON.stringify(v)}`)];
     }
-    if (span) {
-      const [start, end] = span;
-      let stop = end;
-      while (stop > start && lines[stop - 1]!.trim() === "") stop--;
-      lines.splice(start, stop - start, ...block);
+    if (spans.length) {
+      // Remove every owned table (last first so indexes stay valid), then insert at the first one.
+      for (const [start, stop] of [...spans].reverse()) lines.splice(start, stop - start);
+      lines.splice(spans[0]![0], 0, ...block);
+      for (let i = lines.length - 1; i > 0; i--) if (lines[i]!.trim() === "" && lines[i - 1]!.trim() === "") lines.splice(i, 1);
     } else if (block.length) {
       while (lines.length && lines[lines.length - 1] === "") lines.pop();
       if (lines.length) lines.push("");
@@ -128,8 +134,9 @@ function hasKey(host: HostFile, text: string | null): boolean {
   const doc = host.format === "toml" ? Bun.TOML.parse(text) as Record<string, unknown> : JSON.parse(text) as Record<string, unknown>;
   return Object.hasOwn(doc, host.key);
 }
+/** One receipt per host configuration file, so host profiles sharing VMEM_HOME never share a receipt. */
 function receiptFile(home: string, target: SetupTarget, file: string): string {
-  return join(home, "setup", target === "agy" ? `agy-${Bun.hash(file).toString(16)}.json` : `${target}.json`);
+  return join(home, "setup", `${target}-${createHash("sha256").update(resolve(file)).digest("hex").slice(0, 16)}.json`);
 }
 function readReceipt(file: string): Receipt | undefined {
   const text = readText(file);
@@ -163,6 +170,7 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
     report.actions.push(action);
     try {
       const text = readText(host.file), current = readEntry(host, text), receipt = readReceipt(receiptPath);
+      if (receipt && resolve(receipt.file) !== resolve(host.file)) throw new Error(`${receiptPath}: receipt belongs to ${receipt.file}, not ${host.file}`);
       if (mode === "undo") {
         if (!receipt) { action.change = "none"; action.reason = "no setup receipt"; continue; }
         if (current !== undefined && !isDeepStrictEqual(current, receipt.installed)) { action.change = "refused"; action.reason = "vmem entry changed after setup; left as is"; continue; }
@@ -180,10 +188,18 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
       if (isDeepStrictEqual(current, entry)) { action.change = "unchanged"; continue; }
       action.change = current === undefined ? "add" : "replace";
       if (mode === "apply") {
-        atomicWrite(host.file, putEntry(host, text, entry));
+        const next = putEntry(host, text, entry);
         // Keep the original prior value across repeated applies.
         const prior: Receipt = receipt ?? { version: 1, target: name, file: host.file, existed: text !== null, keyExisted: hasKey(host, text), prior: current ?? null, ...(host.format === "toml" && current !== undefined ? { priorToml: tomlBlock(text) } : {}), installed: entry };
+        // The receipt is durable before the host file changes; a failed host write rolls the receipt back.
+        const previousReceipt = readText(receiptPath);
         atomicWrite(receiptPath, JSON.stringify({ ...prior, installed: entry }, null, 2) + "\n");
+        try { atomicWrite(host.file, next); }
+        catch (error) {
+          try { atomicWrite(receiptPath, previousReceipt); }
+          catch { throw new Error(`${error instanceof Error ? error.message : "host write failed"}; host unchanged, stale receipt kept at ${receiptPath}`); }
+          throw error;
+        }
       }
     } catch (error) {
       action.change = "refused"; action.reason = error instanceof Error ? error.message : "setup failed";
