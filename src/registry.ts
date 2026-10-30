@@ -2,7 +2,8 @@ import { closeSync, constants, fsyncSync, mkdirSync, openSync, readdirSync, read
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { CONFIG_FILE, MAX_CONFIG_BYTES, parseConfig, parseVault, readConfig, type VaultSpec, type VmemConfig } from "./config.ts";
+import { CONFIG_FILE, MAX_CONFIG_BYTES, parseConfig, parsePii, parseVault, readConfig, type VaultSpec, type VmemConfig } from "./config.ts";
+import { loosenedCells, piiPolicy, piiShorthand } from "./pii.ts";
 export const LOCK_FILE = "config.lock";
 const TEMP = /^\.config-[0-9a-f-]{36}\.tmp$/;
 export interface LockOwner { pid: number; host: string; created: string }
@@ -11,8 +12,8 @@ export function loadRegistry(home: string): VmemConfig {
   if (config.home) throw new Error(`${join(home, CONFIG_FILE)}: redirected home cannot contain another home pointer`);
   return config;
 }
-/** Effective pii policy: explicit value, else deny for org and allow for personal. */
-export function effectivePii(vault: VaultSpec): "allow" | "deny" { return vault.pii ?? (vault.kind === "org" ? "deny" : "allow"); }
+/** Effective pii shorthand (`custom` for a mixed policy); the full matrix is `piiPolicy`. */
+export function effectivePii(vault: VaultSpec): "allow" | "warn" | "deny" | "custom" { return piiShorthand(vault); }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 /**
  * Directory fsync makes the rename durable on Linux. On macOS fsync(2) on a directory
@@ -157,10 +158,25 @@ export function removeVault(home: string, id: string, confirm = false): { applie
   };
   return confirm ? mutate(home, remove) : remove(loadRegistry(home));
 }
+/** Show or change a vault's PII policy. Without `confirm` it previews; loosened cells are listed either way. */
+export function setVaultPii(home: string, id: string, value: unknown, confirm = false) {
+  const next = value === undefined ? undefined : parsePii(value);
+  const change = (config: VmemConfig) => {
+    const vault = config.vaults.find(v => v.id === id);
+    if (!vault) throw new Error(`${join(home, CONFIG_FILE)}: unknown vault id ${id}`);
+    const before = piiPolicy(vault);
+    if (next === undefined) return { vault: id, pii: piiShorthand(vault), piiPolicy: before };
+    const updated: VaultSpec = { ...vault, pii: next }, after = piiPolicy(updated);
+    const loosened = loosenedCells(before, after), changed = JSON.stringify(before) !== JSON.stringify(after);
+    if (confirm && changed) vault.pii = next;
+    return { vault: id, applied: confirm && changed, changed, loosened, pii: piiShorthand(updated), piiPolicy: after, ...(confirm ? {} : { preview: true }) };
+  };
+  return confirm && next !== undefined ? mutate(home, change) : change(loadRegistry(home));
+}
 export function registryStatus(home: string) {
   const config = loadRegistry(home);
   return config.vaults.map(vault => {
-    const base = { ...vault, pii: effectivePii(vault) };
+    const base = { ...vault, pii: effectivePii(vault), piiPolicy: piiPolicy(vault) };
     try {
       const root = realpathSync(vault.path), notes = join(root, "notes");
       if (root !== vault.path || realpathSync(notes) !== notes || !statSync(notes).isDirectory()) throw new Error("changed");

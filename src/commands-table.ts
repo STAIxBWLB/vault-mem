@@ -12,6 +12,7 @@ export const COMMANDS = [
   { name: "vaults list", usage: "vaults list [--json]", mutates: false },
   { name: "vaults add", usage: "vaults add <id> <absolute-path> --kind personal|org --write mcp|cli|none [--pii allow|deny] [--remote URL] [--registry PATH] [--json]", mutates: true },
   { name: "vaults remove", usage: "vaults remove <id> [--confirm] [--json]", mutates: "confirm" },
+  { name: "vaults pii", usage: "vaults pii <id> [--set allow|deny|JSON] [--confirm] [--json]", mutates: "confirm" },
   { name: "new", usage: "new <vault> <stem> --type TYPE --domain DOMAIN --topics a,b --description TEXT [--title TEXT] [--source TEXT|JSON] [--confidence TEXT] [--status TEXT] [--body file|-] [--extra JSON] [--dry-run] [--json]", mutates: true },
   { name: "patch", usage: "patch <vault> <note> --old TEXT --new TEXT [--expected-sha SHA] [--dry-run] [--json]", mutates: true },
   { name: "append", usage: "append <vault> <note> --section SECTION --markdown TEXT [--expected-sha SHA] [--dry-run] [--json]", mutates: true },

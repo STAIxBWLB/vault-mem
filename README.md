@@ -31,9 +31,50 @@ Durability: the temporary file is fsynced before the rename and the home directo
 
 Crash recovery: the lock file records the writer's pid, host and start time. Nothing is cleaned up automatically. `vmem recover` previews the state; `vmem recover --confirm` removes the lock only when it names this host and a pid that no longer runs, and then removes leftover `.config-<uuid>.tmp` files. A live lock, a lock from another host, or an unreadable (older-format) lock is never removed and the command exits 1; confirm no writer runs, then delete `config.lock` by hand. No other file in the home or any vault is touched. If cleanup fails after an operation (for example the lock cannot be removed), the original error is kept and the cleanup failure, including a retained lock, is appended to it.
 
-Vault fields: `id`, absolute `path` (must contain a real `notes/` directory), `kind` (`personal|org`), `write` (`mcp|cli|none`), optional `pii` (`allow|deny`; default `allow` for personal and `deny` for org, and `status`/`vaults list` always report the effective value, including for unhealthy entries), optional `remote` (any nonempty string such as an `https://` or `git@host:path` URL; stored only) and optional `registry` (absolute path; stored only). No sync exists yet, so `remote` and `registry` are not validated against a server and doctor does not check them; reachability checks apply once sync is implemented. Policy fields are stored for later note-writing stages, not enforced by the read commands. Writer commands enforce write/channel policy and configured deny/PII screening.
+Vault fields: `id`, absolute `path` (must contain a real `notes/` directory), `kind` (`personal|org`), `write` (`mcp|cli|none`), optional `pii` (the `allow|deny` shorthand or a policy object, see PII policy below; default `allow` for personal and `deny` for org, and `status`/`vaults list` always report the effective shorthand and `piiPolicy` matrix, including for unhealthy entries), optional `remote` (any nonempty string such as an `https://` or `git@host:path` URL; stored only) and optional `registry` (absolute path; stored only). No sync exists yet, so `remote` and `registry` are not validated against a server and doctor does not check them; reachability checks apply once sync is implemented. Policy fields are stored for later note-writing stages, not enforced by the read commands. Writer commands enforce write/channel policy and configured deny/PII screening.
 
 The only runtime dependency is the exact first-party pin `@staix/agent-mem@0.11.0`; it is not loaded by registry commands. Public library exports cover configuration, home resolution, registry operations, frontmatter, link resolution and the derived index. No console bin or UI contract is advertised before its implementation.
+
+# PII policy
+
+`pii` is either the shorthand `allow`/`deny` (every category on every surface) or an object that sets an action per category and, optionally, per surface:
+
+```json
+{"email": {"notes": "allow", "log": "deny"}, "phone": "warn", "custom": "deny",
+ "patterns": [{"name": "student-id", "regex": "S\\d{6}", "action": {"notes": "deny", "log": "allow"}}],
+ "allow": ["owner@example.org", "@example.org", "+82 10 0000 0000"]}
+```
+
+- Categories:
+  - `email`;
+  - `phone`;
+  - `custom`, the global `piiPatterns`;
+  - named per-vault `patterns` (at most 32; names `[a-z][a-z0-9-]{0,31}`, regexes compiled with the `u` flag).
+- Surfaces:
+  - `notes`: note and report writes, frontmatter screening, tidy value echo;
+  - `log`: log appends and `tidy --log` on existing lines;
+  - `promotion`: the screen `vmem promote` applies when this vault is the target.
+- Actions:
+  - `allow`: not screened.
+  - `warn`: the write proceeds with a V07 warning, and tidy echo prints the value as `[redacted]`.
+  - `deny`: V07 error, and `tidy --log` replaces matches in existing lines.
+  - Org promotion refuses only `deny` cells and secrets. The promoted note's write into the target vault is screened with the target's `promotion` cells, not its `notes` cells.
+  - `tidy --log` replaces the raw denied matches and leaves allow-listed values intact. Screening also checks the NFKC form. If a denied match is zero-length, or the replaced line still contains a denied match (for example a form only NFKC normalization reveals, or a pattern that matches the `[redacted]` marker), the whole line is redacted (fail closed).
+- An omitted category or surface takes the vault default: `allow` for personal vaults, `deny` for org vaults.
+- `allow` entries (at most 64) are exempt everywhere:
+  - an exact address, compared case-insensitively;
+  - an `@domain` suffix;
+  - a phone number standing alone, compared by its digits. Several numbers run together with spaces are never exempt (fail closed);
+  - an exact match of a pattern.
+- Secret detection is separate from this policy and always applies.
+
+```sh
+vmem vaults pii personal                                   # effective matrix and allow list
+vmem vaults pii personal --set '{"email":{"log":"deny"}}'  # preview: changed cells and every loosened cell
+vmem vaults pii personal --set '{"email":{"log":"deny"}}' --confirm
+```
+
+The policy is changed only through the CLI, under the config lock. MCP clients can read it in `vmem_status` but cannot set it.
 
 # Indexed reads
 
@@ -111,7 +152,7 @@ The vault set is read once at startup: every tool's `vault` property is an enum 
 
 | tool | arguments (caps) |
 |---|---|
-| `vmem_status` | none; vaults with health, write policy and effective pii |
+| `vmem_status` | none; vaults with health, write policy, effective pii and `piiPolicy` (read-only) |
 | `vmem_search` | `query`<=1000, `vault`, `limit`<=50, `type`, `domain` |
 | `vmem_read` | `path` (stem, alias or `notes/` path), `vault`, `maxBytes`<=65536; returns `{path, frontmatter, body, sha256, truncated}` |
 | `vmem_read_many` | `paths`<=20 (8 KiB each), `vault` |
@@ -192,7 +233,7 @@ vmem sync team --confirm --fingerprint <sha>
 `vmem promote` copies one note from a personal vault into the local clone of a writable org vault (`kind: org`, `write` not `none`):
 
 - **Transform.** The last prose `## Topics` section (never one inside a code fence) is replaced with the target topics, which must name MOCs that already exist in the org vault (source topics by default, `--topics` to override); a missing section is appended. Body wiki links that do not resolve in the org vault become plain text (their label, if any); wiki-valued frontmatter (`project`, `supersedes`, `superseded_by`, `source_ref`) pointing outside it is dropped. All of this is listed in `droppedLinks`. The org note gets `promoted_from: "<personal>:notes/x.md"` and `promoted_at`.
-- **Screen (fail closed).** It refuses: secrets; PII under the org vault's policy (org defaults to `deny`, plus configured `piiPatterns`); `type: person` or `domain: people` records; private correspondence (`source`/`source_ref` from `inbox/`, `outlook:`, `telegram(`, `kakao`); and internal meeting notes (`source` under `meetings/`). These are keyword heuristics; the org clone's `git diff` before `vmem sync` is the review surface. Body links that are dropped are also resolved in the personal vault: a link to a person/people, meeting or correspondence note refuses the promotion (reporting only the category and count), so their names never reach the org vault. A refusal or a preview writes nothing in either vault.
+- **Screen (fail closed).** It refuses: secrets; PII denied by the org vault's `promotion` cells (org defaults to `deny`, plus configured `piiPatterns`; a `warn` cell is reported, not refused); `type: person` or `domain: people` records; private correspondence (`source`/`source_ref` from `inbox/`, `outlook:`, `telegram(`, `kakao`); and internal meeting notes (`source` under `meetings/`). These are keyword heuristics; the org clone's `git diff` before `vmem sync` is the review surface. Body links that are dropped are also resolved in the personal vault: a link to a person/people, meeting or correspondence note refuses the promotion (reporting only the category and count), so their names never reach the org vault. A refusal or a preview writes nothing in either vault.
 - **Confirm.** It requires the current fingerprint. Then it creates the org note through `applyWrite`, records `promoted_to: "<org>:notes/x.md"` on the source, and appends `SYNC  <project>  personal:notes/x.md → <org>:notes/x.md  <em-dash> promoted: <type>` to both vault logs (`--log-project` sets the project, default `-`). The note is also linted against the org vault (`lintVault` over the org snapshot with the note overlaid, scoped to that note): any L01/L02/L13 error refuses the preview, and the lint result is returned again after the write. Vault-wide warnings do not block. A second promotion of the same note needs `--again`, and an existing org note is never overwritten. If the source provenance write failed after the org note was created, a rerun detects the org note's matching `promoted_from` and offers a provenance-only preview and confirm.
 - **MCP.** `vmem_promote` does the same over MCP and needs `write: mcp` on both vaults.
 
@@ -234,7 +275,7 @@ Runtime changes intentionally make `release:verify` report stale historical rele
 
 - **Two steps.** Without `--confirm` it prints per-rule `counts`, a per-note change list (`key: old -> new`, dropped keys with their values, sections added) and `reported` items that were left unchanged; nothing is written. With `--confirm` the fingerprint must match: it covers the rules, the map file, and the before/after sha of every touched file (and of the log). Each note is then written through `applyWrite` (atomic per note, under the vault lock) and one `LINT` event is appended, for example `tidy: escapes 1, enums 13, keys 78, ...`.
 - **Never blocked by one note.** A sanitized note that the writer would still refuse (for example an unknown key) is left unchanged, listed under `skipped` and `reported`, and the rest of the run proceeds. Counts and the `LINT` event cover only notes that are written.
-- **No value leaks.** Every value echoed into a change line or report is screened: secret-looking values, and email/phone values in `pii: deny` vaults, print as `[redacted]`.
+- **No value leaks.** Every value echoed into a change line or report is screened: secret-looking values, and PII values that the `notes` surface warns on or denies, print as `[redacted]`.
 - **Restart-safe.** If a run is interrupted, every note is either fully old or fully new; a rerun previews only the rest. A second `--all` run previews zero changes.
 - **Scope.** Only flat `notes/*.md` and, for `--log`, the vault `log` are touched; `.obsidian/`, `templates/` and `self/` never are. Nothing is committed; commit the receipt paths yourself.
 
@@ -247,6 +288,6 @@ Runtime changes intentionally make `release:verify` report stale historical rele
 | `--topics` | append `## Topics` listing the frontmatter topics where no such heading exists; mismatched sections are reported |
 | `--connections` | fold `## Connections (...)` headings into `## Relevant Notes` |
 | `--secrets` | replace V06 secret matches with `[redacted]`: in the body the match itself, in frontmatter the whole field value (the key stays, so the YAML stays valid). A match outside a field value, such as a YAML comment, is reported for manual repair. The preview names note and line, never the value. PII in personal vaults is left alone |
-| `--log` | replace secret-looking substrings and email addresses in existing log lines with `[redacted]`, under the log lock (refused with V06 when `denyPaths` covers the log). A line that fails the lint L09 structure check loses a trailing seconds field when that makes it valid, and is otherwise kept verbatim behind `# legacy: ` (readers skip `#` lines); no time, zone or TYPE is guessed. Other lines are kept byte for byte. Git history is not rewritten: rotate exposed credentials |
+| `--log` | replace secret-looking substrings in existing log lines with `[redacted]`, and PII values that the vault policy denies on the `log` surface (allow-list entries excepted), under the log lock (refused with V06 when `denyPaths` covers the log). A line that fails the lint L09 structure check loses a trailing seconds field when that makes it valid, and is otherwise kept verbatim behind `# legacy: ` (readers skip `#` lines); no time, zone or TYPE is guessed. Other lines are kept byte for byte. Git history is not rewritten: rotate exposed credentials |
 
 `--map <file>` overrides defaults with strict JSON `{"enums": {"confidence|status|type": {"from": "to"}}, "keys": {"key": "drop" | "keep" | {"rename": "key"}}}` (at most 64 KiB and 1000 entries). For `tidy`, `--log` selects the log rule; tidy always writes its own `LINT` event.

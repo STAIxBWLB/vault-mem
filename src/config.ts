@@ -8,10 +8,17 @@ export interface VaultSpec {
   path: string;
   kind: "personal" | "org";
   write: "mcp" | "cli" | "none";
-  pii?: "allow" | "deny";
+  pii?: "allow" | "deny" | PiiSpec;
   remote?: string;
   registry?: string;
 }
+export type PiiAction = "allow" | "warn" | "deny";
+export const PII_SURFACES = ["notes", "log", "promotion"] as const;
+export type PiiSurface = typeof PII_SURFACES[number];
+export type PiiCell = PiiAction | Partial<Record<PiiSurface, PiiAction>>;
+export interface PiiPattern { name: string; regex: string; action?: PiiCell }
+/** Fine-grained PII policy: per category, optionally per surface; omitted cells take the vault default. */
+export interface PiiSpec { email?: PiiCell; phone?: PiiCell; custom?: PiiCell; patterns?: PiiPattern[]; allow?: string[] }
 export interface VmemConfig { home?: string; vaults: VaultSpec[]; denyPaths?: string[]; piiPatterns?: string[] }
 const controls = /[\x00-\x1f\x7f]/;
 function object(value: unknown, keys: string[], label: string): Record<string, unknown> {
@@ -38,6 +45,41 @@ function strings(value: unknown, label: string): string[] | undefined {
     return text;
   });
 }
+const ACTIONS = new Set(["allow", "warn", "deny"]);
+function cell(value: unknown, label: string): PiiCell {
+  if (typeof value === "string") {
+    if (!ACTIONS.has(value)) throw new Error(`${label}: expected allow, warn or deny`);
+    return value as PiiAction;
+  }
+  const record = object(value, [...PII_SURFACES], label), result: Partial<Record<PiiSurface, PiiAction>> = {};
+  for (const surface of PII_SURFACES) if (record[surface] !== undefined) {
+    if (typeof record[surface] !== "string" || !ACTIONS.has(record[surface] as string)) throw new Error(`${label}.${surface}: expected allow, warn or deny`);
+    result[surface] = record[surface] as PiiAction;
+  }
+  return result;
+}
+/** Validate `vault.pii`: the `allow`/`deny` shorthand or a PiiSpec object. */
+export function parsePii(value: unknown): "allow" | "deny" | PiiSpec {
+  if (value === "allow" || value === "deny") return value;
+  if (typeof value === "string") throw new Error("vault.pii: expected allow, deny or a policy object");
+  const raw = object(value, ["email", "phone", "custom", "patterns", "allow"], "vault.pii"), spec: PiiSpec = {};
+  for (const key of ["email", "phone", "custom"] as const) if (raw[key] !== undefined) spec[key] = cell(raw[key], `vault.pii.${key}`);
+  if (raw.patterns !== undefined) {
+    if (!Array.isArray(raw.patterns) || raw.patterns.length > 32) throw new Error("vault.pii.patterns: expected at most 32 patterns");
+    const names = new Set<string>();
+    spec.patterns = raw.patterns.map((item, index) => {
+      const p = object(item, ["name", "regex", "action"], `vault.pii.patterns[${index}]`);
+      const name = string(p.name, "vault.pii.patterns.name"), regex = string(p.regex, "vault.pii.patterns.regex");
+      if (!/^[a-z][a-z0-9-]{0,31}$/.test(name) || names.has(name)) throw new Error(`vault.pii.patterns: invalid or duplicate name ${name.slice(0, 40)}`);
+      if (Buffer.byteLength(regex) > 256) throw new Error("vault.pii.patterns.regex: exceeds 256 bytes");
+      try { new RegExp(regex, "u"); } catch { throw new Error(`vault.pii.patterns.${name}: invalid regular expression`); }
+      names.add(name);
+      return { name, regex, ...(p.action !== undefined ? { action: cell(p.action, `vault.pii.patterns.${name}.action`) } : {}) };
+    });
+  }
+  if (raw.allow !== undefined) spec.allow = strings(raw.allow, "vault.pii.allow");
+  return spec;
+}
 export function parseVault(value: unknown): VaultSpec {
   const v = object(value, ["id", "path", "kind", "write", "pii", "remote", "registry"], "vault");
   const id = string(v.id, "vault.id");
@@ -45,10 +87,7 @@ export function parseVault(value: unknown): VaultSpec {
   if (v.kind !== "personal" && v.kind !== "org") throw new Error("vault.kind: expected personal or org");
   if (v.write !== "mcp" && v.write !== "cli" && v.write !== "none") throw new Error("vault.write: expected mcp, cli or none");
   const result: VaultSpec = { id, path: absolute(v.path, "vault.path"), kind: v.kind, write: v.write };
-  if (v.pii !== undefined) {
-    if (v.pii !== "allow" && v.pii !== "deny") throw new Error("vault.pii: expected allow or deny");
-    result.pii = v.pii;
-  }
+  if (v.pii !== undefined) result.pii = parsePii(v.pii);
   if (v.remote !== undefined) result.remote = string(v.remote, "vault.remote");
   if (v.registry !== undefined) result.registry = absolute(v.registry, "vault.registry");
   return result;

@@ -11,7 +11,8 @@ import { loadRegistry, syncDirectory } from "./registry.ts";
 import { normalizeSource, sourceReferences, sourceWorkspaceRoot, missingSourceWarnings } from "./source.ts";
 import { appendLog, LOG_LOCK } from "./vault-log.ts";
 import { appendSection, foldConnections, h2Sections } from "./write-operations.ts";
-import { EMAIL_PATTERN, SCHEMA_KEYS, SECRET_PATTERNS, TYPED_KEYS, screenContent } from "./write-validation.ts";
+import { SCHEMA_KEYS, SECRET_PATTERNS, TYPED_KEYS, screenContent } from "./write-validation.ts";
+import { redactPii } from "./pii.ts";
 import { applyWrite, sha256, snapshot } from "./writer.ts";
 import type { WriteIssue } from "./write-types.ts";
 
@@ -281,13 +282,14 @@ function normalizeLogLine(line: string): string | undefined {
   if (seconds && LOG_STRUCTURE.test(seconds[1]! + seconds[2]!)) return seconds[1]! + seconds[2]! + line.slice(body.length);
   return `# legacy: ${line}`;
 }
-function sanitizeLog(text: string): { text: string; lines: number; redactions: number; formats: number; changes: string[] } {
+/** PII is redacted where the vault policy denies it on the log surface; secrets always are. */
+function sanitizeLog(text: string, vault: VaultSpec, config: VmemConfig): { text: string; lines: number; redactions: number; formats: number; changes: string[] } {
   let lines = 0, redactions = 0, formats = 0;
   const changes: string[] = [];
   const out = text.split("\n").map((line, index) => {
     const secret = redact(line);
     let hits = secret.hits, next = secret.text;
-    next = next.replace(new RegExp(EMAIL_PATTERN.source, "gi"), () => { hits++; return "[redacted]"; });
+    const pii = redactPii(next, vault, config, "log"); hits += pii.hits; next = pii.text;
     const normalized = normalizeLogLine(next);
     if (normalized !== undefined) { next = normalized; formats++; }
     if (hits || normalized !== undefined) {
@@ -359,7 +361,7 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   if (rules.includes("log")) {
     const before = readLogFile(root);
     if (before !== null) {
-      const sanitized = sanitizeLog(before);
+      const sanitized = sanitizeLog(before, vault, config);
       result.log = { lines: sanitized.lines, redactions: sanitized.redactions, formats: sanitized.formats, changes: sanitized.changes };
       if (sanitized.text !== before) { logPlan = { before, ...sanitized }; result.counts.log = sanitized.redactions + sanitized.formats; }
     }

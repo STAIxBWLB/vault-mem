@@ -1,3 +1,4 @@
+import type { PiiSurface } from "./config.ts";
 import type { LogEvent, LogReceipt } from "./log-types.ts";
 import type { VaultSpec, VmemConfig } from "./config.ts";
 export type WriteOp =
@@ -32,6 +33,8 @@ export interface ValidationContext {
   /** Original flat notes snapshot, paths prefixed with notes/. */
   notes: Map<string, string>;
   operation: WriteOp;
+  /** PII surface for content screening; `notes` unless an internal caller (org promotion) sets it. */
+  piiSurface?: PiiSurface;
 }
 export interface ChangeReceipt { path: string; beforeSha: string | null; sha256: string | null; bytes: number }
 export interface WriteReceipt {
