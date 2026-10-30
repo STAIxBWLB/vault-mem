@@ -281,13 +281,14 @@ function normalizeLogLine(line: string): string | undefined {
   if (seconds && LOG_STRUCTURE.test(seconds[1]! + seconds[2]!)) return seconds[1]! + seconds[2]! + line.slice(body.length);
   return `# legacy: ${line}`;
 }
-function sanitizeLog(text: string): { text: string; lines: number; redactions: number; formats: number; changes: string[] } {
+/** Email addresses are redacted only where the vault refuses PII (the screenContent rule); secrets always are. */
+function sanitizeLog(text: string, redactEmail: boolean): { text: string; lines: number; redactions: number; formats: number; changes: string[] } {
   let lines = 0, redactions = 0, formats = 0;
   const changes: string[] = [];
   const out = text.split("\n").map((line, index) => {
     const secret = redact(line);
     let hits = secret.hits, next = secret.text;
-    next = next.replace(new RegExp(EMAIL_PATTERN.source, "gi"), () => { hits++; return "[redacted]"; });
+    if (redactEmail) next = next.replace(new RegExp(EMAIL_PATTERN.source, "gi"), () => { hits++; return "[redacted]"; });
     const normalized = normalizeLogLine(next);
     if (normalized !== undefined) { next = normalized; formats++; }
     if (hits || normalized !== undefined) {
@@ -359,7 +360,7 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   if (rules.includes("log")) {
     const before = readLogFile(root);
     if (before !== null) {
-      const sanitized = sanitizeLog(before);
+      const sanitized = sanitizeLog(before, (vault.pii ?? (vault.kind === "org" ? "deny" : "allow")) === "deny");
       result.log = { lines: sanitized.lines, redactions: sanitized.redactions, formats: sanitized.formats, changes: sanitized.changes };
       if (sanitized.text !== before) { logPlan = { before, ...sanitized }; result.counts.log = sanitized.redactions + sanitized.formats; }
     }

@@ -51,7 +51,7 @@ test("preview lists every change and writes nothing; confirm applies; a second r
   const f = fixture(), before = f.disk(), logBefore = readFileSync(join(f.vault, "log"), "utf8");
   const preview = f.tidy(ALL);
   expect(preview).toMatchObject({ ok: true, preview: true, applied: false });
-  expect(preview.counts).toMatchObject({ connections: 1, escapes: 2, enums: 2, sources: 2, topics: 1, secrets: 1, log: 2 });
+  expect(preview.counts).toMatchObject({ connections: 1, escapes: 2, enums: 2, sources: 2, topics: 1, secrets: 1, log: 1 });
   expect(preview.counts.keys).toBeGreaterThanOrEqual(5);
   const changed = Object.fromEntries(preview.notes.map(n => [n.path, n.changes.join("\n")]));
   expect(changed["notes/enums.md"]).toContain('confidence: "confirmed" -> "proven"');
@@ -87,10 +87,10 @@ test("preview lists every change and writes nothing; confirm applies; a second r
   // Never touches .obsidian/, templates/ or self/.
   for (const dir of [".obsidian", "templates", "self"]) expect(readFileSync(join(f.vault, dir, "keep.md"), "utf8")).toContain("confidence: confirmed");
   const log = readFileSync(join(f.vault, "log"), "utf8");
-  expect(log).not.toContain("someone@example.invalid");
+  expect(log).toContain("someone@example.invalid"); // pii: allow keeps email in the log
   expect(log).not.toContain(TOKEN);
   expect(log).toContain("clean line");
-  expect(log.trim().split("\n").at(-1)).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}  LINT  -  vmem:tidy  — tidy: connections 1, escapes 2, enums 2, keys \d+, sources 2, topics 1, secrets 1, log 2$/);
+  expect(log.trim().split("\n").at(-1)).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}  LINT  -  vmem:tidy  — tidy: connections 1, escapes 2, enums 2, keys \d+, sources 2, topics 1, secrets 1, log 1$/);
   const again = f.tidy(ALL);
   expect(again).toMatchObject({ ok: true, preview: true, notes: [] });
   expect(again.counts).toEqual({});
@@ -106,6 +106,18 @@ test("--secrets and --log never print a matched value in preview, receipts or th
     expect(text).not.toContain("someone@example.invalid");
   }
   expect(readFileSync(join(f.vault, "log"), "utf8")).not.toContain(TOKEN);
+});
+
+test("--log redacts email addresses only in a pii-deny vault", () => {
+  const f = fixture();
+  expect(f.tidy(["log"]).log).toMatchObject({ redactions: 1 });
+  const config = JSON.parse(readFileSync(join(f.home, "vmem.config.json"), "utf8"));
+  config.vaults[0].pii = "deny"; writeFileSync(join(f.home, "vmem.config.json"), JSON.stringify(config));
+  const preview = f.tidy(["log"]);
+  expect(preview.log).toMatchObject({ redactions: 2 });
+  expect(f.tidy(["log"], { confirm: true, fingerprint: preview.fingerprint }).ok).toBe(true);
+  const log = readFileSync(join(f.vault, "log"), "utf8");
+  expect(log).not.toContain("someone@example.invalid"); expect(log).not.toContain(TOKEN);
 });
 
 test("--secrets in frontmatter keeps a valid key and does not block the rest of the run", () => {

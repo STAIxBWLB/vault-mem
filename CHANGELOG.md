@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.4] - 2026-10-30
+
+- `vmem tidy --log` keeps email addresses in `pii: allow` vaults, matching note writes; secrets are still redacted everywhere and emails still are where the vault refuses PII.
+
 ## [0.1.3] - 2026-10-30
 
 - `vmem tidy --log` fixes legacy log lines that fail lint L09: a trailing seconds field is dropped, and any other malformed line is kept verbatim behind `# legacy: `.
