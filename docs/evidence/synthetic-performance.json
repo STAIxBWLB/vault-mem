@@ -1,8 +1,8 @@
 {
   "schema": 1,
-  "measuredAt": "2026-10-30T11:13:30.860Z",
-  "revision": "ecd201c9e6d3117ea2884d07977e820a2c268812",
-  "runtimeDigest": "5c563c00432a43ca0350446a5f930d3aa6147d89a8ecba75e255b2dce278c961",
+  "measuredAt": "2026-10-30T11:35:47.030Z",
+  "revision": "11451989b071e32b8e09f35afaecd6677983ebfc",
+  "runtimeDigest": "adf42b23204733d6d8061120121d8dc6d549f609d078572c139630909b169521",
   "methodDigest": "3c3348680c68af76d79794b9ace4dfc0de58d0831c29463e826efa258074e634",
   "corpus": {
     "kind": "synthetic",
@@ -28,64 +28,64 @@
   },
   "gates": {
     "mcpIdleRss": {
-      "value": 29360128,
+      "value": 31195136,
       "limit": 100000000,
       "unit": "bytes",
       "pass": true
     },
     "mcpPeakRss": {
-      "value": 90259456,
+      "value": 96772096,
       "limit": 200000000,
       "unit": "bytes",
       "pass": true
     },
     "searchP95": {
-      "value": 29.6344339999996,
+      "value": 35.931509000000005,
       "limit": 50,
       "unit": "ms",
       "pass": true
     }
   },
   "searchMs": [
-    27.42220499999985,
-    29.16736900000069,
-    27.167647999999645,
-    27.03357000000051,
-    29.47532500000034,
-    25.887684000000263,
-    28.001021000000037,
-    25.876060000000507,
-    26.01290499999959,
-    28.800062000000253,
-    26.63532799999939,
-    29.6344339999996,
-    27.787685000000238,
-    27.190340000000106,
-    29.09027900000001,
-    25.325831000000107,
-    28.17413899999974,
-    26.864394000000175,
-    27.336927999999716,
-    26.94680100000005,
-    27.745718999999553,
-    25.09978300000057,
-    29.27759100000003,
-    25.221841999999924,
-    26.966481999999814,
-    25.44970900000044,
-    26.405504000000292,
-    25.66307599999982,
-    25.504981999999472,
-    31.481007999999747
+    32.65545199999997,
+    34.86263400000007,
+    32.36389800000052,
+    34.09406899999976,
+    33.76307199999974,
+    33.83598700000039,
+    35.931509000000005,
+    33.23115299999972,
+    34.334460000000036,
+    29.74387100000058,
+    33.41908500000045,
+    30.74313499999971,
+    30.598337000000356,
+    32.50253799999973,
+    29.582648000000518,
+    31.512993999999708,
+    31.111369999999624,
+    35.54702900000029,
+    33.458175000000665,
+    36.93878600000062,
+    32.539128000000346,
+    35.04295199999979,
+    35.424182000000656,
+    35.341120000000046,
+    34.13707500000055,
+    32.42824699999983,
+    33.059266999999636,
+    30.24539900000036,
+    35.91680300000007,
+    31.853632999999718
   ],
   "syntheticWriteMs": [
-    517.8517529999999,
-    532.6421419999997,
-    555.9810579999994,
-    525.1373119999989,
-    524.0018139999993
+    557.9811749999999,
+    580.4924410000003,
+    558.6143970000012,
+    567.7643599999992,
+    538.7932970000002
   ],
-  "syntheticWriteP95": 555.9810579999994,
+  "syntheticWriteP95": 580.4924410000003,
   "rssSamples": [
     {
       "phase": "startup",
@@ -124,63 +124,63 @@
     },
     {
       "phase": "idle",
-      "rssBytes": 29360128,
-      "highWaterBytes": 29360128
+      "rssBytes": 31195136,
+      "highWaterBytes": 31195136
     },
     {
       "phase": "idle",
-      "rssBytes": 29360128,
-      "highWaterBytes": 29360128
+      "rssBytes": 31195136,
+      "highWaterBytes": 31195136
     },
     {
       "phase": "idle",
-      "rssBytes": 29360128,
-      "highWaterBytes": 29360128
+      "rssBytes": 31195136,
+      "highWaterBytes": 31195136
     },
     {
       "phase": "idle",
-      "rssBytes": 29360128,
-      "highWaterBytes": 29360128
+      "rssBytes": 31195136,
+      "highWaterBytes": 31195136
     },
     {
       "phase": "idle",
-      "rssBytes": 29360128,
-      "highWaterBytes": 29360128
+      "rssBytes": 31195136,
+      "highWaterBytes": 31195136
     },
     {
       "phase": "idle",
-      "rssBytes": 29360128,
-      "highWaterBytes": 29360128
+      "rssBytes": 31195136,
+      "highWaterBytes": 31195136
     },
     {
       "phase": "idle",
-      "rssBytes": 29360128,
-      "highWaterBytes": 29360128
+      "rssBytes": 31195136,
+      "highWaterBytes": 31195136
     },
     {
       "phase": "idle",
-      "rssBytes": 29360128,
-      "highWaterBytes": 29360128
+      "rssBytes": 31195136,
+      "highWaterBytes": 31195136
     },
     {
       "phase": "idle",
-      "rssBytes": 29360128,
-      "highWaterBytes": 29360128
+      "rssBytes": 31195136,
+      "highWaterBytes": 31195136
     },
     {
       "phase": "idle",
-      "rssBytes": 29360128,
-      "highWaterBytes": 29360128
+      "rssBytes": 31195136,
+      "highWaterBytes": 31195136
     },
     {
       "phase": "idle",
-      "rssBytes": 29360128,
-      "highWaterBytes": 29360128
+      "rssBytes": 31195136,
+      "highWaterBytes": 31195136
     },
     {
       "phase": "search",
-      "rssBytes": 34865152,
-      "highWaterBytes": 34865152
+      "rssBytes": 33030144,
+      "highWaterBytes": 33030144
     },
     {
       "phase": "search",
@@ -189,418 +189,473 @@
     },
     {
       "phase": "search",
-      "rssBytes": 55050240,
-      "highWaterBytes": 55050240
+      "rssBytes": 53215232,
+      "highWaterBytes": 53215232
     },
     {
       "phase": "search",
-      "rssBytes": 55009280,
-      "highWaterBytes": 55050240
+      "rssBytes": 53215232,
+      "highWaterBytes": 53215232
     },
     {
       "phase": "search",
-      "rssBytes": 56844288,
-      "highWaterBytes": 56844288
+      "rssBytes": 56885248,
+      "highWaterBytes": 56885248
     },
     {
       "phase": "search",
-      "rssBytes": 58679296,
-      "highWaterBytes": 58679296
+      "rssBytes": 56885248,
+      "highWaterBytes": 56885248
     },
     {
       "phase": "search",
-      "rssBytes": 64184320,
-      "highWaterBytes": 64184320
+      "rssBytes": 56885248,
+      "highWaterBytes": 56885248
     },
     {
       "phase": "search",
-      "rssBytes": 66019328,
-      "highWaterBytes": 66019328
+      "rssBytes": 60370944,
+      "highWaterBytes": 64225280
     },
     {
       "phase": "search",
-      "rssBytes": 66019328,
-      "highWaterBytes": 66019328
+      "rssBytes": 62205952,
+      "highWaterBytes": 64225280
     },
     {
       "phase": "search",
-      "rssBytes": 67854336,
-      "highWaterBytes": 67854336
+      "rssBytes": 62205952,
+      "highWaterBytes": 64225280
     },
     {
       "phase": "search",
-      "rssBytes": 67854336,
-      "highWaterBytes": 67854336
+      "rssBytes": 65875968,
+      "highWaterBytes": 65875968
+    },
+    {
+      "phase": "search",
+      "rssBytes": 69545984,
+      "highWaterBytes": 69545984
+    },
+    {
+      "phase": "search",
+      "rssBytes": 73216000,
+      "highWaterBytes": 73216000
+    },
+    {
+      "phase": "search",
+      "rssBytes": 73216000,
+      "highWaterBytes": 73216000
+    },
+    {
+      "phase": "search",
+      "rssBytes": 73216000,
+      "highWaterBytes": 73216000
+    },
+    {
+      "phase": "search",
+      "rssBytes": 73216000,
+      "highWaterBytes": 73216000
+    },
+    {
+      "phase": "search",
+      "rssBytes": 73216000,
+      "highWaterBytes": 73216000
+    },
+    {
+      "phase": "search",
+      "rssBytes": 68640768,
+      "highWaterBytes": 73216000
+    },
+    {
+      "phase": "search",
+      "rssBytes": 70475776,
+      "highWaterBytes": 73216000
+    },
+    {
+      "phase": "search",
+      "rssBytes": 70475776,
+      "highWaterBytes": 73216000
+    },
+    {
+      "phase": "search",
+      "rssBytes": 70475776,
+      "highWaterBytes": 73216000
+    },
+    {
+      "phase": "search",
+      "rssBytes": 70475776,
+      "highWaterBytes": 73216000
+    },
+    {
+      "phase": "search",
+      "rssBytes": 72310784,
+      "highWaterBytes": 73216000
+    },
+    {
+      "phase": "search",
+      "rssBytes": 74145792,
+      "highWaterBytes": 74145792
+    },
+    {
+      "phase": "search",
+      "rssBytes": 75980800,
+      "highWaterBytes": 75980800
+    },
+    {
+      "phase": "search",
+      "rssBytes": 74092544,
+      "highWaterBytes": 75980800
+    },
+    {
+      "phase": "search",
+      "rssBytes": 75927552,
+      "highWaterBytes": 75980800
+    },
+    {
+      "phase": "search",
+      "rssBytes": 75927552,
+      "highWaterBytes": 75980800
+    },
+    {
+      "phase": "search",
+      "rssBytes": 74067968,
+      "highWaterBytes": 75980800
+    },
+    {
+      "phase": "search",
+      "rssBytes": 74067968,
+      "highWaterBytes": 75980800
+    },
+    {
+      "phase": "search",
+      "rssBytes": 75902976,
+      "highWaterBytes": 75980800
+    },
+    {
+      "phase": "search",
+      "rssBytes": 77737984,
+      "highWaterBytes": 77737984
+    },
+    {
+      "phase": "search",
+      "rssBytes": 77737984,
+      "highWaterBytes": 77737984
     },
     {
       "phase": "search",
       "rssBytes": 71524352,
-      "highWaterBytes": 71524352
+      "highWaterBytes": 77737984
     },
     {
       "phase": "search",
       "rssBytes": 73359360,
-      "highWaterBytes": 73359360
-    },
-    {
-      "phase": "search",
-      "rssBytes": 73359360,
-      "highWaterBytes": 73359360
-    },
-    {
-      "phase": "search",
-      "rssBytes": 73359360,
-      "highWaterBytes": 73359360
-    },
-    {
-      "phase": "search",
-      "rssBytes": 73359360,
-      "highWaterBytes": 73359360
+      "highWaterBytes": 77737984
     },
     {
       "phase": "search",
       "rssBytes": 75194368,
-      "highWaterBytes": 75194368
+      "highWaterBytes": 77737984
     },
     {
       "phase": "search",
       "rssBytes": 75194368,
-      "highWaterBytes": 75194368
+      "highWaterBytes": 77737984
     },
     {
       "phase": "search",
-      "rssBytes": 75194368,
-      "highWaterBytes": 75194368
+      "rssBytes": 77029376,
+      "highWaterBytes": 77737984
     },
     {
       "phase": "search",
-      "rssBytes": 75194368,
-      "highWaterBytes": 75194368
+      "rssBytes": 78864384,
+      "highWaterBytes": 78864384
     },
     {
       "phase": "search",
-      "rssBytes": 73342976,
-      "highWaterBytes": 75194368
+      "rssBytes": 78864384,
+      "highWaterBytes": 78864384
     },
     {
       "phase": "search",
-      "rssBytes": 75177984,
-      "highWaterBytes": 75194368
+      "rssBytes": 78864384,
+      "highWaterBytes": 78864384
     },
     {
       "phase": "search",
-      "rssBytes": 75177984,
-      "highWaterBytes": 75194368
+      "rssBytes": 78864384,
+      "highWaterBytes": 78864384
     },
     {
       "phase": "search",
-      "rssBytes": 77012992,
-      "highWaterBytes": 77012992
+      "rssBytes": 78831616,
+      "highWaterBytes": 78864384
     },
     {
       "phase": "search",
-      "rssBytes": 80683008,
-      "highWaterBytes": 80683008
+      "rssBytes": 80666624,
+      "highWaterBytes": 80666624
     },
     {
       "phase": "search",
-      "rssBytes": 80683008,
-      "highWaterBytes": 80683008
+      "rssBytes": 80666624,
+      "highWaterBytes": 80666624
     },
     {
       "phase": "search",
-      "rssBytes": 80683008,
-      "highWaterBytes": 80683008
+      "rssBytes": 80666624,
+      "highWaterBytes": 80666624
     },
     {
       "phase": "search",
-      "rssBytes": 80683008,
-      "highWaterBytes": 80683008
+      "rssBytes": 80666624,
+      "highWaterBytes": 80666624
     },
     {
       "phase": "search",
-      "rssBytes": 80683008,
-      "highWaterBytes": 80683008
+      "rssBytes": 80666624,
+      "highWaterBytes": 80666624
     },
     {
       "phase": "search",
-      "rssBytes": 73912320,
-      "highWaterBytes": 80683008
+      "rssBytes": 80666624,
+      "highWaterBytes": 80666624
     },
     {
       "phase": "search",
-      "rssBytes": 75747328,
-      "highWaterBytes": 80683008
+      "rssBytes": 80666624,
+      "highWaterBytes": 80666624
     },
     {
       "phase": "search",
-      "rssBytes": 77582336,
-      "highWaterBytes": 80683008
+      "rssBytes": 82501632,
+      "highWaterBytes": 82501632
     },
     {
       "phase": "search",
-      "rssBytes": 77582336,
-      "highWaterBytes": 80683008
+      "rssBytes": 82501632,
+      "highWaterBytes": 82501632
     },
     {
       "phase": "search",
-      "rssBytes": 77582336,
-      "highWaterBytes": 80683008
+      "rssBytes": 84336640,
+      "highWaterBytes": 84336640
     },
     {
       "phase": "search",
-      "rssBytes": 77582336,
-      "highWaterBytes": 80683008
+      "rssBytes": 84336640,
+      "highWaterBytes": 84336640
     },
     {
       "phase": "search",
-      "rssBytes": 77582336,
-      "highWaterBytes": 80683008
+      "rssBytes": 84336640,
+      "highWaterBytes": 84336640
     },
     {
       "phase": "search",
-      "rssBytes": 77582336,
-      "highWaterBytes": 80683008
+      "rssBytes": 84336640,
+      "highWaterBytes": 84336640
     },
     {
       "phase": "search",
-      "rssBytes": 79417344,
-      "highWaterBytes": 80683008
+      "rssBytes": 84336640,
+      "highWaterBytes": 84336640
     },
     {
       "phase": "search",
-      "rssBytes": 77570048,
-      "highWaterBytes": 80683008
+      "rssBytes": 84336640,
+      "highWaterBytes": 84336640
     },
     {
       "phase": "search",
-      "rssBytes": 79405056,
-      "highWaterBytes": 80683008
+      "rssBytes": 84279296,
+      "highWaterBytes": 84336640
     },
     {
       "phase": "search",
-      "rssBytes": 81240064,
-      "highWaterBytes": 81240064
+      "rssBytes": 84279296,
+      "highWaterBytes": 84336640
     },
     {
       "phase": "search",
-      "rssBytes": 81240064,
-      "highWaterBytes": 81240064
+      "rssBytes": 91619328,
+      "highWaterBytes": 91619328
     },
     {
       "phase": "search",
-      "rssBytes": 81240064,
-      "highWaterBytes": 81240064
+      "rssBytes": 95289344,
+      "highWaterBytes": 95289344
     },
     {
       "phase": "search",
-      "rssBytes": 81240064,
-      "highWaterBytes": 81240064
+      "rssBytes": 95289344,
+      "highWaterBytes": 95289344
     },
     {
       "phase": "search",
-      "rssBytes": 81240064,
-      "highWaterBytes": 81240064
+      "rssBytes": 95289344,
+      "highWaterBytes": 95289344
     },
     {
       "phase": "search",
-      "rssBytes": 81240064,
-      "highWaterBytes": 81240064
+      "rssBytes": 95289344,
+      "highWaterBytes": 95289344
     },
     {
       "phase": "search",
-      "rssBytes": 81240064,
-      "highWaterBytes": 81240064
+      "rssBytes": 95289344,
+      "highWaterBytes": 95289344
     },
     {
       "phase": "search",
-      "rssBytes": 77492224,
-      "highWaterBytes": 83075072
+      "rssBytes": 93102080,
+      "highWaterBytes": 95289344
     },
     {
       "phase": "search",
-      "rssBytes": 77492224,
-      "highWaterBytes": 83075072
+      "rssBytes": 93102080,
+      "highWaterBytes": 95289344
     },
     {
       "phase": "search",
-      "rssBytes": 77492224,
-      "highWaterBytes": 83075072
+      "rssBytes": 93102080,
+      "highWaterBytes": 95289344
     },
     {
       "phase": "search",
-      "rssBytes": 77492224,
-      "highWaterBytes": 83075072
+      "rssBytes": 94937088,
+      "highWaterBytes": 95289344
     },
     {
       "phase": "search",
-      "rssBytes": 77492224,
-      "highWaterBytes": 83075072
+      "rssBytes": 94937088,
+      "highWaterBytes": 95289344
     },
     {
       "phase": "search",
-      "rssBytes": 79327232,
-      "highWaterBytes": 83075072
+      "rssBytes": 94937088,
+      "highWaterBytes": 95289344
     },
     {
       "phase": "search",
-      "rssBytes": 79327232,
-      "highWaterBytes": 83075072
+      "rssBytes": 96772096,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 82997248,
-      "highWaterBytes": 83075072
+      "rssBytes": 80928768,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 86667264,
-      "highWaterBytes": 86667264
+      "rssBytes": 84598784,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 86667264,
-      "highWaterBytes": 86667264
+      "rssBytes": 84598784,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 84811776,
-      "highWaterBytes": 86667264
+      "rssBytes": 86433792,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 84811776,
-      "highWaterBytes": 86667264
+      "rssBytes": 86433792,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 86646784,
-      "highWaterBytes": 86667264
+      "rssBytes": 88268800,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 86646784,
-      "highWaterBytes": 86667264
+      "rssBytes": 88268800,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 86646784,
-      "highWaterBytes": 86667264
+      "rssBytes": 85925888,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 86646784,
-      "highWaterBytes": 86667264
+      "rssBytes": 85925888,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 86646784,
-      "highWaterBytes": 86667264
+      "rssBytes": 87760896,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 84787200,
-      "highWaterBytes": 86667264
+      "rssBytes": 87760896,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 82923520,
-      "highWaterBytes": 86667264
+      "rssBytes": 89595904,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 84758528,
-      "highWaterBytes": 86667264
+      "rssBytes": 89595904,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 84758528,
-      "highWaterBytes": 86667264
+      "rssBytes": 89595904,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 84758528,
-      "highWaterBytes": 86667264
+      "rssBytes": 89595904,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 86593536,
-      "highWaterBytes": 86667264
+      "rssBytes": 89595904,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 86593536,
-      "highWaterBytes": 86667264
+      "rssBytes": 87711744,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 86593536,
-      "highWaterBytes": 86667264
+      "rssBytes": 89546752,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 86593536,
-      "highWaterBytes": 86667264
+      "rssBytes": 89546752,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 86593536,
-      "highWaterBytes": 86667264
+      "rssBytes": 89546752,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 84754432,
-      "highWaterBytes": 86667264
+      "rssBytes": 91381760,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "search",
-      "rssBytes": 84754432,
-      "highWaterBytes": 86667264
-    },
-    {
-      "phase": "search",
-      "rssBytes": 84754432,
-      "highWaterBytes": 86667264
-    },
-    {
-      "phase": "search",
-      "rssBytes": 86589440,
-      "highWaterBytes": 86667264
-    },
-    {
-      "phase": "search",
-      "rssBytes": 86589440,
-      "highWaterBytes": 86667264
-    },
-    {
-      "phase": "search",
-      "rssBytes": 86589440,
-      "highWaterBytes": 86667264
-    },
-    {
-      "phase": "search",
-      "rssBytes": 88424448,
-      "highWaterBytes": 88424448
-    },
-    {
-      "phase": "search",
-      "rssBytes": 88424448,
-      "highWaterBytes": 88424448
-    },
-    {
-      "phase": "search",
-      "rssBytes": 90259456,
-      "highWaterBytes": 90259456
-    },
-    {
-      "phase": "search",
-      "rssBytes": 88420352,
-      "highWaterBytes": 90259456
+      "rssBytes": 91381760,
+      "highWaterBytes": 96772096
     },
     {
       "phase": "post-search",
-      "rssBytes": 88420352,
-      "highWaterBytes": 90259456
+      "rssBytes": 91381760,
+      "highWaterBytes": 96772096
     }
   ],
   "representativePrivateWrite": {
