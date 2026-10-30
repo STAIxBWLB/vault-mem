@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## [0.1.2] - 2026-10-30
 
-- `vmem move` accepts an existing legacy-named note (lint L13) as its source, so the finding can be fixed with a normal rename.
+- `vmem move` accepts an existing legacy-named note (lint L13) as its source and may rewrite inbound links in other legacy-named notes, so the finding can be fixed with a normal rename. Destinations still need a valid stem.
 
 ## [0.1.1] - 2026-10-30
 
