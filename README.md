@@ -58,7 +58,7 @@ The only runtime dependency is the exact first-party pin `@staix/agent-mem@0.11.
   - `allow`: not screened.
   - `warn`: the write proceeds with a V07 warning, and tidy echo prints the value as `[redacted]`.
   - `deny`: V07 error, and `tidy --log` replaces matches in existing lines.
-  - Org promotion refuses only `deny` cells and secrets.
+  - Org promotion refuses only `deny` cells and secrets. The promoted note is also a write into the target vault, so the target's `notes` cells apply too; the stricter of the two wins.
 - An omitted category or surface takes the vault default: `allow` for personal vaults, `deny` for org vaults.
 - `allow` entries (at most 64) are exempt everywhere:
   - an exact address, compared case-insensitively;
