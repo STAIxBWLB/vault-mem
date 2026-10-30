@@ -59,12 +59,12 @@ The only runtime dependency is the exact first-party pin `@staix/agent-mem@0.11.
   - `warn`: the write proceeds with a V07 warning, and tidy echo prints the value as `[redacted]`.
   - `deny`: V07 error, and `tidy --log` replaces matches in existing lines.
   - Org promotion refuses only `deny` cells and secrets. The promoted note's write into the target vault is screened with the target's `promotion` cells, not its `notes` cells.
-  - `tidy --log` replaces the exact denied spans and leaves allow-listed values intact. If any denied match cannot be located in the raw line (a zero-length pattern match, or a form only NFKC normalization reveals), the whole line is redacted (fail closed).
+  - `tidy --log` replaces the raw denied matches and leaves allow-listed values intact. Screening also checks the NFKC form. If a denied match is zero-length or still detectable after replacement (for example a form only NFKC normalization reveals), the whole line is redacted (fail closed).
 - An omitted category or surface takes the vault default: `allow` for personal vaults, `deny` for org vaults.
 - `allow` entries (at most 64) are exempt everywhere:
   - an exact address, compared case-insensitively;
   - an `@domain` suffix;
-  - a phone number, compared by its digits;
+  - a phone number standing alone, compared by its digits. Several numbers run together with spaces are never exempt (fail closed);
   - an exact match of a pattern.
 - Secret detection is separate from this policy and always applies.
 
