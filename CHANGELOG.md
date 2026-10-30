@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `vmem move` accepts an existing legacy-named note (lint L13) as its source, so the finding can be fixed with a normal rename.
+
 ## [0.1.1] - 2026-10-30
 
 - `vmem setup` registers the PATH `bun` launcher when it runs the same binary, so host MCP entries survive a runtime upgrade that removes the versioned real path.

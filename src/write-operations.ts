@@ -14,6 +14,15 @@ export function notePath(path: string): string {
   if (!/^notes\/[a-z0-9][a-z0-9-]*\.md$/.test(value) || Buffer.byteLength(value) > 200) refuse("V04", "expected flat lowercase ASCII note path <=200 bytes");
   return value;
 }
+/** A move source may keep a legacy file name (lint L13) as long as it is an existing flat note; `to` still uses notePath. */
+export function moveSourcePath(value: string, notes: ReadonlyMap<string, string>): string {
+  try { return notePath(value); } catch (error) {
+    if (typeof value !== "string") throw error;
+    const path = value.startsWith("notes/") ? value : `notes/${value.endsWith(".md") ? value : `${value}.md`}`;
+    if (path.slice(6).includes("/") || path.includes("\\") || !path.endsWith(".md") || !notes.has(path)) throw error;
+    return path;
+  }
+}
 function needed(notes: Map<string, string>, path: string): string {
   const source = notes.get(path);
   if (source === undefined) refuse("V04", "note does not exist", path);
@@ -138,7 +147,7 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
     }
     case "delete": { const { path } = existing(operation.path); set(path, null); break; }
     case "move": {
-      const from = existing(operation.from), to = notePath(operation.to);
+      const fromPath = moveSourcePath(operation.from, notes), from = { path: fromPath, source: needed(notes, fromPath) }, to = notePath(operation.to);
       if (notes.has(to)) refuse("V08", "move destination already exists", to);
       const names = new Map<string, Set<string>>();
       for (const [path, source] of notes) {
