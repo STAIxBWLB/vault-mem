@@ -317,3 +317,39 @@ test("counts and the LINT event exclude skipped notes", () => {
   expect(preview.counts).toEqual({ secrets: 1 });
   expect(preview.event).toBe("tidy: secrets 1");
 });
+
+test("the LINT event cannot land in another vault when the id is re-registered before the append", () => {
+  const f = fixture(), rebound = join(f.root, "other-vault"); mkdirSync(join(rebound, "mine", "notes"), { recursive: true });
+  const child = Bun.spawnSync([process.execPath, "test/fixtures/log-rebind.ts", f.home, "tidy", rebound], { stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode).toBe(0);
+  const result = JSON.parse(child.stdout.toString());
+  expect(result.applied).toBe(true); expect(result.written).toContain("notes/no-topics.md");
+  expect(result.issues.some((i: { code: string }) => i.code === "LOG_DRIFT")).toBe(true);
+  expect(existsSync(join(rebound, "mine", "log"))).toBe(false);
+  expect(readFileSync(join(f.vault, "log"), "utf8")).not.toContain("LINT");
+  expect(f.read("no-topics")).toContain("## Topics"); // the committed note is not rolled back
+});
+
+test("a tidy write cannot land in another vault when the id is re-registered before the write", () => {
+  const f = fixture(), rebound = join(f.root, "other-vault"), copy = join(rebound, "mine", "notes"); mkdirSync(copy, { recursive: true });
+  for (const name of readdirSync(f.notes)) writeFileSync(join(copy, name), readFileSync(join(f.notes, name)));
+  const before = { own: f.disk(), other: readdirSync(copy).map(n => readFileSync(join(copy, n), "utf8")) };
+  const child = Bun.spawnSync([process.execPath, "test/fixtures/log-rebind.ts", f.home, "tidy-write", rebound], { stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode).toBe(0);
+  const result = JSON.parse(child.stdout.toString());
+  expect(result.ok).toBe(false); expect(result.issues.some((i: { code: string }) => i.code === "VAULT_DRIFT")).toBe(true);
+  expect(readdirSync(copy).map(n => readFileSync(join(copy, n), "utf8"))).toEqual(before.other);
+  expect(f.disk()).toEqual(before.own);
+});
+
+test("tidy reports drift before its first dry run as a whole-run error and keeps applied after a partial write", () => {
+  const dry = fixture(), elsewhere = join(dry.root, "other-vault"); mkdirSync(join(elsewhere, "mine", "notes"), { recursive: true });
+  const preview = JSON.parse(Bun.spawnSync([process.execPath, "test/fixtures/log-rebind.ts", dry.home, "tidy-dry", elsewhere], { stdout: "pipe", stderr: "pipe" }).stdout.toString());
+  expect(preview.ok).toBe(false); expect(preview.preview).toBeUndefined(); expect(preview.issues.map((i: { code: string }) => i.code)).toEqual(["VAULT_DRIFT"]);
+  const f = fixture(), rebound = join(f.root, "other-vault"); mkdirSync(join(rebound, "mine", "notes"), { recursive: true });
+  writeFileSync(join(f.notes, "zz-no-topics.md"), fm(base()) + "# Zz No Topics\n\nText.\n");
+  const result = JSON.parse(Bun.spawnSync([process.execPath, "test/fixtures/log-rebind.ts", f.home, "tidy-second", rebound], { stdout: "pipe", stderr: "pipe" }).stdout.toString());
+  expect(result.ok).toBe(false); expect(result.applied).toBe(true); expect(result.written).toEqual(["notes/no-topics.md"]);
+  expect(result.issues.some((i: { code: string }) => i.code === "VAULT_DRIFT")).toBe(true);
+  expect(f.read("zz-no-topics")).not.toContain("## Topics");
+});

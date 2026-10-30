@@ -9,7 +9,7 @@ import { extractLinks, normalizeTarget } from "./links.ts";
 import { isDenied } from "./platform.ts";
 import { loadRegistry, syncDirectory } from "./registry.ts";
 import { normalizeSource, sourceReferences, sourceWorkspaceRoot, missingSourceWarnings } from "./source.ts";
-import { appendLog, LOG_LOCK } from "./vault-log.ts";
+import { appendLog, logBinding, LOG_LOCK } from "./vault-log.ts";
 import { appendSection, foldConnections, h2Sections } from "./write-operations.ts";
 import { SCHEMA_KEYS, SECRET_PATTERNS, TYPED_KEYS, screenContent } from "./write-validation.ts";
 import { redactPii } from "./pii.ts";
@@ -334,6 +334,8 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   if (vault.write === "none" || (request.channel === "mcp" && vault.write !== "mcp")) return { ...result, issues: [issue("POLICY", "vault write policy refuses this channel")] };
   const root = realpathSync(vault.path);
   if (root !== vault.path || isDenied(root, config.denyPaths)) return { ...result, issues: [issue("V06", "vault path denied or changed")] };
+  // The LINT event must land in the vault this run read and wrote, even if the registry is changed meanwhile.
+  const binding = logBinding(vault, config);
   const map = request.map ?? { enums: {}, keys: {} };
   // Only flat notes/*.md are read: .obsidian/, templates/ and self/ are never touched.
   let notes: Map<string, string>;
@@ -369,8 +371,9 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   // Validate every planned note with the writer (dry-run). A note the writer would refuse is reported and skipped
   // (left fully unchanged for manual repair) instead of blocking the rest of the migration.
   for (const change of [...planned]) {
-    const dry = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", dryRun: true, log: false }, { env: options.env });
+    const dry = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", dryRun: true, log: false }, { env: options.env, binding });
     const errors = dry.issues.filter(found => found.severity === "error");
+    if (errors.some(found => found.code === "VAULT_DRIFT")) return { ...result, issues: errors.filter(found => found.code === "VAULT_DRIFT") };
     if (!errors.length) continue;
     planned.splice(planned.indexOf(change), 1);
     result.reported.push({ path: change.path, message: `skipped: the writer refuses the sanitized note (${[...new Set(errors.map(found => found.code))].join(", ")}); repair by hand` });
@@ -385,18 +388,22 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   if (request.confirm !== true) return { ...result, ok: true, preview: true };
   if (request.fingerprint !== result.fingerprint) return { ...result, issues: [issue("V09", "stale or missing preview fingerprint")] };
   for (const change of planned) {
-    const receipt = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", expectedShas: { [change.path]: sha256(change.before) }, log: false }, { env: options.env });
-    if (!receipt.ok || !receipt.applied) return { ...result, issues: receipt.issues.length ? receipt.issues : [issue("IO", "note write failed", change.path)] };
+    const receipt = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", expectedShas: { [change.path]: sha256(change.before) }, log: false }, { env: options.env, binding });
+    // Notes written before a failure stay committed, so the result reports them as applied.
+    if (!receipt.ok || !receipt.applied) {
+      if (receipt.applied) result.written.push(change.path); // committed, then a later step of the write failed
+      return { ...result, applied: result.written.length > 0, issues: receipt.issues.length ? receipt.issues : [issue("IO", "note write failed", change.path)] };
+    }
     result.written.push(change.path);
   }
   if (logPlan) {
-    if (isDenied(join(root, "log"), loadRegistry(home).denyPaths)) return { ...result, issues: [issue("V06", "the vault log is denied by the path policy; log not rewritten")] };
+    if (isDenied(join(root, "log"), loadRegistry(home).denyPaths)) return { ...result, applied: result.written.length > 0, issues: [issue("V06", "the vault log is denied by the path policy; log not rewritten")] };
     try { rewriteLog(root, logPlan.before, logPlan.text); result.written.push("log"); }
-    catch (error) { return { ...result, issues: [issue("LOG", error instanceof Error ? error.message.slice(0, 200) : "log rewrite failed")] }; }
+    catch (error) { return { ...result, applied: result.written.length > 0, issues: [issue("LOG", error instanceof Error ? error.message.slice(0, 200) : "log rewrite failed")] }; }
   }
   const counted = Object.values(result.counts).reduce((sum, n) => sum + n, 0);
   if (planned.length || logPlan) {
-    const receipt = appendLog(home, { vault: vault.id, event: { type: "LINT", project: "-", source: "vmem:tidy", note: result.event! }, channel: request.channel ?? "cli" }, { env: options.env });
+    const receipt = appendLog(home, { vault: vault.id, event: { type: "LINT", project: "-", source: "vmem:tidy", note: result.event! }, channel: request.channel ?? "cli" }, { env: options.env, binding });
     if (!receipt.ok) return { ...result, applied: true, issues: receipt.issues };
   }
   return { ...result, ok: true, applied: result.written.length > 0 || counted > 0 };

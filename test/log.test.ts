@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, ftruncateSync, closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendLog, readLog, LOG_LOCK, MAX_LOG_READ_BYTES, MAX_LOG_RESULT_BYTES } from "../src/vault-log.ts";
+import { logBinding, appendLog, readLog, LOG_LOCK, MAX_LOG_READ_BYTES, MAX_LOG_RESULT_BYTES } from "../src/vault-log.ts";
 import { formatLogEvent } from "../src/log-format.ts";
 import { addVault } from "../src/registry.ts";
 import { applyWrite } from "../src/writer.ts";
@@ -140,4 +140,14 @@ test("grep refuses catastrophic regex syntax and safely evaluates repeated atom 
   const f = fixture(); writeFileSync(f.file, "a".repeat(4000) + "!\n");
   expect(readLog(f.home, { vault: "test", grep: "(a+)+$" })).toMatchObject({ ok: false, lines: [] });
   expect(readLog(f.home, { vault: "test", grep: "a*a*a*a*a*b$" })).toMatchObject({ ok: true, lines: [] });
+});
+
+test("a bound append reports any re-registration as LOG_DRIFT before policy and path checks", () => {
+  for (const change of [{ write: "none" }, { path: "/nonexistent-vmem-rebind" }]) {
+    const f = fixture(), config = JSON.parse(readFileSync(join(f.home, "vmem.config.json"), "utf8"));
+    const binding = logBinding(structuredClone(config.vaults[0]), config);
+    Object.assign(config.vaults[0], change); writeFileSync(join(f.home, "vmem.config.json"), JSON.stringify(config));
+    const receipt = appendLog(f.home, { vault: "test", event: { type: "EXTRACT", project: "-", source: "synthetic:source", note: "Synthetic event" } }, { env: {}, binding });
+    expect(receipt.ok).toBe(false); expect(receipt.issues.map(i => i.code)).toEqual(["LOG_DRIFT"]);
+  }
 });

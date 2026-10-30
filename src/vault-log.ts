@@ -7,6 +7,7 @@ import { canonicalPath, isDenied } from "./platform.ts";
 import { formatLogEvent, LOG_TYPES } from "./log-format.ts";
 import type { LogBinding, LogContext, LogReadOptions, LogReadResult, LogReceipt, LogRequest } from "./log-types.ts";
 import type { WriteIssue } from "./write-types.ts";
+import type { VaultSpec, VmemConfig } from "./config.ts";
 export const LOG_LOCK = "log.lock";
 export const MAX_LOG_READ_BYTES = 32 * 1024 * 1024;
 export const LARGE_LOG_LINES = 20000;
@@ -64,13 +65,32 @@ function context(home: string, id: string, channel: "cli" | "mcp" | undefined, w
   return { vault, config, channel, ...(write && vault.registry ? { projectIds: registryIds(vault.registry, config.denyPaths) } : {}) };
 }
 /** One O_APPEND write per event. A separate cooperative lock permits safe short-write rollback. */
+/** Bind a later append to the vault spec, path policy and root identity resolved now (refused with LOG_DRIFT if they change). */
+export function logBinding(vault: VaultSpec, config: VmemConfig): LogBinding {
+  const identity = lstatSync(vault.path);
+  return { vault, denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], dev: Number(identity.dev), ino: Number(identity.ino) };
+}
+/** True when the registered vault still equals the binding: spec, path policy and root identity. Never throws. */
+export function matchesBinding(config: VmemConfig, id: string, binding: LogBinding): boolean {
+  const vault = config.vaults.find(v => v.id === id);
+  if (!vault || JSON.stringify(vault) !== JSON.stringify(binding.vault) || JSON.stringify(config.denyPaths ?? []) !== JSON.stringify(binding.denyPaths) || JSON.stringify(config.piiPatterns ?? []) !== JSON.stringify(binding.piiPatterns)) return false;
+  try { const identity = lstatSync(vault.path); return Number(identity.dev) === binding.dev && Number(identity.ino) === binding.ino; } catch { return false; }
+}
 export function appendLog(home: string, request: LogRequest, options: { env?: NodeJS.ProcessEnv; now?: Date; binding?: LogBinding } = {}): LogReceipt {
   const result: LogReceipt = { ok: false, appended: false, synced: false, bytesWritten: 0, issues: [] };
   let fd: number | undefined, lockFd: number | undefined, lockFile: string | undefined, identity: { ino: number; dev: number } | undefined;
   const error = (code: string, message: string) => result.issues.push({ code, severity: "error", message });
   try {
     if (!request || typeof request !== "object" || typeof request.vault !== "string" || Object.keys(request).some(key => !["vault", "event", "channel"].includes(key))) refuse("L09", "invalid log request");
-    const ctx = context(home, request.vault, request.channel, true);
+    // A bound append compares the registry first, so any re-registration reads as drift rather than a policy or path error.
+    if (options.binding && !matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("LOG_DRIFT", "vault identity or policy changed after mutation; log not appended");
+    let ctx: ReturnType<typeof context>;
+    try { ctx = context(home, request.vault, request.channel, true); }
+    catch (caught) {
+      // A re-registration between the binding check and this second registry read still reads as drift.
+      if (options.binding && !matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("LOG_DRIFT", "vault identity or policy changed after mutation; log not appended");
+      throw caught;
+    }
     const rootIdentity = lstatSync(ctx.vault.path);
     if (options.binding) {
       const bound = options.binding;

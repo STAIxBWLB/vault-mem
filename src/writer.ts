@@ -1,4 +1,4 @@
-import { appendLog } from "./vault-log.ts";
+import { appendLog, matchesBinding } from "./vault-log.ts";
 import type { LogEvent } from "./log-types.ts";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -12,6 +12,7 @@ import { canonicalPath, isDenied } from "./platform.ts";
 import { moveSourcePath, notePath, planOperation, refuse, WriteRefusal } from "./write-operations.ts";
 import { validateWrite } from "./write-validation.ts";
 import type { PiiSurface } from "./config.ts";
+import type { LogBinding } from "./log-types.ts";
 import type { ChangeReceipt, PlannedChange, WriteIssue, WriteReceipt, WriteRequest } from "./write-types.ts";
 export const MUTATION_LOCK = "mutation.lock";
 export const MAX_WRITE_BYTES = 256 * 1024;
@@ -112,7 +113,8 @@ function duplicateWarnings(request: WriteRequest, notes: Map<string, string>, ch
   } finally { db.close(); }
 }
 /** Single mutation entry point. Preview/dry-run perform no writes, including locks and caches. */
-export function applyWrite(home: string, request: WriteRequest, options: { env?: NodeJS.ProcessEnv; piiSurface?: PiiSurface } = {}): WriteReceipt {
+/** `options.binding` (internal callers composing several writes) refuses with VAULT_DRIFT unless the registry still matches it. */
+export function applyWrite(home: string, request: WriteRequest, options: { env?: NodeJS.ProcessEnv; piiSurface?: PiiSurface; binding?: LogBinding } = {}): WriteReceipt {
   let lockFd: number | undefined, lockFile: string | undefined, lockIdentity: { ino: number; dev: number } | undefined;
   let index: VaultIndex | undefined;
   const temps = new Set<string>(), createdDirs: string[] = [], committed: PlannedChange[] = [];
@@ -125,6 +127,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     if (request.expectedShas !== undefined && (!request.expectedShas || typeof request.expectedShas !== "object" || Array.isArray(request.expectedShas))) refuse("V09", "expectedShas must be a mapping");
     if (request.channel !== undefined && !["cli", "mcp"].includes(request.channel)) refuse("POLICY", "unknown write channel");
     const config = loadRegistry(home), vault = config.vaults.find(value => value.id === request.vault);
+    if (options.binding && !matchesBinding(config, request.vault, options.binding)) refuse("VAULT_DRIFT", "vault identity or policy changed since the run started; nothing written");
     if (!vault) refuse("V04", "unknown vault id");
     if (request.operation.op !== "check" && (vault.write === "none" || (request.channel === "mcp" && vault.write !== "mcp"))) refuse("POLICY", "vault write policy refuses this channel");
     root = realpathSync(vault.path);
@@ -155,6 +158,8 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     if (!issues.some(issue => issue.severity === "error")) issues.push(...duplicateWarnings(request, notes, changes));
     const input = { vault: request.vault, channel: request.channel ?? "cli", operation: request.operation, expectedShas: request.expectedShas ?? {}, log: request.log ?? null };
     const identity = lstatSync(root);
+    // The identity every later commit check uses must still be the bound root, not a directory swapped in meanwhile.
+    if (options.binding && (Number(identity.dev) !== options.binding.dev || Number(identity.ino) !== options.binding.ino)) refuse("VAULT_DRIFT", "vault root changed since the run started; nothing written");
     fingerprint = sha256(canonical({ input, vault, policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], piiSurface: options.piiSurface ?? "notes" }, root, identity: [identity.dev, identity.ino], files: [...notes].map(([path, text]) => [path, sha256(text)]), changes: receipts(changes) }));
     if (twoStep && request.confirm === true && (typeof request.fingerprint !== "string" || request.fingerprint !== fingerprint)) refuse("V09", "stale or missing preview fingerprint");
     if (issues.some(issue => issue.severity === "error")) return result = { ok: false, applied: false, issues, changes: receipts(changes), fingerprint, indexUpdated: false };
