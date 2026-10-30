@@ -9,6 +9,7 @@ import { analysisInput } from "../src/analysis-input.ts";
 import { lintVault } from "../src/vault-lint.ts";
 import { buildGraph } from "../src/vault-graph.ts";
 import { applyWrite } from "../src/writer.ts";
+import { LOG_LOCK } from "../src/vault-log.ts";
 import { run } from "../src/cli.ts";
 
 // Synthetic fixture only: every note body below is invented for the test.
@@ -352,4 +353,14 @@ test("tidy reports drift before its first dry run as a whole-run error and keeps
   expect(result.ok).toBe(false); expect(result.applied).toBe(true); expect(result.written).toEqual(["notes/no-topics.md"]);
   expect(result.issues.some((i: { code: string }) => i.code === "VAULT_DRIFT")).toBe(true);
   expect(f.read("zz-no-topics")).not.toContain("## Topics");
+});
+
+test("a log rewrite that lands before its lock removal fails is reported as written and applied", () => {
+  const f = fixture();
+  const child = Bun.spawnSync([process.execPath, "test/fixtures/commit-fault.ts", f.home, "tidy-log", join(f.vault, LOG_LOCK)], { stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode).toBe(0);
+  const result = JSON.parse(child.stdout.toString());
+  expect(result.ok).toBe(false); expect(result.applied).toBe(true); expect(result.written).toEqual(["log"]);
+  expect(result.issues.some((i: { code: string }) => i.code === "LOG")).toBe(true);
+  expect(readFileSync(join(f.vault, "log"), "utf8")).not.toContain(TOKEN);
 });

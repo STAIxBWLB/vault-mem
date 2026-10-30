@@ -252,7 +252,8 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   if (request.fingerprint !== result.fingerprint) return { ...result, issues: [issue("V09", "stale or missing preview fingerprint")] };
   const event = { type: "SYNC", project: request.logProject ?? "-", source: `${source.id}:${path}`, dest: `${target.id}:${targetPath}`, note: `promoted: ${typeof parsed.data.type === "string" ? parsed.data.type : "note"}` };
   const note = applyWrite(home, { vault: target.id, operation: { op: "create", path: targetPath, frontmatter: {}, body: text }, channel: request.channel ?? "cli", log: false }, { env: options.env, piiSurface: "promotion", binding: bindings.target });
-  if (!note.ok || !note.applied) return { ...result, note, issues: note.issues };
+  // A create that committed and then failed a later step (cleanup) is still a written org note.
+  if (!note.ok || !note.applied) return { ...result, applied: note.applied === true, note, issues: note.issues };
   const provenance = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set: provenanceSet }, channel: request.channel ?? "cli", log: false }, { env: options.env, binding: bindings.source });
   const logs = { source: null as LogReceipt | null, target: null as LogReceipt | null };
   for (const [key, vault] of [["target", target], ["source", source]] as const) {
