@@ -390,7 +390,10 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   for (const change of planned) {
     const receipt = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", expectedShas: { [change.path]: sha256(change.before) }, log: false }, { env: options.env, binding });
     // Notes written before a failure stay committed, so the result reports them as applied.
-    if (!receipt.ok || !receipt.applied) return { ...result, applied: result.written.length > 0, issues: receipt.issues.length ? receipt.issues : [issue("IO", "note write failed", change.path)] };
+    if (!receipt.ok || !receipt.applied) {
+      if (receipt.applied) result.written.push(change.path); // committed, then a later step of the write failed
+      return { ...result, applied: result.written.length > 0, issues: receipt.issues.length ? receipt.issues : [issue("IO", "note write failed", change.path)] };
+    }
     result.written.push(change.path);
   }
   if (logPlan) {
