@@ -158,6 +158,8 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     if (!issues.some(issue => issue.severity === "error")) issues.push(...duplicateWarnings(request, notes, changes));
     const input = { vault: request.vault, channel: request.channel ?? "cli", operation: request.operation, expectedShas: request.expectedShas ?? {}, log: request.log ?? null };
     const identity = lstatSync(root);
+    // The identity every later commit check uses must still be the bound root, not a directory swapped in meanwhile.
+    if (options.binding && (Number(identity.dev) !== options.binding.dev || Number(identity.ino) !== options.binding.ino)) refuse("VAULT_DRIFT", "vault root changed since the run started; nothing written");
     fingerprint = sha256(canonical({ input, vault, policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], piiSurface: options.piiSurface ?? "notes" }, root, identity: [identity.dev, identity.ino], files: [...notes].map(([path, text]) => [path, sha256(text)]), changes: receipts(changes) }));
     if (twoStep && request.confirm === true && (typeof request.fingerprint !== "string" || request.fingerprint !== fingerprint)) refuse("V09", "stale or missing preview fingerprint");
     if (issues.some(issue => issue.severity === "error")) return result = { ok: false, applied: false, issues, changes: receipts(changes), fingerprint, indexUpdated: false };

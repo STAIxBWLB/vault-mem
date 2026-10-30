@@ -373,6 +373,7 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   for (const change of [...planned]) {
     const dry = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", dryRun: true, log: false }, { env: options.env, binding });
     const errors = dry.issues.filter(found => found.severity === "error");
+    if (errors.some(found => found.code === "VAULT_DRIFT")) return { ...result, issues: errors.filter(found => found.code === "VAULT_DRIFT") };
     if (!errors.length) continue;
     planned.splice(planned.indexOf(change), 1);
     result.reported.push({ path: change.path, message: `skipped: the writer refuses the sanitized note (${[...new Set(errors.map(found => found.code))].join(", ")}); repair by hand` });
@@ -388,7 +389,8 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   if (request.fingerprint !== result.fingerprint) return { ...result, issues: [issue("V09", "stale or missing preview fingerprint")] };
   for (const change of planned) {
     const receipt = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", expectedShas: { [change.path]: sha256(change.before) }, log: false }, { env: options.env, binding });
-    if (!receipt.ok || !receipt.applied) return { ...result, issues: receipt.issues.length ? receipt.issues : [issue("IO", "note write failed", change.path)] };
+    // Notes written before a failure stay committed, so the result reports them as applied.
+    if (!receipt.ok || !receipt.applied) return { ...result, applied: result.written.length > 0, issues: receipt.issues.length ? receipt.issues : [issue("IO", "note write failed", change.path)] };
     result.written.push(change.path);
   }
   if (logPlan) {

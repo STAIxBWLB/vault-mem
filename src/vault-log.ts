@@ -84,7 +84,13 @@ export function appendLog(home: string, request: LogRequest, options: { env?: No
     if (!request || typeof request !== "object" || typeof request.vault !== "string" || Object.keys(request).some(key => !["vault", "event", "channel"].includes(key))) refuse("L09", "invalid log request");
     // A bound append compares the registry first, so any re-registration reads as drift rather than a policy or path error.
     if (options.binding && !matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("LOG_DRIFT", "vault identity or policy changed after mutation; log not appended");
-    const ctx = context(home, request.vault, request.channel, true);
+    let ctx: ReturnType<typeof context>;
+    try { ctx = context(home, request.vault, request.channel, true); }
+    catch (caught) {
+      // A re-registration between the binding check and this second registry read still reads as drift.
+      if (options.binding && !matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("LOG_DRIFT", "vault identity or policy changed after mutation; log not appended");
+      throw caught;
+    }
     const rootIdentity = lstatSync(ctx.vault.path);
     if (options.binding) {
       const bound = options.binding;
