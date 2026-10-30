@@ -113,7 +113,7 @@ describe("registry", () => {
 describe("CLI", () => {
   test("help/version and closed argument parsing", () => {
     expect(run(["--help"]).text).toContain("vaults remove");
-    expect(run(["--version"]).text).toBe("0.1.0");
+    expect(run(["--version"]).text).toBe(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
     const env = { VMEM_HOME: join(root(), "home") };
     for (const args of [["missing"], ["status", "extra"], ["status", "--confirm"], ["status", "--json", "--json"], ["vaults", "add", "x", "/tmp", "--kind"]]) expect(() => run(args, env)).toThrow();
   });

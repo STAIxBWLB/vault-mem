@@ -1,4 +1,4 @@
-import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -149,8 +149,13 @@ function readReceipt(file: string): Receipt | undefined {
   if (value?.version !== 1 || typeof value.file !== "string") throw new Error(`${file}: unreadable setup receipt`);
   return value;
 }
+/** The PATH `bun` when it runs the same binary: a versioned real path (e.g. Homebrew Cellar) disappears on upgrade. */
+export function stableRuntime(execPath: string = process.execPath, onPath: string | null = Bun.which("bun")): string {
+  if (!onPath || !isAbsolute(onPath)) return execPath;
+  try { return realpathSync(onPath) === realpathSync(execPath) ? onPath : execPath; } catch { return execPath; }
+}
 export function defaultEntry(): McpEntry {
-  return { command: process.execPath, args: ["--smol", fileURLToPath(new URL("../bin/vmem.js", import.meta.url)), "mcp"] };
+  return { command: stableRuntime(), args: ["--smol", fileURLToPath(new URL("../bin/vmem.js", import.meta.url)), "mcp"] };
 }
 /**
  * Plan, apply or undo vmem MCP registration. Dry-run writes nothing. Apply is idempotent, edits only
