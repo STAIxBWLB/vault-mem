@@ -234,9 +234,8 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
   const issues: WriteIssue[] = [], final = new Map(context.notes), touched = new Set(changes.map(change => change.path));
   const report = context.operation.op === "report";
   for (const change of changes) {
-    // Sanitize may rewrite an existing legacy-named note in place (L13 names stay until moved).
-    // Sanitize rewrites, and move removes, an existing legacy-named note (L13 names stay until moved).
-    const legacy = context.notes.has(change.path) && (context.operation.op === "sanitize" || (context.operation.op === "move" && change.after === null));
+    // Sanitize and move may touch an existing legacy-named note (L13 names stay until moved); move destinations stay strict.
+    const legacy = context.notes.has(change.path) && (context.operation.op === "sanitize" || context.operation.op === "move");
     if (!validPath(change.path, report) && !legacy) issues.push(issue("V04", "invalid mutation path"));
     if (change.after === null) final.delete(change.path);
     else if (change.path.startsWith("notes/")) final.set(change.path, change.after);

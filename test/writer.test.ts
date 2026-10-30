@@ -265,6 +265,16 @@ test("move renames a legacy-named note to a valid stem and rewrites inbound link
   expect(readFileSync(join(f.notes, "cites.md"), "utf8")).toContain("See [[a-1-5-b]] and [[a-1-5-b#Topics|label]].");
   expect(readFileSync(join(f.vault, "log"), "utf8")).toContain("notes/a-1.5-b.md → notes/a-1-5-b.md");
 });
+test("move rewrites inbound links in another legacy-named note", () => {
+  const f = fixture();
+  writeFileSync(join(f.notes, "a.1.md"), note("Legacy A", "See [[b.1]]."));
+  writeFileSync(join(f.notes, "b.1.md"), note("Legacy B", "See [[a.1]]."));
+  const op: WriteOp = { op: "move", from: "a.1", to: "a-1" }, preview = f.request(op);
+  expect(preview.ok).toBe(true);
+  expect(f.request(op, { confirm: true, fingerprint: preview.fingerprint }).applied).toBe(true);
+  expect(readFileSync(join(f.notes, "b.1.md"), "utf8")).toContain("See [[a-1]].");
+  expect(f.request({ op: "move", from: "b.1", to: "b.2" }).issues.some(issue => issue.code === "V04")).toBe(true);
+});
 test("move preserves explicit labels and leaves alias-only links untouched", () => {
   const f = fixture(); writeFileSync(join(f.notes, "reference.md"), note("Reference", "[[old]] [[old|Kept Label]] [[Prior Alias]]"));
   const op: WriteOp = { op: "move", from: "old", to: "renamed" }, preview = f.request(op);
