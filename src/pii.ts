@@ -50,9 +50,9 @@ export function loosenedCells(prev: PiiMatrix, next: PiiMatrix): string[] {
 const digitsOf = (value: string) => value.replace(/\D/g, "");
 const TIMESTAMP = /\b[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])[ T](?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\.[0-9]{1,3})?)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])?\b/g;
 /** Phone candidates: each exact source run and the phone numbers (as digits) found inside it. */
-export function phoneMatches(text: string): { text: string; phones: string[] }[] {
+export function phoneMatches(text: string): { text: string; index: number; phones: string[] }[] {
   // A complete ISO calendar timestamp is metadata, not a phone-number candidate; the newline keeps neighbours apart.
-  const cleaned = text.replace(TIMESTAMP, match => "\n".repeat(match.length)), out: { text: string; phones: string[] }[] = [];
+  const cleaned = text.replace(TIMESTAMP, match => "\n".repeat(match.length)), out: { text: string; index: number; phones: string[] }[] = [];
   for (const match of cleaned.matchAll(/(?<![\p{L}\p{N}])\+?\d(?:[\d ().-]{6,}\d)(?![\p{L}\p{N}])/gu)) {
     const count = digitsOf(match[0]).length, phones: string[] = [];
     if (count >= 9 && count <= 15) phones.push(digitsOf(match[0]));
@@ -67,7 +67,7 @@ export function phoneMatches(text: string): { text: string; phones: string[] }[]
         }
       }
     }
-    if (phones.length) out.push({ text: text.slice(match.index!, match.index! + match[0].length), phones });
+    if (phones.length) out.push({ text: text.slice(match.index!, match.index! + match[0].length), index: match.index!, phones });
   }
   return out;
 }
@@ -78,25 +78,42 @@ function allowedEmail(value: string, allow: string[]): boolean {
 function allowedPhone(digits: string, allow: string[]): boolean {
   return allow.some(entry => !entry.includes("@") && digitsOf(entry).length >= 9 && digitsOf(entry) === digits);
 }
-interface Finding { label: string; action: PiiAction; values: string[]; invalid?: boolean }
-/** PII findings for one surface, after the allow list. Values are exact source substrings (for redaction). */
-function findings(text: string, vault: VaultSpec, config: VmemConfig, surface: PiiSurface): Finding[] {
-  const m = piiPolicy(vault), out: Finding[] = [];
-  if (m.email[surface] !== "allow") {
-    const values = [...text.normalize("NFKC").matchAll(new RegExp(EMAIL_PATTERN.source, "gi"))].map(x => x[0]).filter(v => !allowedEmail(v, m.allow));
-    if (values.length) out.push({ label: "email", action: m.email[surface], values: [...text.matchAll(new RegExp(EMAIL_PATTERN.source, "gi"))].map(x => x[0]).filter(v => !allowedEmail(v, m.allow)) });
+interface Finding { label: string; action: PiiAction; detected: boolean; spans: [number, number][]; invalid?: boolean }
+/** Per-code-point NFKC view of `text` with a map from each view index back to its raw index (for redaction spans). */
+function normalizedView(text: string): { view: string; raw: number[] } {
+  let view = ""; const raw: number[] = [];
+  for (let i = 0; i < text.length;) {
+    const cp = text.codePointAt(i)!, ch = String.fromCodePoint(cp), n = ch.normalize("NFKC");
+    for (let k = 0; k < n.length; k++) raw.push(i);
+    view += n; i += ch.length;
   }
+  raw.push(text.length);
+  return { view, raw };
+}
+/**
+ * Detection counts every non-exempt match (zero-length included) in the raw text or its NFKC form, so look-alike
+ * forms are screened. Spans are the non-empty matches mapped back to raw positions for redaction.
+ */
+function findings(text: string, vault: VaultSpec, config: VmemConfig, surface: PiiSurface): Finding[] {
+  const m = piiPolicy(vault), out: Finding[] = [], full = text.normalize("NFKC"), { view, raw } = normalizedView(text);
+  const matches = (source: string, make: () => RegExp, exempt: (value: string) => boolean) => [...source.matchAll(make())].filter(x => !x[0] || !exempt(x[0]));
+  const toRaw = (from: number, to: number): [number, number] => [raw[from]!, to > from ? (raw[to] ?? text.length) : raw[from]!];
+  const scan = (label: string, action: PiiAction, make: () => RegExp, exempt: (value: string) => boolean) => {
+    const detected = matches(text, make, exempt).length > 0 || matches(full, make, exempt).length > 0;
+    const spans = matches(view, make, exempt).filter(x => x[0]).map(x => toRaw(x.index!, x.index! + x[0].length));
+    if (detected || spans.length) out.push({ label, action, detected: true, spans });
+  };
+  if (m.email[surface] !== "allow") scan("email", m.email[surface], () => new RegExp(EMAIL_PATTERN.source, "gi"), v => allowedEmail(v, m.allow));
   if (m.phone[surface] !== "allow") {
-    const runs = phoneMatches(text.normalize("NFKC")).filter(r => r.phones.some(p => !allowedPhone(p, m.allow)));
-    if (runs.length) out.push({ label: "phone", action: m.phone[surface], values: phoneMatches(text).filter(r => r.phones.some(p => !allowedPhone(p, m.allow))).map(r => r.text) });
+    const flagged = (source: string) => phoneMatches(source).filter(r => r.phones.some(p => !allowedPhone(p, m.allow)));
+    const spans = flagged(view).map(r => toRaw(r.index, r.index + r.text.length));
+    if (flagged(text).length || flagged(full).length || spans.length) out.push({ label: "phone", action: m.phone[surface], detected: true, spans });
   }
   const custom = (config.piiPatterns ?? []).map((regex, i) => ({ name: `custom-${i + 1}`, regex, action: m.custom[surface], flags: "" }));
   for (const p of [...custom, ...m.patterns.map(p => ({ name: p.name, regex: p.regex, action: p.action[surface], flags: "u" }))]) {
     if (p.action === "allow") continue;
-    let values: string[];
-    try { values = [...text.matchAll(new RegExp(p.regex, `${p.flags}g`))].map(x => x[0]).filter(v => v && !m.allow.some(a => a.toLowerCase() === v.toLowerCase())); }
-    catch { out.push({ label: p.name, action: "deny", values: [], invalid: true }); continue; }
-    if (values.length) out.push({ label: p.name, action: p.action, values });
+    try { new RegExp(p.regex, p.flags); } catch { out.push({ label: p.name, action: "deny", detected: true, spans: [], invalid: true }); continue; }
+    scan(p.name, p.action, () => new RegExp(p.regex, `${p.flags}g`), v => m.allow.some(a => a.toLowerCase() === v.toLowerCase()));
   }
   return out;
 }
@@ -113,15 +130,15 @@ export function screenPii(text: string, vault: VaultSpec, config: VmemConfig, su
   }
   return issues;
 }
-/** Replace values that a deny cell refuses on this surface with `[redacted]` (tidy --log). */
+/** Replace the exact spans that a deny cell refuses on this surface with `[redacted]` (tidy --log); allow-listed text is untouched. */
 export function redactPii(text: string, vault: VaultSpec, config: VmemConfig, surface: PiiSurface): { text: string; hits: number } {
-  let out = text, hits = 0;
-  for (const f of findings(text, vault, config, surface)) {
-    if (f.action !== "deny" || f.invalid) continue;
-    for (const value of [...new Set(f.values)].sort((a, b) => b.length - a.length)) {
-      const parts = out.split(value);
-      if (parts.length > 1) { hits += parts.length - 1; out = parts.join("[redacted]"); }
-    }
-  }
-  return { text: out, hits };
+  const denied = findings(text, vault, config, surface).filter(f => f.action === "deny" && !f.invalid);
+  // Detected but not locatable (a zero-length match, or a form only full-text NFKC reveals): redact the whole text.
+  if (denied.some(f => f.detected && !f.spans.length)) return text ? { text: "[redacted]", hits: 1 } : { text, hits: 0 };
+  const spans = denied.flatMap(f => f.spans).sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const merged: [number, number][] = [];
+  for (const span of spans) { const last = merged.at(-1); if (last && span[0] < last[1]) last[1] = Math.max(last[1], span[1]); else merged.push([...span]); }
+  let out = "", at = 0;
+  for (const [from, to] of merged) { out += text.slice(at, from) + "[redacted]"; at = to; }
+  return { text: out + text.slice(at), hits: merged.length };
 }

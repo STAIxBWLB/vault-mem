@@ -52,7 +52,10 @@ function cell(value: unknown, label: string): PiiCell {
     return value as PiiAction;
   }
   const record = object(value, [...PII_SURFACES], label), result: Partial<Record<PiiSurface, PiiAction>> = {};
-  for (const surface of PII_SURFACES) if (record[surface] !== undefined) result[surface] = cell(record[surface], `${label}.${surface}`) as PiiAction;
+  for (const surface of PII_SURFACES) if (record[surface] !== undefined) {
+    if (typeof record[surface] !== "string" || !ACTIONS.has(record[surface] as string)) throw new Error(`${label}.${surface}: expected allow, warn or deny`);
+    result[surface] = record[surface] as PiiAction;
+  }
   return result;
 }
 /** Validate `vault.pii`: the `allow`/`deny` shorthand or a PiiSpec object. */

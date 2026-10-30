@@ -11,6 +11,7 @@ import { addVault } from "../src/registry.ts";
 import { tidyVault } from "../src/tidy.ts";
 import { run } from "../src/cli.ts";
 import { applyWrite } from "../src/writer.ts";
+import { appendLog } from "../src/vault-log.ts";
 
 // Synthetic values only: example.invalid addresses and 010-0000-xxxx numbers.
 const roots: string[] = [];
@@ -25,7 +26,7 @@ test("parsePii accepts shorthand and objects and rejects malformed policies", ()
   expect(parsePii({ email: { log: "deny" }, allow: ["@example.invalid"] })).toEqual({ email: { log: "deny" }, allow: ["@example.invalid"] });
   for (const bad of ["warn", "block", { email: "block" }, { email: { body: "deny" } }, { other: "deny" }, { patterns: [{ name: "Bad", regex: "x" }] },
     { patterns: [{ name: "a", regex: "(" }] }, { patterns: [{ name: "a", regex: "x" }, { name: "a", regex: "y" }] },
-    { patterns: Array.from({ length: 33 }, (_, i) => ({ name: `p${i}`, regex: "x" })) }]) expect(() => parsePii(bad)).toThrow();
+    { patterns: Array.from({ length: 33 }, (_, i) => ({ name: `p${i}`, regex: "x" })) }, { email: { notes: {} } }, { email: { notes: { log: "deny" } } }]) expect(() => parsePii(bad)).toThrow();
 });
 
 test("shorthand and defaults keep the previous allow/deny behavior", () => {
@@ -119,4 +120,35 @@ test("note writes proceed with a warn cell and are refused by a deny cell", () =
   const warn = fixture({ email: { notes: "warn" } }), deny = fixture({ email: { notes: "deny" } });
   expect(create(warn.home, "contact").issues.filter(i => i.code === "V07").map(i => i.severity)).toEqual(["warning"]);
   expect(create(deny.home, "contact").issues.filter(i => i.code === "V07").map(i => i.severity)).toEqual(["error"]);
+});
+
+test("review regressions: errors survive later warnings, zero-length and look-alike matches still deny", () => {
+  // A YAML-escaped email is only visible to semantic screening; a later phone warning must not downgrade its error.
+  const f = fixture({ email: "deny", phone: "warn" });
+  writeFileSync(join(f.dir, "notes", "escaped.md"), '---\ndescription: "a\\x40example.invalid"\ntype: insight\ndomain: research\ntopics: []\naliases: ["010-0000-1234"]\n---\n# Escaped\n\nBody text.\n');
+  const patched = applyWrite(f.home, { vault: "mine", operation: { op: "patch", path: "escaped", oldString: "Body text.", newString: "Body text two." }, dryRun: true });
+  expect(patched.issues.filter(i => i.code === "V07").map(i => i.severity)).toContain("error");
+  expect(patched.ok).toBe(false);
+  // Zero-length matches deny exactly as before.
+  expect(codes(screenContent("PRIVATE", vault("deny"), { vaults: [], piiPatterns: ["(?=PRIVATE)"] }))).toEqual(["V07:error"]);
+  // Full-width look-alikes are screened and redacted.
+  const wide = "mail ａ＠ｅｘａｍｐｌｅ．ｉｎｖａｌｉｄ now";
+  expect(codes(screenContent(wide, vault({ email: { log: "deny" } }), config, "log"))).toEqual(["V07:error"]);
+  expect(redactPii(wide, vault({ email: { log: "deny" } }), config, "log").text).not.toContain("ｅｘａｍｐｌｅ");
+  // Redaction replaces only the denied span, never an allow-listed value that contains it.
+  expect(redactPii("alice@example.invalid owner-alice@example.invalid", vault({ email: { log: "deny" }, allow: ["owner-alice@example.invalid"] }), config, "log"))
+    .toEqual({ text: "[redacted] owner-alice@example.invalid", hits: 1 });
+});
+
+test("promotion writes use the promotion surface and log-append warnings reach the receipt", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-pii-org-"))); roots.push(root);
+  const home = join(root, "state"), dir = join(root, "org");
+  mkdirSync(join(dir, "notes"), { recursive: true });
+  addVault(home, { id: "team", path: dir, kind: "org", write: "cli", pii: { email: { promotion: "warn" } } });
+  const op = { op: "create", path: "shared", frontmatter: { description: "Synthetic shared note.", type: "insight", domain: "research", topics: [] }, body: "# Shared\n\nWrite to a.person@example.invalid.\n" } as const;
+  expect(applyWrite(home, { vault: "team", operation: op, dryRun: true }).issues.filter(i => i.code === "V07").map(i => i.severity)).toEqual(["error"]);
+  expect(applyWrite(home, { vault: "team", operation: op, dryRun: true }, { piiSurface: "promotion" }).issues.filter(i => i.code === "V07").map(i => i.severity)).toEqual(["warning"]);
+  const f = fixture({ email: { log: "warn" } });
+  const receipt = appendLog(f.home, { vault: "mine", event: { type: "LEARN", project: "-", source: "a", note: "mail a.person@example.invalid" } }, { env: f.env });
+  expect(receipt.ok).toBe(true); expect(receipt.issues.map(i => `${i.code}:${i.severity}`)).toEqual(["V07:warning"]);
 });

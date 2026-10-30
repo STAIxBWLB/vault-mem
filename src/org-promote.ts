@@ -234,7 +234,7 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   const refusing = screen.filter(found => found.severity === "error");
   result.screen = { passed: refusing.length === 0, issues: screen };
   if (refusing.length) return { ...result, issues: screen };
-  const planned = applyWrite(home, { vault: target.id, operation: { op: "create", path: targetPath, frontmatter: {}, body: text }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env });
+  const planned = applyWrite(home, { vault: target.id, operation: { op: "create", path: targetPath, frontmatter: {}, body: text }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env, piiSurface: "promotion" });
   const provenanceSet = { promoted_to: prior.length ? [...prior.filter(p => p !== promotedTo), promotedTo] : promotedTo };
   const provenanceText = emitFrontmatter(parsed, provenanceSet);
   const provenancePlan = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set: provenanceSet }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env });
@@ -247,7 +247,7 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   if (request.confirm !== true) return { ...result, ok: true, preview: true, issues: [...planned.issues, ...provenancePlan.issues] };
   if (request.fingerprint !== result.fingerprint) return { ...result, issues: [issue("V09", "stale or missing preview fingerprint")] };
   const event = { type: "SYNC", project: request.logProject ?? "-", source: `${source.id}:${path}`, dest: `${target.id}:${targetPath}`, note: `promoted: ${typeof parsed.data.type === "string" ? parsed.data.type : "note"}` };
-  const note = applyWrite(home, { vault: target.id, operation: { op: "create", path: targetPath, frontmatter: {}, body: text }, channel: request.channel ?? "cli", log: false }, { env: options.env });
+  const note = applyWrite(home, { vault: target.id, operation: { op: "create", path: targetPath, frontmatter: {}, body: text }, channel: request.channel ?? "cli", log: false }, { env: options.env, piiSurface: "promotion" });
   if (!note.ok || !note.applied) return { ...result, note, issues: note.issues };
   const provenance = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set: provenanceSet }, channel: request.channel ?? "cli", log: false }, { env: options.env });
   const logs = { source: null as LogReceipt | null, target: null as LogReceipt | null };

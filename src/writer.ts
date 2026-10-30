@@ -11,6 +11,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { moveSourcePath, notePath, planOperation, refuse, WriteRefusal } from "./write-operations.ts";
 import { validateWrite } from "./write-validation.ts";
+import type { PiiSurface } from "./config.ts";
 import type { ChangeReceipt, PlannedChange, WriteIssue, WriteReceipt, WriteRequest } from "./write-types.ts";
 export const MUTATION_LOCK = "mutation.lock";
 export const MAX_WRITE_BYTES = 256 * 1024;
@@ -111,7 +112,7 @@ function duplicateWarnings(request: WriteRequest, notes: Map<string, string>, ch
   } finally { db.close(); }
 }
 /** Single mutation entry point. Preview/dry-run perform no writes, including locks and caches. */
-export function applyWrite(home: string, request: WriteRequest, options: { env?: NodeJS.ProcessEnv } = {}): WriteReceipt {
+export function applyWrite(home: string, request: WriteRequest, options: { env?: NodeJS.ProcessEnv; piiSurface?: PiiSurface } = {}): WriteReceipt {
   let lockFd: number | undefined, lockFile: string | undefined, lockIdentity: { ino: number; dev: number } | undefined;
   let index: VaultIndex | undefined;
   const temps = new Set<string>(), createdDirs: string[] = [], committed: PlannedChange[] = [];
@@ -150,11 +151,11 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     }
     changes = planOperation(request.operation, notes, reportBefore);
     for (const change of changes) if (isDenied(join(root, change.path), config.denyPaths)) refuse("V06", "planned mutation path is denied", change.path);
-    issues = validateWrite(changes, { vault, config, notes, operation: request.operation });
+    issues = validateWrite(changes, { vault, config, notes, operation: request.operation, ...(options.piiSurface ? { piiSurface: options.piiSurface } : {}) });
     if (!issues.some(issue => issue.severity === "error")) issues.push(...duplicateWarnings(request, notes, changes));
     const input = { vault: request.vault, channel: request.channel ?? "cli", operation: request.operation, expectedShas: request.expectedShas ?? {}, log: request.log ?? null };
     const identity = lstatSync(root);
-    fingerprint = sha256(canonical({ input, vault, policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [] }, root, identity: [identity.dev, identity.ino], files: [...notes].map(([path, text]) => [path, sha256(text)]), changes: receipts(changes) }));
+    fingerprint = sha256(canonical({ input, vault, policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], piiSurface: options.piiSurface ?? "notes" }, root, identity: [identity.dev, identity.ino], files: [...notes].map(([path, text]) => [path, sha256(text)]), changes: receipts(changes) }));
     if (twoStep && request.confirm === true && (typeof request.fingerprint !== "string" || request.fingerprint !== fingerprint)) refuse("V09", "stale or missing preview fingerprint");
     if (issues.some(issue => issue.severity === "error")) return result = { ok: false, applied: false, issues, changes: receipts(changes), fingerprint, indexUpdated: false };
     if (preview) return result = { ok: true, applied: false, preview: true, ...(request.operation.op === "link" && !changes.length ? {unchanged:true} : {}), issues, changes: receipts(changes), fingerprint, indexUpdated: false };

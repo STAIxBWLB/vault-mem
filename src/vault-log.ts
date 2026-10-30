@@ -78,6 +78,7 @@ export function appendLog(home: string, request: LogRequest, options: { env?: No
     }
     const formatted = formatLogEvent(request.event, { ...ctx, env: options.env ?? process.env, now: options.now });
     if (!formatted.line || formatted.issues.some(issue => issue.severity === "error")) { result.issues.push(...formatted.issues); return result; }
+    result.issues.push(...formatted.issues); // nonblocking warnings (for example a log-surface PII warn cell)
     const buffer = Buffer.from(formatted.line), root = ctx.vault.path;
     lockFile = join(root, LOG_LOCK);
     const deadline = Date.now() + 2000, sleeper = new Int32Array(new SharedArrayBuffer(4));

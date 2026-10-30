@@ -49,7 +49,8 @@ function screenMetadata(data:Record<string,unknown>,context:ValidationContext,pa
   const found=new Map<string,WriteIssue>(),active=new WeakSet<object>();let nodes=0,bytes=0;
   const inspect=(text:string)=>{
     bytes+=Buffer.byteLength(text);if(bytes>MAX_BYTES*4)throw new Error("budget");
-    for(const item of screenContent(text,context.vault,context.config))found.set(item.code,{...item,path});
+    // One issue per code; an error is never downgraded by a later warning of the same code.
+    for(const item of screenContent(text,context.vault,context.config,context.piiSurface)){const prior=found.get(item.code);if(!prior||(prior.severity!=="error"&&item.severity==="error"))found.set(item.code,{...item,path});}
   };
   const visit=(value:unknown,key:string|undefined,depth:number):void=>{
     if(++nodes>10000||depth>32)throw new Error("budget");
@@ -209,7 +210,7 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
     else if (change.path.startsWith("notes/")) final.set(change.path, change.after);
     if (change.after === null) continue;
     if (Buffer.byteLength(change.after) > MAX_BYTES) issues.push(issue("V09", "prospective file exceeds 256 KiB", "error", change.path));
-    issues.push(...screenContent(change.after, context.vault, context.config).map(value => ({ ...value, path: change.path })));
+    issues.push(...screenContent(change.after, context.vault, context.config, context.piiSurface).map(value => ({ ...value, path: change.path })));
     try{issues.push(...screenMetadata(parseFrontmatter(change.after).data,context,change.path));}catch{ /* Invalid note YAML is reported separately; reports remain schema-exempt. */ }
   }
   const sourceRoot=sourceWorkspaceRoot(context.vault);
