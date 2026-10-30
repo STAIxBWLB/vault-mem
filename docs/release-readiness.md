@@ -1,7 +1,7 @@
 # Release readiness evidence
 
-- Status: 0.1.0 publication candidate. Package, parity, private-corpus and native fixture gates passed; npm trust/environment setup and live cutover remain open.
-- Contract: [issue #11](https://github.com/STAIxBWLB/vault-mem/issues/11). No host registration or live vault write was performed. Publication follows the release workflow once the npm prerequisites are in place.
+- Status: 0.1.0 published to npm on 2026-10-30. Package, parity, private-corpus and native fixture gates passed; live cutover remains open.
+- Contract: [issue #11](https://github.com/STAIxBWLB/vault-mem/issues/11). No host registration or live vault write was performed. Publication does not authorize registration or cutover.
 - Runtime and method digests in the raw evidence bind measurements to source bytes. Evidence-only documentation changes do not alter measured runtime; a runtime/method change requires a new measurement.
 
 ## Verification record
@@ -9,7 +9,7 @@
 | Gate | Current evidence | Status |
 |---|---|---|
 | Strict TypeScript, boundaries, tests, package dry-run | 0.1.0 candidate source `3b005e8`: local `bun run check` (204 pass, boundary ok, package smoke) and `bun run release:verify` passed; tag validation reruns both on Linux/macOS | Candidate passed |
-| Exact-head Linux/macOS CI | Both OS jobs remain in Check; tag workflow validates the triggering commit on both OSes | Hosted candidate result pending |
+| Exact-head Linux/macOS CI | Tag `v0.1.0` (`6ebf691`) [release run 40977053105](https://github.com/STAIxBWLB/vault-mem/actions/runs/40977053105): Linux and macOS validation passed, including `release:verify` | Passed |
 | Clean installed CLI/MCP | Fresh consumer install of packed tarball, exact installed byte comparison, CLI version/help/create/search, MCP read/tools and stale-fingerprint refusal | Bun and npm tarball installations passed |
 | Frontmatter round-trip | Four release fixture notes, original comments/folded descriptions/Unicode retained byte-identically | Provider fixture passed |
 | Incremental index vs rebuild | Baseline/create/edit/rename/delete compare notes, FTS and links | Provider fixture passed |
@@ -18,7 +18,7 @@
 | Consumer graph loading | [Consumer record](evidence/consumer.json), actual Maru enrichGraph module loads emitted fixture and overlays communities | Module readback passed; UI unverified |
 | Agent/non-TTY and stale preview | Existing CLI/MCP regression suite plus clean installed package smoke | Candidate suite required |
 | Representative private-vault write p95 <150 ms | CLI patch round-trip including startup on a copy of the authorized private vault: p95 139.0 ms over 30 samples at `3b005e8` (125.1 ms at `5634406`; 222 ms before PR #28) (evidence kept private) | Passed |
-| npm trust/environment/public package | Workflow authored; `npm-production` environment, `NPM_PUBLISH_ENABLED` and the npm trusted publisher are not configured, and `@staix/vault-mem` does not exist on npm yet | Person-only setup pending |
+| npm trust/environment/public package | `@staix/vault-mem@0.1.0` published by GitHub Actions OIDC from the `npm-production` environment (required reviewer, `v*` tags only) with provenance; dist-tag `latest`. Registry tarball SHA-256 `b3fd27d2…` equals the validated artifact; `npm audit signatures` verified; clean install reports `vmem --version` 0.1.0. A `0.0.0-bootstrap.0` placeholder (dist-tag `bootstrap`) created the package so the trusted publisher could be configured | Published |
 | Reader/host/live writer integration | Separate parent-plan acceptance; no cutover attempted | Unverified |
 
 ## Performance record
