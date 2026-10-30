@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runSetup, SETUP_TARGETS } from "../src/setup.ts";
+import { runSetup, SETUP_TARGETS, stableRuntime } from "../src/setup.ts";
 import { completionDefinitions, completionScript, COMMANDS } from "../src/commands-table.ts";
 import { run } from "../src/cli.ts";
 const roots: string[] = [];
@@ -193,4 +193,14 @@ test("blank-line runs outside the vmem tables survive apply and undo byte for by
     if (source.includes("[profiles.a]")) expect(readFileSync(file, "utf8")).toBe(source);
     else expect(Bun.TOML.parse(readFileSync(file, "utf8"))).toEqual(Bun.TOML.parse(source));
   }
+});
+test("setup registers the PATH bun when it is the same binary, else the real runtime path", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "vmem-runtime-"))), link = join(dir, "bun"), other = join(dir, "other");
+  try {
+    symlinkSync(process.execPath, link); writeFileSync(other, "");
+    expect(stableRuntime(process.execPath, link)).toBe(link);
+    expect(stableRuntime(process.execPath, other)).toBe(process.execPath);
+    expect(stableRuntime(process.execPath, null)).toBe(process.execPath);
+    expect(stableRuntime(process.execPath, "bun")).toBe(process.execPath);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
