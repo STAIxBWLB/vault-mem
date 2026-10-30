@@ -322,3 +322,13 @@ test("the promoted note cannot land in another vault when the target id is re-re
   expect(existsSync(join(rebound, "team", "notes", "shared-method.md"))).toBe(false);
   expect(existsSync(join(f.org, "notes", "shared-method.md"))).toBe(false);
 });
+
+test("a promoted note that commits before its lock removal fails is reported as applied", () => {
+  const f = fixture();
+  const child = Bun.spawnSync([process.execPath, "test/fixtures/commit-fault.ts", f.home, "promote", join(f.org, "mutation.lock")], { stdout: "pipe", stderr: "pipe", env: f.env });
+  expect(child.exitCode).toBe(0);
+  const result = JSON.parse(child.stdout.toString());
+  expect(result.ok).toBe(false); expect(result.applied).toBe(true);
+  expect(result.issues.some((i: { code: string }) => i.code === "CLEANUP")).toBe(true);
+  expect(existsSync(join(f.org, "notes", "shared-method.md"))).toBe(true);
+});

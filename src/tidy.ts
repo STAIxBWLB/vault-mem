@@ -300,8 +300,11 @@ function sanitizeLog(text: string, vault: VaultSpec, config: VmemConfig): { text
   }).join("\n");
   return { text: out, lines, redactions, formats, changes };
 }
-/** Replace the log under its own lock, atomically (the one sanctioned in-place rewrite of the append-only log). */
-function rewriteLog(root: string, expected: string, next: string): void {
+/**
+ * Replace the log under its own lock, atomically (the one sanctioned in-place rewrite of the append-only log).
+ * `state.committed` turns true once the rename lands, so a caller can tell a later failure (fsync, lock removal) apart.
+ */
+function rewriteLog(root: string, expected: string, next: string, state: { committed: boolean }): void {
   const lock = join(root, LOG_LOCK);
   const fd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   let temp: string | undefined;
@@ -311,7 +314,7 @@ function rewriteLog(root: string, expected: string, next: string): void {
     temp = join(root, `.vmem-log-${randomUUID()}.tmp`);
     const tfd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     try { writeFileSync(tfd, next); fsyncSync(tfd); } finally { closeSync(tfd); }
-    renameSync(temp, join(root, "log")); temp = undefined;
+    renameSync(temp, join(root, "log")); temp = undefined; state.committed = true;
     syncDirectory(root);
   } finally {
     if (temp) try { unlinkSync(temp); } catch { /* best effort */ }
@@ -398,8 +401,12 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   }
   if (logPlan) {
     if (isDenied(join(root, "log"), loadRegistry(home).denyPaths)) return { ...result, applied: result.written.length > 0, issues: [issue("V06", "the vault log is denied by the path policy; log not rewritten")] };
-    try { rewriteLog(root, logPlan.before, logPlan.text); result.written.push("log"); }
-    catch (error) { return { ...result, applied: result.written.length > 0, issues: [issue("LOG", error instanceof Error ? error.message.slice(0, 200) : "log rewrite failed")] }; }
+    const state = { committed: false };
+    try { rewriteLog(root, logPlan.before, logPlan.text, state); result.written.push("log"); }
+    catch (error) {
+      if (state.committed) result.written.push("log"); // the new log is in place; a later step failed
+      return { ...result, applied: result.written.length > 0, issues: [issue("LOG", error instanceof Error ? error.message.slice(0, 200) : "log rewrite failed")] };
+    }
   }
   const counted = Object.values(result.counts).reduce((sum, n) => sum + n, 0);
   if (planned.length || logPlan) {
