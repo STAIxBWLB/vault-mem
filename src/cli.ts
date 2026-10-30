@@ -7,7 +7,8 @@ import { version } from "../package.json";
 import { completionScript, help } from "./commands-table.ts";
 import { runSetup, type SetupMode } from "./setup.ts";
 import { resolveHome } from "./home.ts";
-import { addVault, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault } from "./registry.ts";
+import { addVault, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault, setVaultPii } from "./registry.ts";
+import { piiPolicy } from "./pii.ts";
 function parse(args: string[], allowed: string[], values: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -43,8 +44,8 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
   if (isReadCommand(args[0]!)) return runReadCommand(args[0]!, args.slice(1), resolveHome(env).home);
   const command = args[0] === "vaults" ? `vaults ${args[1] ?? ""}` : args[0];
   const tail = args.slice(args[0] === "vaults" ? 2 : 1);
-  const options = command === "vaults add" ? ["--kind", "--write", "--pii", "--remote", "--registry"] : [];
-  const { flags, positional } = parse(tail, ["--json", ...options, ...(command === "vaults remove" || command === "recover" ? ["--confirm"] : [])], options);
+  const options = command === "vaults add" ? ["--kind", "--write", "--pii", "--remote", "--registry"] : command === "vaults pii" ? ["--set"] : [];
+  const { flags, positional } = parse(tail, ["--json", ...options, ...(command === "vaults remove" || command === "vaults pii" || command === "recover" ? ["--confirm"] : [])], options);
   const home = resolveHome(env);
   let result: unknown, code = 0;
   switch (command) {
@@ -62,13 +63,22 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
       break;
     case "vaults list":
       if (positional.length) throw new Error("vaults list: unexpected arguments");
-      result = loadRegistry(home.home).vaults.map(v => ({ ...v, pii: effectivePii(v) }));
+      result = loadRegistry(home.home).vaults.map(v => ({ ...v, pii: effectivePii(v), piiPolicy: piiPolicy(v) }));
       break;
     case "vaults add": {
       if (positional.length !== 2) throw new Error("vaults add: requires id and absolute path");
       const value: Record<string, unknown> = { id: positional[0], path: positional[1] };
       for (const option of options) if (flags[option] !== undefined) value[option.slice(2)] = flags[option];
       result = { applied: true, vault: addVault(home.home, value) };
+      break;
+    }
+    case "vaults pii": {
+      if (positional.length !== 1) throw new Error("vaults pii: requires id");
+      const raw = flags["--set"];
+      if (raw === undefined && flags["--confirm"] === true) throw new Error("vaults pii: --confirm requires --set");
+      let value: unknown;
+      if (typeof raw === "string") { if (raw === "allow" || raw === "deny") value = raw; else { try { value = JSON.parse(raw); } catch { throw new Error("vaults pii: --set expects allow, deny or a JSON policy object"); } } }
+      result = setVaultPii(home.home, positional[0]!, value, flags["--confirm"] === true);
       break;
     }
     case "vaults remove":

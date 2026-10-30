@@ -35,7 +35,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
   const twoStep = { confirm: { type: "boolean" }, fingerprint: sha };
   const orgVault = orgIds.length ? { type: "string", enum: [...orgIds] } : string(32);
   return [
-    tool("vmem_status", "Registered vaults with health, write policy and effective pii.", object({})),
+    tool("vmem_status", "Registered vaults with health, write policy, effective pii and the piiPolicy matrix (read-only).", object({})),
     tool("vmem_search", "Full-text (BM25) search over indexed notes. Literal AND terms.", object({ query: string(1000), vault, limit: integer(1, 50), type: string(64), domain: string(64) }, ["query"])),
     tool("vmem_read", "Read one note by stem, alias or notes/ path: frontmatter, body, sha256. Bounded by maxBytes; section selects an exact H2, offset pages UTF-8 byte ranges, and truncated reads list H2 headings/nextOffset.", object({ path: note, vault, maxBytes: integer(1, 65536), section: string(1024), offset: integer(0, MAX_NOTE_BYTES) }, ["path"])),
     tool("vmem_read_many", "Read up to 20 notes (8 KiB each).", object({ paths: { type: "array", minItems: 1, maxItems: 20, items: note }, vault }, ["paths"])),

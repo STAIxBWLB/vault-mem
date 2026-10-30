@@ -6,6 +6,8 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import { extractLinks, normalizeTarget, proseLines, resolveLinks, type Link, type LinkNote, type ResolvedLink } from "./links.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import type { PlannedChange, ValidationContext, WriteIssue } from "./write-types.ts";
+import type { PiiSurface } from "./config.ts";
+import { screenPii } from "./pii.ts";
 import { moveSourcePath } from "./write-operations.ts";
 
 const TYPES = new Set(["insight", "decision", "observation", "person", "project", "method", "moc", "reference"]);
@@ -30,50 +32,16 @@ const WIKI_FIELDS = ["topics", "project", "superseded_by", "supersedes", "source
 const SECRETS = [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, /\bAKIA[0-9A-Z]{16}\b/, /\bgh[pousr]_[A-Za-z0-9]{30,}/, /\bgithub_pat_[A-Za-z0-9_]{40,}/, /\bsk-[A-Za-z0-9_-]{20,}/,
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/, /\bAIza[0-9A-Za-z_-]{35}\b/, /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, /\b(?:password|passwd|secret|api[_-]?key|token)\s*[:=]\s*\S{8,}/i];
 export const SECRET_PATTERNS: readonly RegExp[] = SECRETS;
-const EMAIL = /[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?\.[A-Z]{2,}/i;
-export const EMAIL_PATTERN = EMAIL;
+export { EMAIL_PATTERN } from "./pii.ts";
 const MAX_BYTES = 256 * 1024;
-
 function issue(code: string, message: string, severity: WriteIssue["severity"] = "error", path?: string): WriteIssue {
   return { code, severity, message, ...(path ? { path } : {}) };
 }
-function hasPhone(text: string): boolean {
-  // A complete ISO calendar timestamp is metadata, not a phone-number candidate.
-  const withoutTimestamps = text.replace(/\b[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])[ T](?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\.[0-9]{1,3})?)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])?\b/g, "\n");
-  // The newline replacement is outside the candidate class, so neighbours of a timestamp never merge.
-  const digits = (value: string) => value.replace(/\D/g, "").length;
-  for (const match of withoutTimestamps.matchAll(/(?<![\p{L}\p{N}])\+?\d(?:[\d ().-]{6,}\d)(?![\p{L}\p{N}])/gu)) {
-    const count = digits(match[0]);
-    if (count >= 9 && count <= 15) return true;
-    if (count <= 15) continue;
-    // Oversized run, e.g. two phones separated by spaces: evaluate every contiguous run of
-    // whitespace-separated groups alone so each embedded phone is screened (fails closed).
-    const groups = match[0].split(/\s+/).filter(Boolean);
-    for (let start = 0; start < groups.length; start++) {
-      let total = 0;
-      for (let end = start; end < groups.length && total <= 15; end++) {
-        total += digits(groups[end]!);
-        if (total >= 9 && total <= 15) return true;
-      }
-    }
-  }
-  return false;
-}
-/** Screen the whole prospective text, including frontmatter, without returning matched values. */
-export function screenContent(text: string, vault: VaultSpec, config: VmemConfig): WriteIssue[] {
+/** Screen the whole prospective text, including frontmatter, without returning matched values. Secrets are always refused; PII follows the vault policy for this surface. */
+export function screenContent(text: string, vault: VaultSpec, config: VmemConfig, surface: PiiSurface = "notes"): WriteIssue[] {
   const issues: WriteIssue[] = [];
   if (SECRETS.some(pattern => pattern.test(text))) issues.push(issue("V06", "secret-looking content is refused"));
-  const pii = vault.pii ?? (vault.kind === "org" ? "deny" : "allow");
-  if (pii === "deny") {
-    const normalized = text.normalize("NFKC");
-    if (EMAIL.test(normalized) || hasPhone(normalized)) issues.push(issue("V07", "PII is refused by the vault policy"));
-    for (const pattern of config.piiPatterns ?? []) {
-      try {
-        if (new RegExp(pattern).test(text)) { issues.push(issue("V07", "configured PII pattern matched")); break; }
-      } catch { issues.push(issue("V07", "invalid PII screening configuration")); break; }
-    }
-  }
-  return issues;
+  return [...issues, ...screenPii(text, vault, config, surface)];
 }
 
 /** Quoted escapes must not hide semantic metadata from the same content policy. */

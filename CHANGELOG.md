@@ -1,8 +1,11 @@
 # Changelog
 
-## [0.1.4] - 2026-10-30
+## [0.2.0] - 2026-10-30
 
-- `vmem tidy --log` keeps email addresses in `pii: allow` vaults, matching note writes; secrets are still redacted everywhere and emails still are where the vault refuses PII.
+- Fine-grained PII policy: `vault.pii` can set `allow`, `warn` or `deny` per category (email, phone, the global `piiPatterns`, named per-vault patterns) and per surface (notes, log, promotion), with an allow list of exact addresses, domains and phone numbers. The `allow`/`deny` shorthand keeps its previous meaning.
+- `vmem vaults pii <id>` shows the effective policy; `--set` previews a change and lists every loosened cell, and `--confirm` applies it. `vaults list` and `vmem_status` report the matrix as `piiPolicy`.
+- `vmem tidy --log` redacts only PII that the policy denies on the log surface, so personal vaults keep historical email addresses; secrets are still redacted everywhere.
+- Org promotion reports a `warn` cell in the target policy as a warning instead of refusing.
 
 ## [0.1.3] - 2026-10-30
 

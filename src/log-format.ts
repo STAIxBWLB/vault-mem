@@ -1,4 +1,6 @@
 import { screenContent } from "./write-validation.ts";
+import { parsePii } from "./config.ts";
+function validPii(value: unknown): boolean { try { parsePii(value); return true; } catch { return false; } }
 import type { LogContext, LogEvent } from "./log-types.ts";
 import type { WriteIssue } from "./write-types.ts";
 
@@ -31,7 +33,7 @@ export function formatLogEvent(event: LogEvent, context: LogContext): { line?: s
   }
   if ((context.channel !== undefined && context.channel !== "cli" && context.channel !== "mcp") ||
       !record(context.vault) || !["personal", "org"].includes(context.vault.kind) ||
-      (context.vault.pii !== undefined && context.vault.pii !== "allow" && context.vault.pii !== "deny") ||
+      (context.vault.pii !== undefined && !validPii(context.vault.pii)) ||
       !record(context.config) || !Array.isArray(context.config.vaults) ||
       (context.config.piiPatterns !== undefined && (!Array.isArray(context.config.piiPatterns) || context.config.piiPatterns.some(value => typeof value !== "string"))) ||
       (context.now !== undefined && !(context.now instanceof Date)) ||
@@ -51,7 +53,7 @@ export function formatLogEvent(event: LogEvent, context: LogContext): { line?: s
   const env = context.env ?? process.env;
   const agent = context.channel === "mcp" || AGENT_MARKERS.some(marker => typeof env[marker] === "string" && env[marker]!.length > 0);
   const line = `${timestamp}  ${event.type}  ${event.project}  ${event.source}${event.dest === undefined ? "" : ` → ${event.dest}`}  — ${event.note}${agent ? " (vmem:agent)" : ""}\n`;
-  const issues = screenContent(line, context.vault, context.config);
+  const issues = screenContent(line, context.vault, context.config, "log");
   if (Buffer.byteLength(line, "utf8") > 1000) issues.push(error("V09", "log line exceeds 1000 UTF-8 bytes including attribution and newline"));
   return issues.some(issue => issue.severity === "error") ? { issues } : { line, issues };
 }

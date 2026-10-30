@@ -200,7 +200,7 @@ describe("follow-ups", () => {
     const registry = join(root(), "reg");
     const added = JSON.parse(run(["vaults", "add", "org", vault, "--kind", "org", "--write", "none", "--pii", "allow", "--remote", "git@example.com:o/v.git", "--registry", registry, "--json"], { VMEM_HOME: home }).text);
     expect(added.vault).toMatchObject({ pii: "allow", remote: "git@example.com:o/v.git", registry });
-    expect(JSON.parse(run(["vaults", "list", "--json"], { VMEM_HOME: home }).text)).toEqual([{ id: "org", path: realpathSync(vault), kind: "org", write: "none", pii: "allow", remote: "git@example.com:o/v.git", registry }]);
+    expect(JSON.parse(run(["vaults", "list", "--json"], { VMEM_HOME: home }).text)).toEqual([{ id: "org", path: realpathSync(vault), kind: "org", write: "none", pii: "allow", remote: "git@example.com:o/v.git", registry, piiPolicy: { ...Object.fromEntries(["email", "phone", "custom"].map(c => [c, { notes: "allow", log: "allow", promotion: "allow" }])), patterns: [], allow: [] } }]);
     const other = fixture();
     run(["vaults", "add", "team", other.vault, "--kind", "org", "--write", "cli"], { VMEM_HOME: home });
     expect(JSON.parse(run(["vaults", "list"], { VMEM_HOME: home }).text)[1].pii).toBe("deny");

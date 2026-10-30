@@ -61,7 +61,8 @@ const MEETING = [/(^|\/)meetings\//i];
  * meeting sources. Returns error issues only; any issue refuses promotion.
  */
 export function screenForOrg(text: string, data: Record<string, unknown>, target: VaultSpec, config: VmemConfig): WriteIssue[] {
-  const issues: WriteIssue[] = screenContent(text, target, config).map(found => ({ ...found, severity: "error" as const }));
+  // Secrets and deny cells refuse; a warn cell in the target policy is reported without refusing.
+  const issues: WriteIssue[] = screenContent(text, target, config, "promotion");
   if (data.type === "person" || data.domain === "people") issues.push(issue("SCREEN", "personal_data: person or people records are never promoted"));
   const sources = [...strings(data.source), ...strings(data.source_ref)];
   if (sources.some(value => MEETING.some(pattern => pattern.test(value)))) issues.push(issue("SCREEN", "internal_meeting_notes: source under meetings/"));
@@ -230,8 +231,9 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   const text = emitFrontmatter(parseFrontmatter(parsed.source.slice(0, parsed.source.length - parsed.body.length) + body), frontmatter);
   result.target = `${target.id}:${targetPath}`; result.text = text; result.droppedLinks = transformed.dropped;
   const screen = [...screenForOrg(text, parsed.data, target, config), ...screenDroppedLinks(home, source, all, transformed.dropped.filter(link => !link.includes(":")))];
-  result.screen = { passed: screen.length === 0, issues: screen };
-  if (screen.length) return { ...result, issues: screen };
+  const refusing = screen.filter(found => found.severity === "error");
+  result.screen = { passed: refusing.length === 0, issues: screen };
+  if (refusing.length) return { ...result, issues: screen };
   const planned = applyWrite(home, { vault: target.id, operation: { op: "create", path: targetPath, frontmatter: {}, body: text }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env });
   const provenanceSet = { promoted_to: prior.length ? [...prior.filter(p => p !== promotedTo), promotedTo] : promotedTo };
   const provenanceText = emitFrontmatter(parsed, provenanceSet);
