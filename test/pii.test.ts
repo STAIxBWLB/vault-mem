@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parsePii, type VaultSpec, type VmemConfig } from "../src/config.ts";
-import { piiPolicy, piiShorthand, redactPii } from "../src/pii.ts";
+import { loosenedCells, piiPolicy, piiShorthand, redactPii } from "../src/pii.ts";
 import { screenContent } from "../src/write-validation.ts";
 import { formatLogEvent } from "../src/log-format.ts";
 import { screenForOrg } from "../src/org-promote.ts";
@@ -151,4 +151,14 @@ test("promotion writes use the promotion surface and log-append warnings reach t
   const f = fixture({ email: { log: "warn" } });
   const receipt = appendLog(f.home, { vault: "mine", event: { type: "LEARN", project: "-", source: "a", note: "mail a.person@example.invalid" } }, { env: f.env });
   expect(receipt.ok).toBe(true); expect(receipt.issues.map(i => `${i.code}:${i.severity}`)).toEqual(["V07:warning"]);
+});
+
+test("second review: redaction fails closed on unlocatable matches and keeps allow-listed phone neighbours", () => {
+  const logDeny = (patterns: { name: string; regex: string }[], extra: object = {}) => vault({ custom: "allow", email: "allow", phone: "allow", patterns: patterns.map(p => ({ ...p, action: { log: "deny" } })), ...extra });
+  expect(redactPii("PRIVATE PUBLIC", logDeny([{ name: "mixed", regex: "(?=PRIVATE)|PUBLIC" }]), config, "log").text).toBe("[redacted]");
+  expect(redactPii("㍿", logDeny([{ name: "kanji", regex: "株" }]), config, "log").text).toBe("[redacted]");
+  expect(redactPii("José Jose\u0301", logDeny([{ name: "name", regex: "José" }]), config, "log").text).toBe("[redacted]");
+  expect(redactPii("call 010-0000-1234 010-0000-9999", vault({ phone: { log: "deny" }, allow: ["01000001234"] }), config, "log").text).toBe("call 010-0000-1234 [redacted]");
+  const before = piiPolicy(vault({ patterns: [{ name: "id", regex: "A", action: "deny" }] })), after = piiPolicy(vault({ patterns: [{ name: "id", regex: "B", action: "allow" }] }));
+  expect(loosenedCells(before, after)).toEqual(["patterns.id: regex changed", "patterns.id.notes: deny -> allow", "patterns.id.log: deny -> allow", "patterns.id.promotion: deny -> allow"]);
 });
