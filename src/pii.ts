@@ -115,9 +115,9 @@ export function screenPii(text: string, vault: VaultSpec, config: VmemConfig, su
 }
 /**
  * Replace raw ranges that a deny cell refuses on this surface with `[redacted]` (tidy --log), leaving allow-listed
- * values intact. Fails closed to a fully redacted text when a denied match is zero-length, or when the result (with
- * each marker read as a line break, so markers are never matched) still contains a denied match, for example a form
- * only NFKC normalization reveals.
+ * values intact. Fails closed to a fully redacted text when a denied match is zero-length, or when the returned text
+ * itself still contains a denied match (for example a form only NFKC normalization reveals, or a pattern that matches
+ * the marker).
  */
 export function redactPii(text: string, vault: VaultSpec, config: VmemConfig, surface: PiiSurface): { text: string; hits: number } {
   const denied = rules(vault, config, surface).filter(rule => rule.action === "deny" && !rule.invalid);
@@ -126,8 +126,8 @@ export function redactPii(text: string, vault: VaultSpec, config: VmemConfig, su
   if (ranges.some(r => r.end === r.start)) return { text: "[redacted]", hits: 1 };
   const merged: { start: number; end: number }[] = [];
   for (const r of ranges.sort((a, b) => a.start - b.start || b.end - a.end)) { const last = merged.at(-1); if (last && r.start < last.end) last.end = Math.max(last.end, r.end); else merged.push({ ...r }); }
-  let out = "", check = "", at = 0;
-  for (const r of merged) { out += text.slice(at, r.start) + "[redacted]"; check += text.slice(at, r.start) + "\n"; at = r.end; }
-  out += text.slice(at); check += text.slice(at);
-  return denied.some(rule => rule.detect(check)) ? { text: "[redacted]", hits: 1 } : { text: out, hits: merged.length };
+  let out = "", at = 0;
+  for (const r of merged) { out += text.slice(at, r.start) + "[redacted]"; at = r.end; }
+  out += text.slice(at);
+  return denied.some(rule => rule.detect(out)) ? { text: "[redacted]", hits: 1 } : { text: out, hits: merged.length };
 }

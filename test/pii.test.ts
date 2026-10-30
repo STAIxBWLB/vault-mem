@@ -174,7 +174,8 @@ test("third review: unlocatable matches redact up front, protected phone numbers
   expect(codes(screenContent("010 0000 9999 010 0000 1234", vault({ phone: "deny", allow: ["99990100000"] }), config))).toEqual(["V07:error"]);
   expect(redactPii("① Ａ", logDeny([{ name: "id", regex: "①|A" }]), config, "log").text).toBe("[redacted]");
   const marker = logDeny([{ name: "redacted", regex: "redacted" }], { email: { log: "deny" }, allow: ["owner@example.invalid"] });
-  expect(redactPii("a@example.invalid owner@example.invalid", marker, config, "log").text).toBe("[redacted] owner@example.invalid");
+  expect(redactPii("a@example.invalid owner@example.invalid", marker, config, "log").text).toBe("[redacted]"); // a pattern matching the marker fails closed
+  expect(redactPii("ID:１２３４５６", logDeny([{ name: "identifier", regex: "ID:|(?<=.)[0-9]{6}" }]), config, "log").text).toBe("[redacted]");
   const long = "01000001234 " + ". ".repeat(30000) + "01000009999", t0 = performance.now();
   expect(codes(screenContent(long, vault({ phone: { log: "deny" } }), config, "log"))).toEqual(["V07:error"]);
   expect(performance.now() - t0).toBeLessThan(2000);
