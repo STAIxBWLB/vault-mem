@@ -70,12 +70,20 @@ export function logBinding(vault: VaultSpec, config: VmemConfig): LogBinding {
   const identity = lstatSync(vault.path);
   return { vault, denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], dev: Number(identity.dev), ino: Number(identity.ino) };
 }
+/** True when the registered vault still equals the binding: spec, path policy and root identity. Never throws. */
+export function matchesBinding(config: VmemConfig, id: string, binding: LogBinding): boolean {
+  const vault = config.vaults.find(v => v.id === id);
+  if (!vault || JSON.stringify(vault) !== JSON.stringify(binding.vault) || JSON.stringify(config.denyPaths ?? []) !== JSON.stringify(binding.denyPaths) || JSON.stringify(config.piiPatterns ?? []) !== JSON.stringify(binding.piiPatterns)) return false;
+  try { const identity = lstatSync(vault.path); return Number(identity.dev) === binding.dev && Number(identity.ino) === binding.ino; } catch { return false; }
+}
 export function appendLog(home: string, request: LogRequest, options: { env?: NodeJS.ProcessEnv; now?: Date; binding?: LogBinding } = {}): LogReceipt {
   const result: LogReceipt = { ok: false, appended: false, synced: false, bytesWritten: 0, issues: [] };
   let fd: number | undefined, lockFd: number | undefined, lockFile: string | undefined, identity: { ino: number; dev: number } | undefined;
   const error = (code: string, message: string) => result.issues.push({ code, severity: "error", message });
   try {
     if (!request || typeof request !== "object" || typeof request.vault !== "string" || Object.keys(request).some(key => !["vault", "event", "channel"].includes(key))) refuse("L09", "invalid log request");
+    // A bound append compares the registry first, so any re-registration reads as drift rather than a policy or path error.
+    if (options.binding && !matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("LOG_DRIFT", "vault identity or policy changed after mutation; log not appended");
     const ctx = context(home, request.vault, request.channel, true);
     const rootIdentity = lstatSync(ctx.vault.path);
     if (options.binding) {

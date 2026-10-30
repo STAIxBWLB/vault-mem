@@ -371,7 +371,7 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   // Validate every planned note with the writer (dry-run). A note the writer would refuse is reported and skipped
   // (left fully unchanged for manual repair) instead of blocking the rest of the migration.
   for (const change of [...planned]) {
-    const dry = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", dryRun: true, log: false }, { env: options.env });
+    const dry = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", dryRun: true, log: false }, { env: options.env, binding });
     const errors = dry.issues.filter(found => found.severity === "error");
     if (!errors.length) continue;
     planned.splice(planned.indexOf(change), 1);
@@ -387,7 +387,7 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   if (request.confirm !== true) return { ...result, ok: true, preview: true };
   if (request.fingerprint !== result.fingerprint) return { ...result, issues: [issue("V09", "stale or missing preview fingerprint")] };
   for (const change of planned) {
-    const receipt = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", expectedShas: { [change.path]: sha256(change.before) }, log: false }, { env: options.env });
+    const receipt = applyWrite(home, { vault: vault.id, operation: { op: "sanitize", path: change.path, text: change.after }, channel: request.channel ?? "cli", expectedShas: { [change.path]: sha256(change.before) }, log: false }, { env: options.env, binding });
     if (!receipt.ok || !receipt.applied) return { ...result, issues: receipt.issues.length ? receipt.issues : [issue("IO", "note write failed", change.path)] };
     result.written.push(change.path);
   }

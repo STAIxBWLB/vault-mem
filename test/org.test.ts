@@ -312,3 +312,13 @@ test("SYNC events cannot land in another vault when ids are re-registered before
   for (const id of ["personal", "team"]) expect(existsSync(join(rebound, id, "log"))).toBe(false);
   expect(existsSync(join(f.org, "notes", "shared-method.md"))).toBe(true); // the committed promotion is not rolled back
 });
+
+test("the promoted note cannot land in another vault when the target id is re-registered before the write", () => {
+  const f = fixture(), rebound = join(f.root, "elsewhere"); for (const id of ["personal", "team"]) mkdirSync(join(rebound, id, "notes"), { recursive: true });
+  const child = Bun.spawnSync([process.execPath, "test/fixtures/log-rebind.ts", f.home, "promote-write", rebound], { stdout: "pipe", stderr: "pipe", env: f.env });
+  expect(child.exitCode).toBe(0);
+  const result = JSON.parse(child.stdout.toString());
+  expect(result.ok).toBe(false); expect(result.issues.some((i: { code: string }) => i.code === "VAULT_DRIFT")).toBe(true);
+  expect(existsSync(join(rebound, "team", "notes", "shared-method.md"))).toBe(false);
+  expect(existsSync(join(f.org, "notes", "shared-method.md"))).toBe(false);
+});

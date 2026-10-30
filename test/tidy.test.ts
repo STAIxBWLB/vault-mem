@@ -329,3 +329,15 @@ test("the LINT event cannot land in another vault when the id is re-registered b
   expect(readFileSync(join(f.vault, "log"), "utf8")).not.toContain("LINT");
   expect(f.read("no-topics")).toContain("## Topics"); // the committed note is not rolled back
 });
+
+test("a tidy write cannot land in another vault when the id is re-registered before the write", () => {
+  const f = fixture(), rebound = join(f.root, "other-vault"), copy = join(rebound, "mine", "notes"); mkdirSync(copy, { recursive: true });
+  for (const name of readdirSync(f.notes)) writeFileSync(join(copy, name), readFileSync(join(f.notes, name)));
+  const before = { own: f.disk(), other: readdirSync(copy).map(n => readFileSync(join(copy, n), "utf8")) };
+  const child = Bun.spawnSync([process.execPath, "test/fixtures/log-rebind.ts", f.home, "tidy-write", rebound], { stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode).toBe(0);
+  const result = JSON.parse(child.stdout.toString());
+  expect(result.ok).toBe(false); expect(result.issues.some((i: { code: string }) => i.code === "VAULT_DRIFT")).toBe(true);
+  expect(readdirSync(copy).map(n => readFileSync(join(copy, n), "utf8"))).toEqual(before.other);
+  expect(f.disk()).toEqual(before.own);
+});
