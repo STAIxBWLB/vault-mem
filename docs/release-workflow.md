@@ -1,6 +1,6 @@
 # Release workflow
 
-The workflow is authored for readiness only. This change creates no release tag, publishes no package and configures no GitHub environment or npm trusted publisher. Live vault cutover remains blocked by the separate release, private-evidence and integration gates in issue #11.
+Tag pushes publish through this workflow. The `npm-production` environment (required reviewer, `v*` tag policy), `NPM_PUBLISH_ENABLED=true` and the npm trusted publisher for `@staix/vault-mem` (`release.yml`, `npm-production`) are configured; 0.1.0 was the first release published this way. Live vault cutover remains blocked by the separate integration and canary gates in issue #11.
 
 ## Validation and artifact
 
@@ -14,7 +14,7 @@ The workflow is authored for readiness only. This change creates no release tag,
 
 ## Deployment prerequisites
 
-- Leave repository variable `NPM_PUBLISH_ENABLED` unset or false until publication is explicitly authorized. The publish job is skipped without the literal value `true`.
+- Repository variable `NPM_PUBLISH_ENABLED` is `true`. Set it to `false` to stop publication; the publish job is skipped without the literal value `true`. Every publish still waits for an `npm-production` reviewer approval.
 - A maintainer must configure the GitHub `npm-production` environment with required reviewers and appropriate release-tag deployment restrictions. A workflow's `environment` field alone does not prove these protections exist; an absent environment may be created without them.
 - A maintainer must confirm npm package ownership and configure a GitHub Actions trusted publisher for organization `STAIxBWLB`, repository `vault-mem`, workflow filename `release.yml`, and environment `npm-production`. Its allowed actions must permit the direct `npm publish` used here. Package bootstrap, publisher configuration and any expiry recovery require separate authorization.
 - The GitHub-hosted publish job uses Node 24 and verifies npm >=11.5.1. Only that job receives `id-token: write`; no long-lived npm token is supplied. npm documents trusted publishing's minimum versions and publisher fields in [Trusted publishing](https://docs.npmjs.com/trusted-publishers/).
