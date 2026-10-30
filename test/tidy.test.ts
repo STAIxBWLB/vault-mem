@@ -240,6 +240,36 @@ test("change lines and reports never echo a secret held in a dropped or mapped v
   expect(denied.notes.find(n => n.path === "notes/legacy-mail.md")!.changes.join("\n")).toContain('keys: dropped origin = "[redacted]"');
 });
 
+test("--log normalizes legacy lines that fail the L09 structure check and is idempotent", () => {
+  const f = fixture();
+  const legacy = [
+    "# header comment",
+    "2026-09-01 15:28:42  GRAPH  -  reports/graph.md  — synthetic graph",
+    "- 2026-05-11T05:03:16.756Z task-management: meetings/x.md",
+    "- 2026-07-19 CORRECT synthetic-note: wording fixed",
+    "2026-10-02 09:00  CORRECT  -  a  — legacy type stays",
+    "2026-10-02 09:01  LEARN  -  a → b  — canonical line",
+  ].join("\n") + "\n";
+  writeFileSync(join(f.vault, "log"), legacy);
+  const preview = f.tidy(["log"]);
+  expect(preview.ok).toBe(true);
+  expect(preview.log).toMatchObject({ redactions: 0, formats: 3 });
+  expect(preview.log!.changes).toEqual(["log: line 2, format", "log: line 3, format", "log: line 4, format"]);
+  const done = f.tidy(["log"], { confirm: true, fingerprint: preview.fingerprint });
+  expect(done.ok).toBe(true); expect(done.written).toContain("log");
+  const lines = readFileSync(join(f.vault, "log"), "utf8").split("\n");
+  expect(lines.slice(0, 6)).toEqual([
+    "# header comment",
+    "2026-09-01 15:28  GRAPH  -  reports/graph.md  — synthetic graph",
+    "# legacy: - 2026-05-11T05:03:16.756Z task-management: meetings/x.md",
+    "# legacy: - 2026-07-19 CORRECT synthetic-note: wording fixed",
+    "2026-10-02 09:00  CORRECT  -  a  — legacy type stays",
+    "2026-10-02 09:01  LEARN  -  a → b  — canonical line",
+  ]);
+  expect(f.tidy(["log"]).log).toMatchObject({ lines: 0, formats: 0 });
+  expect(lintVault(analysisInput(f.home, "mine").snapshot).findings.L09).toEqual([]);
+});
+
 test("--log refuses when the log path is denied and writes nothing", () => {
   const f = fixture(), logBefore = readFileSync(join(f.vault, "log"), "utf8"), before = f.disk();
   const config = JSON.parse(readFileSync(join(f.home, "vmem.config.json"), "utf8"));

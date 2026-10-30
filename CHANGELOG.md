@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.3] - 2026-10-30
+
+- `vmem tidy --log` fixes legacy log lines that fail lint L09: a trailing seconds field is dropped, and any other malformed line is kept verbatim behind `# legacy: `.
+
 ## [0.1.2] - 2026-10-30
 
 - `vmem move` accepts an existing legacy-named note (lint L13) as its source and may rewrite inbound links in other legacy-named notes, so the finding can be fixed with a normal rename. Destinations still need a valid stem.

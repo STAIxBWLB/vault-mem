@@ -29,7 +29,7 @@ export interface TidyResult {
   notes: { path: string; changes: string[] }[];
   /** Values and keys left unchanged because no rule or map entry covers them. */
   reported: { path: string; message: string }[];
-  log?: { lines: number; redactions: number; changes: string[] };
+  log?: { lines: number; redactions: number; formats: number; changes: string[] };
   fingerprint?: string;
   written: string[];
   issues: WriteIssue[];
@@ -271,17 +271,32 @@ function readLogFile(root: string): string | null {
     return buffer.subarray(0, read).toString("utf8");
   } finally { closeSync(fd); }
 }
-function sanitizeLog(text: string): { text: string; lines: number; redactions: number; changes: string[] } {
-  let lines = 0, redactions = 0;
+/** The lint L09 structure check (kept identical to vault-lint.ts). */
+const LOG_STRUCTURE = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\s+(\S+)\s+(.*)$/;
+/** Fix a legacy line that fails L09: drop a seconds field when that makes it valid, otherwise comment it out verbatim. */
+function normalizeLogLine(line: string): string | undefined {
+  const body = line.endsWith("\r") ? line.slice(0, -1) : line;
+  if (!body.trim() || body.startsWith("#") || LOG_STRUCTURE.test(body)) return undefined;
+  const seconds = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}):\d{2}(\s.*)$/.exec(body);
+  if (seconds && LOG_STRUCTURE.test(seconds[1]! + seconds[2]!)) return seconds[1]! + seconds[2]! + line.slice(body.length);
+  return `# legacy: ${line}`;
+}
+function sanitizeLog(text: string): { text: string; lines: number; redactions: number; formats: number; changes: string[] } {
+  let lines = 0, redactions = 0, formats = 0;
   const changes: string[] = [];
   const out = text.split("\n").map((line, index) => {
     const secret = redact(line);
     let hits = secret.hits, next = secret.text;
     next = next.replace(new RegExp(EMAIL_PATTERN.source, "gi"), () => { hits++; return "[redacted]"; });
-    if (hits) { lines++; redactions += hits; changes.push(`log: line ${index + 1}, ${hits} redaction${hits === 1 ? "" : "s"}`); }
+    const normalized = normalizeLogLine(next);
+    if (normalized !== undefined) { next = normalized; formats++; }
+    if (hits || normalized !== undefined) {
+      lines++; redactions += hits;
+      changes.push(`log: line ${index + 1}, ${[hits ? `${hits} redaction${hits === 1 ? "" : "s"}` : "", normalized !== undefined ? "format" : ""].filter(Boolean).join(", ")}`);
+    }
     return next;
   }).join("\n");
-  return { text: out, lines, redactions, changes };
+  return { text: out, lines, redactions, formats, changes };
 }
 /** Replace the log under its own lock, atomically (the one sanctioned in-place rewrite of the append-only log). */
 function rewriteLog(root: string, expected: string, next: string): void {
@@ -339,14 +354,14 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
     }
   }
   result.notes = planned.map(change => ({ path: change.path, changes: change.changes }));
-  let logPlan: { before: string; text: string; lines: number; redactions: number; changes: string[] } | undefined;
+  let logPlan: { before: string; text: string; lines: number; redactions: number; formats: number; changes: string[] } | undefined;
   if (rules.includes("log") && isDenied(join(root, "log"), config.denyPaths)) return { ...result, issues: [issue("V06", "the vault log is denied by the path policy; drop --log")] };
   if (rules.includes("log")) {
     const before = readLogFile(root);
     if (before !== null) {
       const sanitized = sanitizeLog(before);
-      result.log = { lines: sanitized.lines, redactions: sanitized.redactions, changes: sanitized.changes };
-      if (sanitized.redactions) { logPlan = { before, ...sanitized }; result.counts.log = sanitized.redactions; }
+      result.log = { lines: sanitized.lines, redactions: sanitized.redactions, formats: sanitized.formats, changes: sanitized.changes };
+      if (sanitized.text !== before) { logPlan = { before, ...sanitized }; result.counts.log = sanitized.redactions + sanitized.formats; }
     }
   }
   // Validate every planned note with the writer (dry-run). A note the writer would refuse is reported and skipped
