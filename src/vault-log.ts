@@ -7,6 +7,7 @@ import { canonicalPath, isDenied } from "./platform.ts";
 import { formatLogEvent, LOG_TYPES } from "./log-format.ts";
 import type { LogBinding, LogContext, LogReadOptions, LogReadResult, LogReceipt, LogRequest } from "./log-types.ts";
 import type { WriteIssue } from "./write-types.ts";
+import type { VaultSpec, VmemConfig } from "./config.ts";
 export const LOG_LOCK = "log.lock";
 export const MAX_LOG_READ_BYTES = 32 * 1024 * 1024;
 export const LARGE_LOG_LINES = 20000;
@@ -64,6 +65,11 @@ function context(home: string, id: string, channel: "cli" | "mcp" | undefined, w
   return { vault, config, channel, ...(write && vault.registry ? { projectIds: registryIds(vault.registry, config.denyPaths) } : {}) };
 }
 /** One O_APPEND write per event. A separate cooperative lock permits safe short-write rollback. */
+/** Bind a later append to the vault spec, path policy and root identity resolved now (refused with LOG_DRIFT if they change). */
+export function logBinding(vault: VaultSpec, config: VmemConfig): LogBinding {
+  const identity = lstatSync(vault.path);
+  return { vault, denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], dev: Number(identity.dev), ino: Number(identity.ino) };
+}
 export function appendLog(home: string, request: LogRequest, options: { env?: NodeJS.ProcessEnv; now?: Date; binding?: LogBinding } = {}): LogReceipt {
   const result: LogReceipt = { ok: false, appended: false, synced: false, bytesWritten: 0, issues: [] };
   let fd: number | undefined, lockFd: number | undefined, lockFile: string | undefined, identity: { ino: number; dev: number } | undefined;

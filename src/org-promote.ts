@@ -9,9 +9,9 @@ import { VaultIndex } from "./vault-index.ts";
 import { applyWrite } from "./writer.ts";
 import { notePath } from "./write-operations.ts";
 import { screenContent } from "./write-validation.ts";
-import { appendLog } from "./vault-log.ts";
+import { appendLog, logBinding } from "./vault-log.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
-import type { LogReceipt } from "./log-types.ts";
+import type { LogBinding, LogReceipt } from "./log-types.ts";
 import { analysisInput } from "./analysis-input.ts";
 import { lintVault } from "./vault-lint.ts";
 import type { AnalysisSnapshot } from "./analysis-types.ts";
@@ -182,6 +182,10 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   if (target.kind !== "org" || target.write === "none") return fail(issue("POLICY", "promotion target must be a writable org vault"));
   if (request.channel === "mcp" && target.write !== "mcp") return fail(issue("POLICY", "target vault write policy refuses MCP"));
   if (request.channel === "mcp" && source.write !== "mcp") return fail(issue("POLICY", "source provenance write needs write=mcp on the personal vault"));
+  // SYNC events must land in the vaults resolved here, even if the registry is changed before the appends.
+  let bindings: Record<"source" | "target", LogBinding>;
+  try { bindings = { source: logBinding(source, config), target: logBinding(target, config) }; }
+  catch { return fail(issue("V04", "source or target vault path unavailable")); }
   let path: string;
   const index = new VaultIndex(home, source, all.map(v => v.path));
   try { index.scan(); path = `notes/${index.show(request.note, 1).path}`; }
@@ -252,7 +256,7 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   const provenance = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set: provenanceSet }, channel: request.channel ?? "cli", log: false }, { env: options.env });
   const logs = { source: null as LogReceipt | null, target: null as LogReceipt | null };
   for (const [key, vault] of [["target", target], ["source", source]] as const) {
-    try { logs[key] = appendLog(home, { vault: vault.id, event, channel: request.channel ?? "cli" }, { env: options.env }); }
+    try { logs[key] = appendLog(home, { vault: vault.id, event, channel: request.channel ?? "cli" }, { env: options.env, binding: bindings[key] }); }
     catch { logs[key] = { ok: false, appended: null, synced: false, bytesWritten: null, issues: [issue("LOG_IO", "log append failed")] }; }
   }
   const lint = lintPromoted(home, target, targetPath, text);
