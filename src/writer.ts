@@ -9,7 +9,7 @@ import { loadRegistry, syncDirectory } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
-import { notePath, planOperation, refuse, WriteRefusal } from "./write-operations.ts";
+import { moveSourcePath, notePath, planOperation, refuse, WriteRefusal } from "./write-operations.ts";
 import { validateWrite } from "./write-validation.ts";
 import type { ChangeReceipt, PlannedChange, WriteIssue, WriteReceipt, WriteRequest } from "./write-types.ts";
 export const MUTATION_LOCK = "mutation.lock";
@@ -223,7 +223,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     if (request.log !== false) {
       const op = request.operation;
       const type = op.op === "link" ? "CONNECT" : op.op === "move" ? "ROUTE" : ["supersede", "tidy"].includes(op.op) ? "RETHINK" : "EXTRACT";
-      const source = op.op === "move" || op.op === "link" ? notePath(op.from) : op.op === "supersede" ? notePath(op.old) : op.op === "delete" ? notePath(op.path) : `vmem:${op.op}`;
+      const source = op.op === "move" ? moveSourcePath(op.from, notes) : op.op === "link" ? notePath(op.from) : op.op === "supersede" ? notePath(op.old) : op.op === "delete" ? notePath(op.path) : `vmem:${op.op}`;
       const dest = op.op === "move" || op.op === "link" ? notePath(op.to) : op.op === "supersede" ? notePath(op.next) : op.op === "delete" ? undefined : changes.find(change => change.after !== null)?.path;
       const event: LogEvent = request.log ?? { type, project: "-", source, ...(dest ? { dest } : {}), note: op.op };
       try { result.log = appendLog(home, { vault: request.vault, event, channel: request.channel }, { env: options.env, binding: { vault, denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], dev: Number(identity.dev), ino: Number(identity.ino) } }); }

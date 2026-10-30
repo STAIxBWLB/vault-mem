@@ -6,6 +6,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import { extractLinks, normalizeTarget, proseLines, resolveLinks, type Link, type LinkNote, type ResolvedLink } from "./links.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import type { PlannedChange, ValidationContext, WriteIssue } from "./write-types.ts";
+import { moveSourcePath } from "./write-operations.ts";
 
 const TYPES = new Set(["insight", "decision", "observation", "person", "project", "method", "moc", "reference"]);
 const DOMAINS = new Set(["research", "projects", "teaching", "operations", "people", "ai-practice"]);
@@ -147,10 +148,14 @@ function linkSignature(link: ResolvedLink, source: string = link.source): string
   return JSON.stringify([source, noteKey(link.target), link.heading ? normalizeTarget(link.heading) : null,
     link.block ? normalizeTarget(link.block) : null, link.embed, link.reason]);
 }
+/** The snapshot path a move removes, legacy file names included. */
+function movedFrom(value: string, context: ValidationContext): string {
+  try { return moveSourcePath(value, context.notes); } catch { return `notes/${value.replace(/^notes\//, "").replace(/\.md$/, "")}.md`; }
+}
 function changedBrokenLinks(oldNotes: Map<string, ParsedNote>, newNotes: Map<string, ParsedNote>, context: ValidationContext): WriteIssue[] {
   const oldCounts = new Map<string, number>();
   const move = context.operation.op === "move" ? context.operation : undefined;
-  const from = move ? `notes/${move.from.replace(/^notes\//, "").replace(/\.md$/, "")}.md` : "";
+  const from = move ? movedFrom(move.from, context) : "";
   const to = move ? `notes/${move.to.replace(/^notes\//, "").replace(/\.md$/, "")}.md` : "";
   const oldNames = move ? names(oldNotes) : undefined;
   for (const link of references(oldNotes)) if (link.reason) {
@@ -229,8 +234,9 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
   const issues: WriteIssue[] = [], final = new Map(context.notes), touched = new Set(changes.map(change => change.path));
   const report = context.operation.op === "report";
   for (const change of changes) {
-    // Sanitize may rewrite an existing legacy-named note in place (L13 names stay until moved).
-    if (!validPath(change.path, report) && !(context.operation.op === "sanitize" && context.notes.has(change.path))) issues.push(issue("V04", "invalid mutation path"));
+    // Sanitize and move may touch an existing legacy-named note (L13 names stay until moved); move destinations stay strict.
+    const legacy = context.notes.has(change.path) && (context.operation.op === "sanitize" || context.operation.op === "move");
+    if (!validPath(change.path, report) && !legacy) issues.push(issue("V04", "invalid mutation path"));
     if (change.after === null) final.delete(change.path);
     else if (change.path.startsWith("notes/")) final.set(change.path, change.after);
     if (change.after === null) continue;
@@ -249,7 +255,7 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
     if (change.after === null || report) continue;
     const note = newNotes.get(change.path);
     if (!note) { issues.push(issue("V01", "invalid frontmatter", "error", change.path)); continue; }
-    const prior=context.operation.op==="move"&&noteKey(context.operation.to)===noteKey(note.path)?oldNotes.get(`notes/${noteKey(context.operation.from)}.md`):oldNotes.get(note.path);
+    const prior=context.operation.op==="move"&&noteKey(context.operation.to)===noteKey(note.path)?oldNotes.get(movedFrom(context.operation.from, context)):oldNotes.get(note.path);
     issues.push(...schemaIssues(note,prior,context), ...topicPlacement(note));
     const source = note.data.source;
     let sourceDenied=strings(source).some(entry=>isDenied(entry.replaceAll("\\","/"),context.config.denyPaths));
