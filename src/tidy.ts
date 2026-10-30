@@ -394,9 +394,9 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
     result.written.push(change.path);
   }
   if (logPlan) {
-    if (isDenied(join(root, "log"), loadRegistry(home).denyPaths)) return { ...result, issues: [issue("V06", "the vault log is denied by the path policy; log not rewritten")] };
+    if (isDenied(join(root, "log"), loadRegistry(home).denyPaths)) return { ...result, applied: result.written.length > 0, issues: [issue("V06", "the vault log is denied by the path policy; log not rewritten")] };
     try { rewriteLog(root, logPlan.before, logPlan.text); result.written.push("log"); }
-    catch (error) { return { ...result, issues: [issue("LOG", error instanceof Error ? error.message.slice(0, 200) : "log rewrite failed")] }; }
+    catch (error) { return { ...result, applied: result.written.length > 0, issues: [issue("LOG", error instanceof Error ? error.message.slice(0, 200) : "log rewrite failed")] }; }
   }
   const counted = Object.values(result.counts).reduce((sum, n) => sum + n, 0);
   if (planned.length || logPlan) {
