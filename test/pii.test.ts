@@ -162,3 +162,16 @@ test("second review: redaction fails closed on unlocatable matches and keeps all
   const before = piiPolicy(vault({ patterns: [{ name: "id", regex: "A", action: "deny" }] })), after = piiPolicy(vault({ patterns: [{ name: "id", regex: "B", action: "allow" }] }));
   expect(loosenedCells(before, after)).toEqual(["patterns.id: regex changed", "patterns.id.notes: deny -> allow", "patterns.id.log: deny -> allow", "patterns.id.promotion: deny -> allow"]);
 });
+
+test("third review: unlocatable matches redact up front, protected phone numbers, no marker rescreen, linear phone runs", () => {
+  const logDeny = (patterns: { name: string; regex: string }[], extra: object = {}) => vault({ custom: "allow", email: "allow", phone: "allow", ...extra, patterns: patterns.map(p => ({ ...p, action: { log: "deny" } })) });
+  expect(redactPii("PRIVATE PUBLIC", logDeny([{ name: "mixed", regex: "(?=PRIVATE PUBLIC)|PUBLIC" }]), config, "log").text).toBe("[redacted]");
+  const spaced = vault({ phone: { log: "deny" }, allow: ["01000001234"] });
+  expect(redactPii("010 0000 1234 010 0000 9999", spaced, config, "log").text).toBe("010 0000 1234 [redacted]");
+  expect(screenContent("010 0000 1234 010 0000 9999", vault({ phone: "deny", allow: ["01000001234", "01000009999"] }), config)).toEqual([]);
+  const marker = logDeny([{ name: "redacted", regex: "redacted" }], { email: { log: "deny" }, allow: ["owner@example.invalid"] });
+  expect(redactPii("a@example.invalid owner@example.invalid", marker, config, "log").text).toBe("[redacted] owner@example.invalid");
+  const long = "01000001234 " + ". ".repeat(30000) + "01000009999", t0 = performance.now();
+  expect(codes(screenContent(long, vault({ phone: { log: "deny" } }), config, "log"))).toEqual(["V07:error"]);
+  expect(performance.now() - t0).toBeLessThan(2000);
+});
