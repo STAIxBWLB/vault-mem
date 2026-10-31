@@ -56,6 +56,9 @@ test("panels read the vault and the palette searches it", async () => {
 
 test("delete writes only on the console's confirmation with the current fingerprint", async () => {
   const p = await plugin.open({ home: process.env.AGENTHUB_HOME!, log: () => {} });
+  // An explicit vault that does not exist is refused like MCP refuses it, never replaced by another vault.
+  expect(await p.action({ action: "delete", path: "beta", vault: "missing" })).toMatchObject({ ok: false });
+  expect(await p.snapshot({ after: 0, panel: "note", path: "beta", vault: "missing" })).toMatchObject({ note: null });
   // vmem refuses to delete a note that others link to; the refusal reaches the console as an error.
   expect(await p.action({ action: "delete", path: "alpha" })).toMatchObject({ ok: false });
   const preview = await p.action({ action: "delete", path: "beta" });
@@ -125,4 +128,8 @@ test("setup writes, keeps and removes the acon manifest", () => {
   symlinkSync(join(root, "real-plugins"), join(linked.AGENTHUB_HOME, "console", "plugins"));
   expect(consoleManifest("apply", linked)).toMatchObject({ change: "refused", reason: expect.stringContaining("real directory") });
   expect(existsSync(join(root, "real-plugins", "vmem.json"))).toBe(false);
+  // Undo through the same link is refused too and leaves the manifest behind it alone.
+  writeFileSync(join(root, "real-plugins", "vmem.json"), JSON.stringify({ api: 1, tool: "vmem", module: added.module, sha256: "0".repeat(64) }), { mode: 0o600 });
+  expect(consoleManifest("undo", linked)).toMatchObject({ change: "refused" });
+  expect(existsSync(join(root, "real-plugins", "vmem.json"))).toBe(true);
 });

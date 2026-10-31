@@ -67,11 +67,15 @@ export const plugin: ConsolePlugin = {
     // The shell's tabs navigate without params, so the vault chosen on one panel is kept for the others.
     // ponytail: one choice per provider; fine for H0's single person, per session once H1 serves several.
     let chosen: string | undefined;
+    // An explicit vault must exist (undefined otherwise, like MCP's own check); only an omitted one falls back.
     const vaultOf = (args: Args) => {
-      if (str(args.vault) && mcp.vaults.some(v => v.id === args.vault)) chosen = str(args.vault);
+      const asked = str(args.vault);
+      if (asked) { const spec = mcp.vaults.find(v => v.id === asked); if (spec) chosen = spec.id; return spec; }
       return mcp.vaults.find(v => v.id === (chosen ?? mcp.defaultVault));
     };
-    const pass = (args: Args) => { const v = vaultOf(args); return v ? { vault: v.id } : {}; };
+    // The vault argument for an MCP call: an explicit id goes through unchanged so the handler refuses an unknown one.
+    const vaultArg = (args: Args) => str(args.vault) ?? vaultOf(args)?.id;
+    const pass = (args: Args) => { vaultOf(args); const v = vaultArg(args); return v ? { vault: v } : {}; };
     /**
      * Every option the MCP tool declares reaches it: the console never hand-picks arguments, so a supported
      * operation cannot be lost on the way. Form text for array options is split on commas; the result is checked
@@ -82,7 +86,7 @@ export const plugin: ConsolePlugin = {
       const out: Args = {};
       for (const [key, spec] of Object.entries(schema?.properties ?? {})) {
         if (key === "confirm" || key === "fingerprint") continue;
-        let value = key in fixed ? fixed[key] : key === "vault" ? vaultOf(args)?.id : args[key];
+        let value = key in fixed ? fixed[key] : key === "vault" ? vaultArg(args) : args[key];
         if (value === undefined || value === "") continue;
         const types = Array.isArray(spec.type) ? spec.type : [spec.type];
         if (typeof value === "string" && types.includes("array") && !types.includes("string")) value = value.split(",").map(v => v.trim()).filter(Boolean);

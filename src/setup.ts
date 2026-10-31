@@ -228,13 +228,6 @@ export function consoleManifest(mode: SetupMode, env: NodeJS.ProcessEnv = proces
   const action: ConsoleAction = { file, module, change: "none" };
   try {
     const next = { api: 1, tool: "vmem", module, sha256: createHash("sha256").update(readFileSync(module)).digest("hex") };
-    const text = readText(file);
-    const current = text === null ? undefined : JSON.parse(text) as Record<string, unknown>;
-    if (mode === "undo") {
-      if (!current) { action.reason = "no manifest"; return action; }
-      if (current.module !== module) { action.change = "refused"; action.reason = "manifest points at another vmem install; left as is"; return action; }
-      unlinkSync(file); action.change = "remove"; return action;
-    }
     // Apply acon's own loader rules (agent-console scanPlugins): the directory and manifest must be real, owned by you
     // and not writable by others. Kinds and owners are refused here; modes are fixed on apply.
     for (const [path, kind] of [[dir, "directory"], [file, "file"]] as const) {
@@ -242,6 +235,13 @@ export function consoleManifest(mode: SetupMode, env: NodeJS.ProcessEnv = proces
       try { info = lstatSync(path); } catch { continue; }
       if (kind === "directory" ? !info.isDirectory() : !info.isFile()) throw new Error(`${path}: acon needs a real ${kind}, not a link or other entry`);
       if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new Error(`${path}: owned by another user; acon refuses it`);
+    }
+    const text = readText(file);
+    const current = text === null ? undefined : JSON.parse(text) as Record<string, unknown>;
+    if (mode === "undo") {
+      if (!current) { action.reason = "no manifest"; return action; }
+      if (current.module !== module) { action.change = "refused"; action.reason = "manifest points at another vmem install; left as is"; return action; }
+      unlinkSync(file); action.change = "remove"; return action;
     }
     const loose = (path: string, want: number) => { try { return (lstatSync(path).mode & 0o777) !== want; } catch { return false; } };
     const modesOk = !loose(dir, 0o700) && !loose(file, 0o600);
