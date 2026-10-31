@@ -1,3 +1,4 @@
+import { localDate } from "./local-date.ts";
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -183,6 +184,7 @@ export function communityToCandidate(cid: number, members: readonly string[], gr
   let daySpan = 1, uniqueDays = 1;
   if (times.length >= 2) {
     daySpan = Math.max(1, Math.floor((times.at(-1)! - times[0]!) / DAY));
+    // Python `.date()` on an aware datetime keeps its own offset, so amem/vault `...Z` times count UTC days, as here.
     uniqueDays = new Set(times.map(t => new Date(t).toISOString().slice(0, 10))).size;
   }
   const membership = new Set(members), counts = new Map<string, number>();
@@ -446,7 +448,7 @@ export async function mineSkills(home: string, options: MineOptions): Promise<Mi
   const amem = await readAmemForMining({ env: options.env, since, ...(options.project ? { project: options.project } : {}), piiPatterns: local.config.piiPatterns ?? [] });
   return mineRecords({
     vault: options.vault, days, since, projects: amem.projects, records: [...amem.records, ...local.records], vocab, registry, skills, minSize, minNovelty, piiPatterns: local.config.piiPatterns ?? [],
-    today: now.toISOString().slice(0, 10), dropped: { policy: amem.screened, unreadable: amem.unreadable + local.unreadable, truncatedCapture: amem.truncatedCapture },
+    today: localDate(now), dropped: { policy: amem.screened, unreadable: amem.unreadable + local.unreadable, truncatedCapture: amem.truncatedCapture },
   });
 }
 

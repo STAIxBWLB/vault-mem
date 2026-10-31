@@ -1,3 +1,4 @@
+import { localDate } from "./local-date.ts";
 import { createHash } from "node:crypto";
 import type { VaultSpec } from "./config.ts";
 import { emitFrontmatter, parseFrontmatter } from "./frontmatter.ts";
@@ -63,7 +64,7 @@ export function draftNote(entry: AmemCandidate, meta: PromoteMetadata, now = new
   const topics = (meta.topics ?? []).map(value => value.startsWith("[[") ? value : `[[${value}]]`);
   const frontmatter: Record<string, unknown> = {
     title, description: meta.description ?? firstSentence(entry.text), type: meta.type ?? (entry.kind === "decision" ? "decision" : entry.kind === "fail" ? "method" : "insight"),
-    ...(meta.domain ? { domain: meta.domain } : {}), topics, promoted_from: `mem:${entry.id}`, promoted_at: now.toISOString().slice(0, 10),
+    ...(meta.domain ? { domain: meta.domain } : {}), topics, promoted_from: `mem:${entry.id}`, promoted_at: localDate(now),
   };
   const hints = entry.about.length ? `${entry.about.slice(0, 20).map(node => `- ${node.replace(/[\r\n[\]]/g, " ")}`).join("\n")}\n` : "";
   const body = meta.body ?? `# ${title}\n\n${entry.text.trim()}\n\n## Relevant Notes\n\n${hints}\n## Topics\n\n${topics.map(topic => `- ${topic}`).join("\n")}\n`;
