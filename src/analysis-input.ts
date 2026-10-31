@@ -1,3 +1,4 @@
+import { MAX_REPORT_BYTES } from "./write-validation.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { sourceWorkspaceRoot, missingSourceWarnings, sourceReferences } from "./source.ts";
 import { parseAnalysisYaml } from "./analysis-yaml.ts";
@@ -50,7 +51,7 @@ export function analysisInput(home: string, id: string, options: { today?: strin
   let bytes = 0;
   for (const name of entries) {
     const file = join(reportsDir,name); permitted(file,config);
-    const source = analysisRead(file); if (source !== null) { bytes += Buffer.byteLength(source); if (bytes > 16 * 1024 * 1024) throw new Error("analysis: reports exceed aggregate bound"); reports[name] = source; }
+    const source = analysisRead(file, MAX_REPORT_BYTES); if (source !== null) { bytes += Buffer.byteLength(source); if (bytes > MAX_REPORT_BYTES) throw new Error("analysis: reports exceed aggregate bound"); reports[name] = source; }
   }
   let registryIds: string[] | null = null;
   if (vault.registry) {

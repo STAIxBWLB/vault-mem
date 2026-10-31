@@ -1,3 +1,4 @@
+import { MAX_REPORT_BYTES } from "./write-validation.ts";
 import type { VaultSpec } from "./config.ts";
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
@@ -46,10 +47,10 @@ export function writeAnalysisReports(home: string, request: AnalysisRequest, env
   }
   const originals = new Map(outputs.map(out => {
     const name = out.path.slice("reports/".length);
-    return [out.path, request.kind === "graph" ? snapshot.reports[name] ?? null : analysisRead(join(vault.path,out.path))] as const;
+    return [out.path, request.kind === "graph" ? snapshot.reports[name] ?? null : analysisRead(join(vault.path,out.path), MAX_REPORT_BYTES)] as const;
   }));
   unchanged();
-  for (const out of outputs) if (analysisRead(join(vault.path,out.path)) !== originals.get(out.path)) throw new Error("analysis: report changed during build");
+  for (const out of outputs) if (analysisRead(join(vault.path,out.path), MAX_REPORT_BYTES) !== originals.get(out.path)) throw new Error("analysis: report changed during build");
   const expectedShas = Object.fromEntries(snapshot.notes.map(n => ["notes/"+n.path.replace(/^notes\//,""),sha256(n.source)]));
   // Preflight every output through the same validation pipeline, before any output is written.
   const previews = outputs.map(out => applyWrite(home,{vault:request.vault,operation:{op:"report",...out},dryRun:true,channel:request.channel,expectedShas,log:false},{env}));
@@ -57,7 +58,7 @@ export function writeAnalysisReports(home: string, request: AnalysisRequest, env
   const receipts: WriteReceipt[] = [];
   for (const out of outputs) {
     unchanged();
-    if (analysisRead(join(vault.path,out.path)) !== originals.get(out.path)) throw new Error("analysis: report changed during build");
+    if (analysisRead(join(vault.path,out.path), MAX_REPORT_BYTES) !== originals.get(out.path)) throw new Error("analysis: report changed during build");
     const receipt = applyWrite(home,{vault:request.vault,operation:{op:"report",...out},channel:request.channel,expectedShas,log:false},{env});
     receipts.push(receipt);
     if (!receipt.ok) break;

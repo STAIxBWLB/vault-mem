@@ -34,6 +34,7 @@ const SECRETS = [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, /\bAKIA[0-9A-Z]{16}\b/, /
 export const SECRET_PATTERNS: readonly RegExp[] = SECRETS;
 export { EMAIL_PATTERN } from "./pii.ts";
 const MAX_BYTES = 256 * 1024;
+export const MAX_REPORT_BYTES = 16 * 1024 * 1024;
 function issue(code: string, message: string, severity: WriteIssue["severity"] = "error", path?: string): WriteIssue {
   return { code, severity, message, ...(path ? { path } : {}) };
 }
@@ -209,7 +210,7 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
     if (change.after === null) final.delete(change.path);
     else if (change.path.startsWith("notes/")) final.set(change.path, change.after);
     if (change.after === null) continue;
-    if (Buffer.byteLength(change.after) > MAX_BYTES) issues.push(issue("V09", "prospective file exceeds 256 KiB", "error", change.path));
+    if (Buffer.byteLength(change.after) > (report ? MAX_REPORT_BYTES : MAX_BYTES)) issues.push(issue("V09", report ? "prospective report exceeds 16 MiB" : "prospective file exceeds 256 KiB", "error", change.path));
     issues.push(...screenContent(change.after, context.vault, context.config, context.piiSurface).map(value => ({ ...value, path: change.path })));
     try{issues.push(...screenMetadata(parseFrontmatter(change.after).data,context,change.path));}catch{ /* Invalid note YAML is reported separately; reports remain schema-exempt. */ }
   }

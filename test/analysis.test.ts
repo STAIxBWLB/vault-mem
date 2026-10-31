@@ -158,3 +158,36 @@ test("legacy filenames are diagnosed by L13 without blocking report writes or by
   const unsafe=applyWrite(f.home,{...request,expectedShas:{"notes/../outside.md":sha256(source)}});
   expect(unsafe.ok).toBe(false);expect(unsafe.issues.some(i=>i.code==="V04")).toBe(true);
 });
+
+test("graph artifacts above 2 MiB persist and rebuild from their existing snapshot", () => {
+  const f = fixture();
+  // A few bounded synthetic notes keep the graph test small while descriptions grow its JSON.
+  for (let i = 0; i < 12; i++) {
+    const source = `---\ntype: insight\ndomain: research\ndescription: "${"Synthetic graph description. ".repeat(7200)}"\n---\n# Large ${i}\n`;
+    expect(Buffer.byteLength(source)).toBeLessThan(256 * 1024);
+    writeFileSync(join(f.vault, "notes", `large-${i}.md`), source);
+  }
+  const file = join(f.vault, "reports", "vault-graph.json");
+  const first = writeAnalysisReports(f.home, { vault: "test", kind: "graph", today: f.snapshot.today });
+  expect(first.ok).toBe(true);
+  expect(first.applied).toBe(true);
+  const original = readFileSync(file, "utf8");
+  expect(Buffer.byteLength(original)).toBeGreaterThan(2 * 1024 * 1024);
+  expect(analysisInput(f.home, "test", { today: f.snapshot.today }).snapshot.reports["vault-graph.json"]).toBe(original);
+  writeFileSync(join(f.vault, "notes", "extra.md"), "---\ntype: moc\ndescription: Synthetic added node.\n---\n# Extra\n");
+  const second = writeAnalysisReports(f.home, { vault: "test", kind: "graph", today: f.snapshot.today });
+  expect(second.ok).toBe(true);
+  expect(second.applied).toBe(true);
+  const replacement = readFileSync(file, "utf8");
+  expect(Buffer.byteLength(replacement)).toBeGreaterThan(2 * 1024 * 1024);
+  expect(replacement).not.toBe(original);
+  expect(JSON.parse(replacement).nodes).toHaveLength(22);
+}, 30_000);
+
+test("lint replaces an existing report above 2 MiB through originals and drift checks", () => {
+  const f = fixture(), file = join(f.vault, "reports", "lint-report-260819.md");
+  writeFileSync(file, "Synthetic prior lint report.\n".repeat(90000));
+  expect(Buffer.byteLength(readFileSync(file))).toBeGreaterThan(2 * 1024 * 1024);
+  expect(writeAnalysisReports(f.home, { vault: "test", kind: "lint", today: f.snapshot.today }).ok).toBe(true);
+  expect(readFileSync(file, "utf8")).toContain("SUMMARY errors=12 warnings=7");
+});
