@@ -10,3 +10,6 @@
 .vmem-mono { margin: 0; color: var(--acon-text-2); font: 12px var(--acon-font-mono); word-break: break-all; }
 .vmem details > summary { cursor: pointer; font-weight: 600; padding: var(--acon-space-1) 0; }
 @media (max-width: 600px) { .vmem-inline { width: 100%; } .vmem-inline .vmem-input { flex: 1; } }
+.vmem-form { display: flex; flex-direction: column; gap: var(--acon-space-2); max-width: 560px; }
+.vmem-form h2 { margin: 0; font-size: 15px; }
+.vmem-form .btn { align-self: flex-start; }

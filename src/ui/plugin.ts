@@ -8,6 +8,7 @@ import { analysisInput } from "../analysis-input.ts";
 import { resolveHome } from "../home.ts";
 import { createVaultMcp } from "../mcp-vault.ts";
 import { listPromotionCandidates } from "../promote.ts";
+import { loadRegistry } from "../registry.ts";
 import { lintVault } from "../vault-lint.ts";
 import type { LintCode } from "../analysis-types.ts";
 
@@ -78,7 +79,7 @@ export const plugin: ConsolePlugin = {
     const projectOf = new Map<string, string>();
     const candidates = async () => {
       try {
-        const { projects } = await listPromotionCandidates({ allProjects: true, limit: 50 });
+        const { projects } = await listPromotionCandidates({ allProjects: true, limit: 50, piiPatterns: loadRegistry(home).piiPatterns });
         for (const p of projects) for (const c of p.candidates) projectOf.set(c.id, c.project);
         return { projects };
       }
@@ -90,7 +91,8 @@ export const plugin: ConsolePlugin = {
       for (const p of (await candidates()).projects) for (const c of p.candidates) items.push({
         id: `mem:${c.id}`, group: "candidate", kind: "promotion", title: c.title ?? c.kind, detail: `${c.kind} memory to promote into a vault note`,
         project: c.project, at: new Date(c.at).toISOString(),
-        verbs: [{ id: "promote-from-amem", label: "Promote…", primary: true, destructive: true }],
+        // Promotion needs a domain and topics, so the item opens the Promote panel instead of offering a one-key verb.
+        verbs: [],
         link: { panel: "promote", params: { id: c.id, project: c.project } },
       });
       for (const v of mcp.vaults.filter(x => x.kind === "personal")) {
@@ -152,7 +154,9 @@ export const plugin: ConsolePlugin = {
             const note = await call("vmem_read", { path, ...pass(args) });
             if (note.refused) return { note: null, error: firstIssue(note) };
             const links = await call("vmem_links", { path, ...pass(args) });
-            return { note, links, orgVaults: mcp.vaults.filter(v => v.kind === "org").map(v => v.id) };
+            // vmem_promote always reads from the default personal vault, so offer it only there.
+            const promotable = vaultOf(args)?.id === mcp.defaultVault && vaultOf(args)?.kind === "personal";
+            return { note, links, orgVaults: promotable ? mcp.vaults.filter(v => v.kind === "org").map(v => v.id) : [] };
           }
           case "promote": return { ...(await candidates()), selected: str(args.id) ?? null };
           case "lint": {
@@ -190,6 +194,7 @@ export const plugin: ConsolePlugin = {
           case "promote": {
             const path = str(args.path), to = str(args.to);
             if (!path || !to) return { ok: false, error: "path and to are required" };
+            if (str(args.vault) && args.vault !== mcp.defaultVault) return { ok: false, error: `promotion to an org vault reads from ${mcp.defaultVault}; open the note there` };
             return twoStep("vmem_promote", { path, to }, confirmed, fingerprint, p => {
               const screen = rec(p.screen), dropped = Array.isArray(p.droppedLinks) ? p.droppedLinks as string[] : [];
               return { verb: "Promote note", preview: String(p.text ?? "").split("\n"),
@@ -202,7 +207,10 @@ export const plugin: ConsolePlugin = {
             if (!/^[0-9a-f-]{32,36}$/i.test(id)) return { ok: false, error: "a memory id is required" };
             if (!projectOf.has(id)) await candidates();
             const project = str(args.project) ?? projectOf.get(id);
-            return twoStep("vmem_promote_from_amem", { id, ...pass(args), ...(project ? { project } : {}) }, confirmed, fingerprint, p => {
+            const topics = Array.isArray(args.topics) ? args.topics.filter((t): t is string => typeof t === "string")
+              : str(args.topics)?.split(",").map(t => t.trim()).filter(Boolean);
+            const meta = Object.fromEntries(["stem", "type", "domain", "description", "title", "linkTo"].filter(k => str(args[k])).map(k => [k, str(args[k])]));
+            return twoStep("vmem_promote_from_amem", { id, ...pass(args), ...(project ? { project } : {}), ...meta, ...(topics?.length ? { topics } : {}) }, confirmed, fingerprint, p => {
               const dupes = Array.isArray(p.possibleDuplicates) ? p.possibleDuplicates as string[] : [];
               return { verb: p.action === "link" ? "Link memory" : "Promote memory", preview: String(p.text ?? `link mem:${id} → ${String(p.path)}`).split("\n"),
                 changes: [{ op: p.action === "link" ? "modify" : "create", target: String(p.path ?? "note") }, { op: "log", target: "log", note: "LEARN line" }],

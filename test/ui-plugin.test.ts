@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerConsoleConformance } from "@staix/agent-console/conformance";
@@ -35,6 +35,9 @@ test("panels read the vault and the palette searches it", async () => {
   expect(read.note.frontmatter.title).toBe("Alpha Finding");
   expect(read.links.in).toHaveLength(1);
   expect(read.orgVaults).toEqual(["team"]);
+  // Org promotion reads from the default personal vault only, so another vault never offers or runs it.
+  expect(await p.snapshot({ after: 0, panel: "note", path: "alpha", vault: "team" })).toMatchObject({ orgVaults: [] });
+  expect(await p.action({ action: "promote", path: "alpha", to: "team", vault: "team" })).toMatchObject({ ok: false });
   expect(await p.snapshot({ after: 0, panel: "overview" })).toMatchObject({ vault: "mine", noteCount: 3 });
   expect(await p.snapshot({ after: 0, panel: "note", path: "missing" })).toMatchObject({ note: null });
 });
@@ -91,4 +94,12 @@ test("setup writes, keeps and removes the acon manifest", () => {
   writeFileSync(file, JSON.stringify(manifest), { mode: 0o600 });
   expect(consoleManifest("undo", env).change).toBe("remove");
   expect(existsSync(file)).toBe(false);
+  // Same content but modes acon refuses: setup reports and fixes them instead of "unchanged".
+  consoleManifest("apply", env);
+  chmodSync(join(env.AGENTHUB_HOME, "console", "plugins"), 0o775); chmodSync(file, 0o664);
+  expect(consoleManifest("dry-run", env)).toMatchObject({ change: "replace", reason: expect.stringContaining("permissions") });
+  expect(consoleManifest("apply", env).change).toBe("replace");
+  expect(statSync(file).mode & 0o777).toBe(0o600);
+  expect(statSync(join(env.AGENTHUB_HOME, "console", "plugins")).mode & 0o777).toBe(0o700);
+  expect(consoleManifest("apply", env).change).toBe("unchanged");
 });

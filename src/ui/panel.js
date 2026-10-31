@@ -83,10 +83,19 @@ export default (host) => {
     promote(s) {
       const projects = s.projects ?? [];
       const all = projects.flatMap((p) => p.candidates);
-      return [s.unavailable ? err(s.unavailable) : null,
+      const picked = all.find((c) => c.id === s.selected);
+      const field = (name, label, required) => h("input", { type: "text", name, class: "vmem-input", "aria-label": label, placeholder: label, required });
+      const form = picked ? (() => {
+        const domain = field("domain", "domain (required)", true), topics = field("topics", "topics, comma separated (required)", true), type = field("type", "type (optional)"), description = field("description", "description (optional)");
+        return h("form", { class: "card vmem-form", onsubmit: (e) => {
+          e.preventDefault();
+          const meta = Object.fromEntries([["domain", domain], ["topics", topics], ["type", type], ["description", description]].filter(([, el]) => el.value.trim()).map(([k, el]) => [k, el.value.trim()]));
+          host.action({ action: "promote-from-amem", id: picked.id, project: picked.project, ...meta, ...(params.vault ? { vault: params.vault } : {}) });
+        } }, h("h2", { text: `Promote: ${picked.title || picked.kind}` }), domain, topics, type, description, h("button", { type: "submit", class: "btn primary", text: "Preview promotion…" }));
+      })() : null;
+      return [s.unavailable ? err(s.unavailable) : null, form,
         rows(all, (c) => row(c.title || c.kind, `${c.kind} · ${c.project} · ${new Date(c.at).toLocaleString()}`, () => go("promote", { id: c.id, project: c.project }),
-          s.selected === c.id ? chip("selected", "accent") : null,
-          btn("Promote…", () => host.action({ action: "promote-from-amem", id: c.id, project: c.project, ...(params.vault ? { vault: params.vault } : {}) }), "btn primary")))
+          s.selected === c.id ? chip("selected", "accent") : btn("Select", () => go("promote", { id: c.id, project: c.project }))))
           ?? empty("No promotion candidates", "Durable agent memories appear here when agent-mem marks them for the vault.")];
     },
     lint(s) {

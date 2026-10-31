@@ -1,4 +1,4 @@
-import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -235,11 +235,17 @@ export function consoleManifest(mode: SetupMode, env: NodeJS.ProcessEnv = proces
       if (current.module !== module) { action.change = "refused"; action.reason = "manifest points at another vmem install; left as is"; return action; }
       unlinkSync(file); action.change = "remove"; return action;
     }
-    if (isDeepStrictEqual(current, next)) { action.change = "unchanged"; return action; }
+    // acon refuses a plugin directory or manifest that others can write, so setup owns both modes.
+    const loose = (path: string, want: number) => { try { return (statSync(path).mode & 0o777) !== want; } catch { return false; } };
+    const modesOk = !loose(dir, 0o700) && !loose(file, 0o600);
+    if (isDeepStrictEqual(current, next) && modesOk) { action.change = "unchanged"; return action; }
     action.change = current ? "replace" : "add";
+    if (!modesOk) action.reason = "permissions: plugin directory 0700, manifest 0600";
     if (mode === "apply") {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
+      chmodSync(dir, 0o700);
       atomicWrite(file, JSON.stringify(next, null, 2) + "\n");
+      chmodSync(file, 0o600);
     }
   } catch (error) {
     action.change = "refused"; action.reason = error instanceof Error ? error.message : "manifest write failed";
