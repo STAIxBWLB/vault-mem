@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type { AnalysisSnapshot } from "../src/analysis-types.ts";
 import type { VaultSpec, VmemConfig } from "../src/config.ts";
 import { buildWorkspaceGraph, type WorkspaceSnapshot } from "../src/workspace-graph.ts";
-import { WORK_MAX_FILES, workspaceInput } from "../src/workspace-input.ts";
+import { WORK_MAX_ENTRIES, WORK_MAX_FILE_BYTES, WORK_MAX_FILES, WORK_MAX_TOTAL_BYTES, workspaceInput } from "../src/workspace-input.ts";
 import { addVault } from "../src/registry.ts";
 import { analysisInput } from "../src/analysis-input.ts";
 import { writeAnalysisReports } from "../src/analysis-reports.ts";
@@ -185,21 +185,36 @@ test("workspace reader honors configured scratchpad roots and rejects oversized 
   expect(() => workspaceInput(snapshot(), f.spec, f.config)).toThrow("exceeds bound");
 });
 
-test("workspace reader enforces aggregate byte and file-count bounds", () => {
+test("workspace reader enforces the byte, file-count and entry bounds", () => {
+  const LIMITS = { files: 20, bytes: 4096, fileBytes: 1024, entries: 40 };
   const bytes = fixture();
-  const source = document("document_type: memo", "x".repeat(2 * 1024 * 1024 - 64));
-  for (let i = 0; i < 65; i++) bytes.put(`docs/file-${i}.md`, source);
-  expect(() => workspaceInput(snapshot(), bytes.spec, bytes.config)).toThrow("total bytes");
+  for (let i = 0; i < 5; i++) bytes.put(`docs/file-${i}.md`, document("document_type: memo", "x".repeat(900)));
+  expect(() => workspaceInput(snapshot(), bytes.spec, bytes.config, LIMITS)).toThrow("total bytes");
+  const one = fixture();
+  one.put("docs/big.md", document("document_type: memo", "x".repeat(1100)));
+  expect(() => workspaceInput(snapshot(), one.spec, one.config, LIMITS)).toThrow("exceeds bound");
   const count = fixture();
-  for (let i = 0; i < WORK_MAX_FILES + 1; i++) count.put(`docs/file-${i}.md`, "plain\n");
-  expect(() => workspaceInput(snapshot(), count.spec, count.config)).toThrow("file count");
-}, 120_000);
+  for (let i = 0; i < LIMITS.files; i++) count.put(`docs/file-${i}.md`, "plain\n");
+  expect(() => workspaceInput(snapshot(), count.spec, count.config, LIMITS)).not.toThrow();
+  count.put("docs/one-more.md", "plain\n");
+  expect(() => workspaceInput(snapshot(), count.spec, count.config, LIMITS)).toThrow("file count");
+  const entries = fixture();
+  for (let i = 0; i < 41; i++) entries.put(`docs/e-${i}.txt`, "x");
+  expect(() => workspaceInput(snapshot(), entries.spec, entries.config, { entries: 40 })).toThrow("directory entry count");
+  // The production defaults stay the documented values.
+  expect([WORK_MAX_FILES, WORK_MAX_FILE_BYTES, WORK_MAX_TOTAL_BYTES, WORK_MAX_ENTRIES]).toEqual([50000, 2 * 1024 * 1024, 128 * 1024 * 1024, 2_000_000]);
+});
 
 test("each work file counts once toward the file bound, frontmatter or not", () => {
-  const f = fixture();
-  for (let i = 0; i < WORK_MAX_FILES / 2 + 1; i++) f.put(`docs/file-${i}.md`, document("title: small"));
-  expect(() => workspaceInput(snapshot(), f.spec, f.config)).not.toThrow();
-}, 120_000);
+  // Probe and full read of a frontmatter file count once: limit/2+1 files would trip a double count, and exactly `files` pass.
+  const files = 20, f = fixture();
+  for (let i = 0; i < files / 2 + 1; i++) f.put(`docs/file-${i}.md`, document("title: small"));
+  expect(() => workspaceInput(snapshot(), f.spec, f.config, { files })).not.toThrow();
+  for (let i = files / 2 + 1; i < files; i++) f.put(`docs/file-${i}.md`, document("title: small"));
+  expect(() => workspaceInput(snapshot(), f.spec, f.config, { files })).not.toThrow();
+  f.put("docs/over.md", document("title: small"));
+  expect(() => workspaceInput(snapshot(), f.spec, f.config, { files })).toThrow("file count");
+});
 
 test("a plain work file that gains frontmatter after the probe fails the change check", () => {
   const f = fixture();

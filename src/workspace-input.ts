@@ -21,7 +21,11 @@ export const WORK_MAX_ENTRIES = 2_000_000;
 const DEFAULT_ROOTS = ["scratchpad/memos", "scratchpad/temp"];
 function object(value: unknown): Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 /** Filesystem-only snapshot. No directory or file symlinks are followed, including source stubs. */
-export function workspaceInput(snapshot: AnalysisSnapshot, vault: VaultSpec, config: VmemConfig): WorkspaceSnapshot {
+/** Test-only overrides of the reader bounds; production callers pass nothing and get the exported constants. */
+export interface WorkspaceLimits { files?: number; fileBytes?: number; bytes?: number; entries?: number }
+export function workspaceInput(snapshot: AnalysisSnapshot, vault: VaultSpec, config: VmemConfig, limits: WorkspaceLimits = {}): WorkspaceSnapshot {
+  const maxFiles = limits.files ?? WORK_MAX_FILES, maxFileBytes = limits.fileBytes ?? WORK_MAX_FILE_BYTES;
+  const maxBytes = limits.bytes ?? WORK_MAX_TOTAL_BYTES, maxEntries = limits.entries ?? WORK_MAX_ENTRIES;
   const found = sourceWorkspaceRoot(vault);
   if (!found) throw new Error("workspace graph: vault requires a registry");
   const root = realpathSync(found);
@@ -42,7 +46,7 @@ export function workspaceInput(snapshot: AnalysisSnapshot, vault: VaultSpec, con
    */
   const probed = new Set<string>();
   const opensWithFrontmatter = (file: string): boolean => {
-    if (++filesRead > WORK_MAX_FILES) throw new Error("workspace graph: file count exceeds bound");
+    if (++filesRead > maxFiles) throw new Error("workspace graph: file count exceeds bound");
     probed.add(file);
     remember(file);
     let fd: number;
@@ -54,15 +58,15 @@ export function workspaceInput(snapshot: AnalysisSnapshot, vault: VaultSpec, con
       return n === PROBE_BYTES && head.subarray(0, 3).toString("latin1") === "---" && /\s/.test(String.fromCharCode(head[3]!));
     } finally { closeSync(fd); }
   };
-  const read = (file: string, maximum = WORK_MAX_FILE_BYTES): string => {
+  const read = (file: string, maximum = maxFileBytes): string => {
     // A probed work doc was already counted; other reads (configs) count here.
-    if (!probed.has(file) && ++filesRead > WORK_MAX_FILES) throw new Error("workspace graph: file count exceeds bound");
+    if (!probed.has(file) && ++filesRead > maxFiles) throw new Error("workspace graph: file count exceeds bound");
     remember(file);
     const text = analysisRead(file, maximum);
     if (text === null) throw new Error("workspace graph: input disappeared");
     remember(file);
     bytesRead += Buffer.byteLength(text);
-    if (bytesRead > WORK_MAX_TOTAL_BYTES) throw new Error("workspace graph: total bytes exceed bound");
+    if (bytesRead > maxBytes) throw new Error("workspace graph: total bytes exceed bound");
     return text;
   };
   let skipRoots = DEFAULT_ROOTS;
@@ -91,7 +95,7 @@ export function workspaceInput(snapshot: AnalysisSnapshot, vault: VaultSpec, con
     try {
       for (;;) {
         const entry = handle.readSync(); if (!entry) break;
-        if (++entriesSeen > WORK_MAX_ENTRIES) throw new Error("workspace graph: directory entry count exceeds bound");
+        if (++entriesSeen > maxEntries) throw new Error("workspace graph: directory entry count exceeds bound");
         if (entry.isSymbolicLink()) continue;
         children.push({ name: entry.name, directory: entry.isDirectory(), file: entry.isFile() });
       }
