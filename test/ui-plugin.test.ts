@@ -52,11 +52,11 @@ test("delete writes only on the console's confirmation with the current fingerpr
   expect(existsSync(join(mine, "beta.md"))).toBe(true);
   // The file changed after the preview: the old fingerprint no longer writes.
   writeFileSync(join(mine, "beta.md"), note("Beta Finding", "Beta changed."));
-  const drift = await p.action({ action: "delete", path: "beta", confirmed: true, fingerprint: preview.fingerprint });
+  const drift = await p.action({ action: "delete", path: "beta", confirmed: true, fingerprint: preview.fingerprint as string });
   expect("needsConfirm" in drift && drift.fingerprint !== preview.fingerprint).toBe(true);
   expect(existsSync(join(mine, "beta.md"))).toBe(true);
   if (!("needsConfirm" in drift)) throw new Error("expected a fresh preview");
-  expect(await p.action({ action: "delete", path: "beta", confirmed: true, fingerprint: drift.fingerprint })).toMatchObject({ ok: true });
+  expect(await p.action({ action: "delete", path: "beta", confirmed: true, fingerprint: drift.fingerprint as string })).toMatchObject({ ok: true });
   expect(existsSync(join(mine, "beta.md"))).toBe(false);
   expect(await p.action({ action: "delete", path: "beta" })).toMatchObject({ ok: false });
   expect(await p.action({ action: "promote-from-amem", id: "not-an-id" })).toMatchObject({ ok: false, error: "a memory id is required" });
