@@ -1,7 +1,7 @@
 # Release readiness evidence
 
-- Status: 0.1.0 published to npm on 2026-10-30. Package, parity, private-corpus and native fixture gates passed; live cutover remains open.
-- Contract: [issue #11](https://github.com/STAIxBWLB/vault-mem/issues/11). No host registration or live vault write was performed. Publication does not authorize registration or cutover.
+- Status: 0.1.0 was first published to npm on 2026-10-30; 0.2.1 is the latest release. Package, parity, private-corpus, native fixture and performance gates passed. Live cutover is an operation of the parent plan, outside this repository, and its result is not recorded here.
+- Contract: [issue #11](https://github.com/STAIxBWLB/vault-mem/issues/11). This readiness work performed no host registration or live vault write. Publication does not authorize registration or cutover.
 - Runtime and method digests in the raw evidence bind measurements to source bytes. Evidence-only documentation changes do not alter measured runtime; a runtime/method change requires a new measurement.
 
 ## Verification record
@@ -19,7 +19,7 @@
 | Agent/non-TTY and stale preview | Existing CLI/MCP regression suite plus clean installed package smoke | Candidate suite required |
 | Representative private-vault write p95 <150 ms | CLI patch round-trip including startup on a copy of the authorized private vault: p95 139.0 ms over 30 samples at `3b005e8` (125.1 ms at `5634406`; 222 ms before PR #28) (evidence kept private) | Passed |
 | npm trust/environment/public package | `@staix/vault-mem@0.1.0` published by GitHub Actions OIDC from the `npm-production` environment (required reviewer, `v*` tags only) with provenance; dist-tag `latest`. Registry tarball SHA-256 `b3fd27d2…` equals the validated artifact; `npm audit signatures` verified; clean install reports `vmem --version` 0.1.0. Two placeholder versions published by a maintainer before the trusted publisher could be configured remain on the registry: `0.0.0-stage` (first publish, which created the package) and `0.0.0-bootstrap.0` (dist-tag `bootstrap`, a retry after the first publish's result was misread) | Published |
-| Reader/host/live writer integration | Separate parent-plan acceptance; no cutover attempted | Unverified |
+| Reader/host/live writer integration | Separate parent-plan acceptance, outside this repository | Not recorded here |
 
 ## Performance record
 
