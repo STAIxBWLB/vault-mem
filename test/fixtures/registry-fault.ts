@@ -6,6 +6,7 @@ const [home, vault, mode] = process.argv.slice(2);
 if (!home || !vault || !mode) throw new Error("home, vault and fault mode required");
 const original = { ...fs };
 let injected = true;
+let renamed = false;
 mock.module("node:fs", () => ({
   ...original,
   realpathSync: (...args: Parameters<typeof fs.realpathSync>) => {
@@ -21,6 +22,15 @@ mock.module("node:fs", () => ({
   writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
     if (injected && mode === "cleanup") throw new Error("injected write failure");
     return original.writeFileSync(...args);
+  },
+  renameSync: (...args: Parameters<typeof fs.renameSync>) => {
+    const result = original.renameSync(...args);
+    if (String(args[1]).endsWith("vmem.config.json")) renamed = true;
+    return result;
+  },
+  fsyncSync: (...args: Parameters<typeof fs.fsyncSync>) => {
+    if (injected && mode === "fsync" && renamed) throw new Error("injected directory fsync failure");
+    return original.fsyncSync(...args);
   },
   unlinkSync: (...args: Parameters<typeof fs.unlinkSync>) => {
     if (injected && mode === "cleanup" && String(args[0]).includes(".config-")) throw new Error("injected temp cleanup failure");
@@ -40,6 +50,15 @@ if (["EACCES", "ELOOP"].includes(mode)) {
   catch (error) { duplicateRefused = (error as Error).message.includes("already registered"); }
   const unhealthy = registryStatus(home).find(v => v.id === "unavailable")?.healthy === false;
   console.log(JSON.stringify({ added, duplicateRefused, unhealthy }));
+  process.exit(0);
+}
+if (mode === "fsync") {
+  let message = "";
+  try { addVault(home, { id: "personal", path: vault, kind: "personal", write: "mcp" }); }
+  catch (error) { message = (error as Error).message; }
+  const released = !original.existsSync(join(home, "config.lock"));
+  const config = JSON.parse(original.readFileSync(join(home, "vmem.config.json"), "utf8")) as { vaults: { id: string }[] };
+  console.log(JSON.stringify({ message, released, ids: config.vaults.map(v => v.id) }));
   process.exit(0);
 }
 let message = "";

@@ -87,6 +87,15 @@ describe("registry", () => {
       });
     }
   });
+  test("a directory fsync failure after the rename reports a committed update and releases the lock", () => {
+    const { home, vault } = fixture();
+    const result = Bun.spawnSync([process.execPath, "test/fixtures/registry-fault.ts", home, vault, "fsync"], { stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(result.stdout.toString()) as { message: string; released: boolean; ids: string[] };
+    expect(out.message).toBe(`${join(home, CONFIG_FILE)}: registry updated but directory fsync failed: injected directory fsync failure`);
+    expect(out.released).toBe(true);
+    expect(out.ids).toEqual(["personal"]);
+  });
   test("inaccessible or looping registered paths do not block distinct healthy vaults", () => {
     for (const mode of ["EACCES", "ELOOP"]) {
       const { home, vault } = fixture();
@@ -168,6 +177,18 @@ describe("follow-ups", () => {
       expect(existsSync(temp)).toBe(true);
       expect(run(["recover", "--confirm"], { VMEM_HOME: home }).code).toBe(1);
     }
+  });
+  test("an oversized lock file is unknown and never removed", () => {
+    const { home } = fixture(); mkdirSync(home);
+    const dead = Bun.spawnSync([process.execPath, "-e", "console.log(process.pid)"], { stdout: "pipe" });
+    const pid = Number(dead.stdout.toString().trim());
+    const content = JSON.stringify({ pid, host: hostname(), created: "x", pad: "x".repeat(5000) });
+    writeFileSync(lockOf(home), content);
+    const report = recoverRegistry(home, true);
+    expect(report).toMatchObject({ applied: false, lock: { state: "unknown", removed: false } });
+    expect(readFileSync(lockOf(home), "utf8")).toBe(content);
+    expect(run(["recover", "--confirm"], { VMEM_HOME: home }).code).toBe(1);
+    expect(readFileSync(lockOf(home), "utf8")).toBe(content);
   });
   test("recover on a missing home reports nothing and creates nothing", () => {
     const home = join(root(), "absent");
