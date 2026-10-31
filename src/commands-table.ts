@@ -2,6 +2,7 @@ export const COMMANDS = [
   { name: "lint", usage: "lint <vault> [--note PATH] [--write] [--dry-run] [--json]", mutates: "write" },
   { name: "graph build", usage: "graph build <vault> [--dry-run] [--json]", mutates: true },
   { name: "graph neighbors", usage: "graph neighbors <vault> <stem> [--hops 1..2] [--limit 1..500] [--json]", mutates: false },
+  { name: "skills mine", usage: "skills mine <vault> [--days N] [--project KEY|--all-projects] [--vocab DIR] [--skills DIR] [--min-size N] [--min-novelty X] [--json]", mutates: false },
   { name: "rebuild", usage: "rebuild <vault> [--json]", mutates: "cache" },
   { name: "search", usage: "search <vault> <query> [--type TYPE] [--domain DOMAIN] [--limit 1..500] [--json]", mutates: "cache" },
   { name: "show", usage: "show <vault> <target> [--section TEXT] [--offset 0..2097152] [--max-bytes 1..65536] [--json]", mutates: "cache" },
@@ -67,7 +68,7 @@ export function completionScript(shell: string): string {
       const cond = d.path.length === 1 ? `__fish_seen_subcommand_from ${d.path[0]}` : `__fish_seen_subcommand_from ${d.path[1]}`;
       for (const flag of Object.keys(d.options)) lines.push(`complete -c vmem -n ${quote(cond)} -l ${flag.slice(2)}`);
     }
-    for (const parent of ["vaults", "log", "graph"]) lines.push(`complete -c vmem -n '__fish_seen_subcommand_from ${parent}' -a ${quote(defs.filter(d => d.path[0] === parent).map(d => d.path[1]).join(" "))}`);
+    for (const parent of ["vaults", "log", "graph", "skills"]) lines.push(`complete -c vmem -n '__fish_seen_subcommand_from ${parent}' -a ${quote(defs.filter(d => d.path[0] === parent).map(d => d.path[1]).join(" "))}`);
     return lines.join("\n") + "\n";
   }
   const cases = defs.map(d => `    ${quote(d.path.join(" "))}) words=${quote(Object.keys(d.options).join(" "))} ;;`);
@@ -76,7 +77,7 @@ export function completionScript(shell: string): string {
   cur="\${COMP_WORDS[COMP_CWORD]}"
   if [ "$COMP_CWORD" -eq 1 ]; then COMPREPLY=($(compgen -W ${quote(top.join(" "))} -- "$cur")); return; fi
   key="\${COMP_WORDS[1]}"
-  case "$key" in graph) if [ "$COMP_CWORD" -eq 2 ]; then COMPREPLY=($(compgen -W 'build neighbors' -- "$cur")); return; fi; key="$key \${COMP_WORDS[2]}" ;; vaults|log) if [ "$COMP_CWORD" -eq 2 ]; then COMPREPLY=($(compgen -W "$( [ "$key" = vaults ] && echo 'list add remove' || echo 'tail grep append')" -- "$cur")); return; fi; key="$key \${COMP_WORDS[2]}" ;; esac
+  case "$key" in graph) if [ "$COMP_CWORD" -eq 2 ]; then COMPREPLY=($(compgen -W 'build neighbors' -- "$cur")); return; fi; key="$key \${COMP_WORDS[2]}" ;; skills) if [ "$COMP_CWORD" -eq 2 ]; then COMPREPLY=($(compgen -W 'mine' -- "$cur")); return; fi; key="$key \${COMP_WORDS[2]}" ;; vaults|log) if [ "$COMP_CWORD" -eq 2 ]; then COMPREPLY=($(compgen -W "$( [ "$key" = vaults ] && echo 'list add remove' || echo 'tail grep append')" -- "$cur")); return; fi; key="$key \${COMP_WORDS[2]}" ;; esac
   case "$key" in
 ${cases.join("\n")}
     *) words='' ;;

@@ -1,0 +1,8 @@
+# Synthetic object vocabulary for the skills mine tests.
+objects:
+  - canon: meeting-notes
+    surface: [회의록, meeting, meeting-notes]
+  - canon: email
+    surface: [메일, email, Gmail]
+  - canon: inbox
+    surface: [inbox, 수신함]

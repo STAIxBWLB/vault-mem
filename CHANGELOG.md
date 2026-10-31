@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `vmem skills mine <vault>` and the MCP tool `vmem_skills_mine` rank new-skill candidates from agent-mem curated entries, agent-mem capture prompts, observations and summaries, and vault notes. They port the skill-mine dictionary matching, masking and scoring, cluster with vmem's deterministic graph communities, report counts by source and write nothing.
+
 ## [0.2.2] - 2026-10-31
 
 - Report operations under `reports/` and `ops/` accept and reread files up to 16 MiB, so graph artifacts above 2 MiB can be rebuilt. Notes keep their 256 KiB write / 2 MiB read limits; CLI body input limits are unchanged.

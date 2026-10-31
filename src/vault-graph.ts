@@ -139,6 +139,18 @@ function communities(nodes: GraphNode[], neighbors: Map<string, Set<string>>): n
   for (const node of nodes) node.community = ids.get(node.id) ?? null;
   return iterations;
 }
+/** Code-point string order, the tie-break every deterministic graph output uses. */
+export const codePointCompare = compare;
+/**
+ * The same deterministic label propagation as `buildGraph`, over an arbitrary undirected graph whose nodes are
+ * all clustered (no hub exclusion). Returns node id → community id (0-based, ordered by smallest member id).
+ */
+export function labelCommunities(ids: readonly string[], edges: readonly (readonly [string, string])[]): Map<string, number> {
+  const nodes: GraphNode[] = [...ids].sort(compare).map(id => ({ id, label: id, type: "node", domain: "", description: "", confidence: "", source_file: "", topics: "", community: null, degree: 0 }));
+  const neighbors = adjacency({ nodes, edges: edges.map(([source, target]) => ({ source, target, relation: "wiki_link", confidence_tag: "EXTRACTED", confidence: 1 })) });
+  communities(nodes, neighbors);
+  return new Map(nodes.map(node => [node.id, node.community!]));
+}
 /** Pure transformation of the derived-index snapshot, preserving the reference wiki graph semantics. */
 export function buildGraph(snapshot: AnalysisSnapshot): VaultGraph {
   if (snapshot.notes.length > MAX_NODES) throw new Error(`graph: exceeds ${MAX_NODES} notes`);
