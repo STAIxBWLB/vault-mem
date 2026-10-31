@@ -105,7 +105,9 @@ test("all covers user hosts, malformed and linked configs are refused without wr
 
 test("CLI setup is non-TTY, dry-run by default, exits 1 on refusal", () => {
   const f = fixture();
-  const result = Bun.spawnSync([process.execPath, "bin/vmem.js", "setup", "jcode", "--json"], { env: { ...process.env, ...f.env, CLAUDECODE: "1" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const inheritedEnv = { ...process.env };
+  for (const key of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIMI_CODE_HOME", "PI_CODING_AGENT_DIR", "QWEN_HOME", "JCODE_HOME"]) delete inheritedEnv[key];
+  const result = Bun.spawnSync([process.execPath, "bin/vmem.js", "setup", "jcode", "--json"], { env: { ...inheritedEnv, ...f.env, CLAUDECODE: "1" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   expect(result.exitCode).toBe(0);
   expect(JSON.parse(result.stdout.toString())).toMatchObject({ mode: "dry-run", applied: false, actions: [{ target: "jcode", change: "add" }] });
   expect(existsSync(f.files.jcode!)).toBe(false);
