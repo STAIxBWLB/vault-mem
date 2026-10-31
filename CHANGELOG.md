@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-01
+
 - Report names (`graph-report-YYMMDD.md`, `lint-report-YYMMDD.md`), graph trend rows, L11 staleness, `promoted_at` (agent-mem and org promotion) and the skill-candidate report date now use the local calendar date, the same clock as the log lines, instead of UTC. A run early in the morning in a timezone ahead of UTC is no longer dated the previous day. `options.today` and `now` overrides still apply. Skill mining's `unique_days` keeps the UTC day of each record's `...Z` timestamp, as Python's `.date()` does.
 - Console plugin for `acon` (agent-console api 1), exported as `@staix/vault-mem/ui-plugin`: Overview, Search, Note, Promote, Lint and Log panels, inbox items for promotion candidates and lint alerts, palette search, and two-step `delete`, `move`, `promote` and `promote-from-amem` behind the console's confirm dialog.
 - `vmem setup` writes, reports and undoes the console plugin manifest `$AGENTHUB_HOME/console/plugins/vmem.json`.
