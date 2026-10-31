@@ -10,7 +10,7 @@
     "src/frontmatter.ts": "fbf2e6a79ec2b9c5bab02cbe6fb538b84cf32890b4f9faa6993fcc6b121994c2",
     "src/analysis-yaml.ts": "355c308ac11a7a71051c51409ee6e7437a491e07cb1910d2f0a0b80b32c4e2d7",
     "src/vault-lint.ts": "47dc3e2be5ef351f553eb7cbc73577ab8c605b9a4c4d88e69de55434745fca15",
-    "src/vault-graph.ts": "e15a76697228c832ebe91ba1ec341005fd370acbf9b2640d748762d82fcb7c3a",
+    "src/vault-graph.ts": "58d7279daa5b4432dc5df258a87dca1e87132c2299a1cc480ae1b88b07d6ea99",
     "test/fixtures/analysis-corpus.ts": "200232cf87fc8c77027eb8e1e1f08543d1c365556968978e732bcec48b52b5b2",
     "test/fixtures/analysis/lint-oracle.json": "d3e4cb1c009b4be44c2b6323425e54d2f0af3797c4a992bf589b47f0073c4628",
     "test/fixtures/analysis/graph-oracle.json": "2416f03f3bf4052af5320bac46264c7985f4e4c90ce7ab92151ebdb95f3a4b89",
@@ -33,5 +33,5 @@
     }
   ],
   "referencesRetired": false,
-  "candidate": "3b005e8"
+  "candidate": "4a5ec32"
 }
