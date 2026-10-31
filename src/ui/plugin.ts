@@ -21,6 +21,20 @@ const CACHE_MS = 60_000;
 type Args = Record<string, unknown>;
 const str = (v: unknown): string | undefined => typeof v === "string" && v.length > 0 ? v : undefined;
 const rec = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? v as Record<string, unknown> : {});
+/**
+ * The console's answer to a confirmed write. An applied write is done, together with any later step that failed
+ * (a log line, the agent-mem link, SYNC lines). A successful no-op (already linked, nothing to change, a retried
+ * confirmation) is success too, never a refusal. Anything else is refused with its first issue.
+ */
+export function confirmedOutcome(done: Args, verb: string): ActionResult {
+  if (done.applied === true) {
+    const missing = followUpProblems(done);
+    return { ok: true, message: missing.length ? `${verb}: applied, but ${missing.join("; ")}` : `${verb}: done` };
+  }
+  const issues = Array.isArray(done.issues) ? done.issues as { severity?: string }[] : [];
+  if (done.ok === true && !issues.some(i => i.severity !== "warning")) return { ok: true, message: `${verb}: already done, nothing changed` };
+  return { ok: false, error: firstIssue(done) };
+}
 const firstIssue = (r: Args): string => {
   const issues = Array.isArray(r.issues) ? r.issues as { message?: string; severity?: string }[] : [];
   return (issues.find(i => i.severity !== "warning") ?? issues[0])?.message ?? "refused";
@@ -161,15 +175,8 @@ export const plugin: ConsolePlugin = {
         return { ok: false, needsConfirm: true, fingerprint: preview.fingerprint, verb: d.verb, preview: d.preview, changes: d.changes, ...(d.warnings.length ? { warnings: d.warnings } : {}) };
       }
       const done = await call(tool, { ...args, confirm: true, fingerprint });
-      const verb = describe(preview).verb;
-      // Once a write is applied it is reported as done, together with any later step that failed (a log line, the
-      // agent-mem link, SYNC lines): the person must see that the change happened and what is missing.
-      if (done.applied === true) {
-        lintCache.clear();
-        const missing = followUpProblems(done);
-        return { ok: true, message: missing.length ? `${verb}: applied, but ${missing.join("; ")}` : `${verb}: done` };
-      }
-      return { ok: false, error: firstIssue(done) };
+      if (done.applied === true) lintCache.clear();
+      return confirmedOutcome(done, describe(preview).verb);
     }
 
     return {

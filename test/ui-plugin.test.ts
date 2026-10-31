@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { registerConsoleConformance } from "@staix/agent-console/conformance";
 import { addVault } from "../src/registry.ts";
 import { consoleManifest } from "../src/setup.ts";
-import { followUpProblems, parseLogLine, plugin, typedFindings } from "../src/ui/plugin.ts";
+import { confirmedOutcome, followUpProblems, parseLogLine, plugin, typedFindings } from "../src/ui/plugin.ts";
 
 // The provider resolves its home from the environment, like `vmem mcp`; isolate it before any test opens it.
 const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-ui-")));
@@ -98,6 +98,15 @@ test("an applied write whose log append fails is reported as applied, with what 
   expect(followUpProblems({ ok: true, applied: true, log: { ok: true } })).toEqual([]);
   expect(followUpProblems({ ok: false, applied: true, issues: [{ severity: "error", message: "agent-mem link failed" }] })).toEqual(["agent-mem link failed"]);
   expect(followUpProblems({ ok: true, applied: true, logs: { source: null, target: { ok: false, issues: [{ severity: "error", message: "SYNC append failed" }] } } })).toEqual(["SYNC append failed"]);
+});
+
+test("a confirmed write that changed nothing is success, not a refusal", () => {
+  // promoteFromAmem answers a retried confirmation of an existing link this way.
+  expect(confirmedOutcome({ ok: true, applied: false, alreadyLinked: true, issues: [] }, "Link memory")).toEqual({ ok: true, message: "Link memory: already done, nothing changed" });
+  expect(confirmedOutcome({ ok: true, applied: false, issues: [{ severity: "warning", message: "w" }] }, "Promote")).toMatchObject({ ok: true });
+  expect(confirmedOutcome({ ok: false, applied: false, issues: [{ severity: "error", message: "stale preview" }] }, "Promote")).toEqual({ ok: false, error: "stale preview" });
+  expect(confirmedOutcome({ ok: true, applied: false, issues: [{ severity: "error", message: "blocked" }] }, "Promote")).toEqual({ ok: false, error: "blocked" });
+  expect(confirmedOutcome({ ok: true, applied: true }, "Move")).toEqual({ ok: true, message: "Move: done" });
 });
 
 test("log lines and lint findings become typed rows", () => {
