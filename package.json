@@ -1,6 +1,6 @@
 {
   "name": "@staix/vault-mem",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Validated Obsidian-compatible knowledge vaults for agents and people",
   "license": "MIT",
   "type": "module",
