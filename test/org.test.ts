@@ -332,3 +332,86 @@ test("a promoted note that commits before its lock removal fails is reported as 
   expect(result.issues.some((i: { code: string }) => i.code === "CLEANUP")).toBe(true);
   expect(existsSync(join(f.org, "notes", "shared-method.md"))).toBe(true);
 });
+
+test("doctor validates a matching remote locally, leaves status unchanged and omits absent checks", () => {
+  const f = fixture();
+  // An unreachable origin still passes: doctor must never fetch or test reachability.
+  rmSync(f.remote, { recursive: true });
+  const before = { status: run(["status", "--json"], f.env), config: readFileSync(join(f.home, "vmem.config.json"), "utf8"), head: git(f.org, "rev-parse", "HEAD"), files: snapshot(f.org) };
+  const result = run(["doctor", "--json"], f.env), report = JSON.parse(result.text);
+  expect(result.code).toBe(0);
+  expect(report.healthy).toBe(true);
+  expect(report.vaults.find((v: { id: string }) => v.id === "team").checks).toEqual({ remote: { ok: true } });
+  expect(report.vaults.find((v: { id: string }) => v.id === "personal")).not.toHaveProperty("checks");
+  expect(JSON.parse(before.status.text).vaults.every((v: object) => !("checks" in v))).toBe(true);
+  expect(run(["status", "--json"], f.env)).toEqual(before.status);
+  expect(readFileSync(join(f.home, "vmem.config.json"), "utf8")).toBe(before.config);
+  expect(git(f.org, "rev-parse", "HEAD")).toBe(before.head);
+  expect(snapshot(f.org)).toBe(before.files);
+});
+
+test.each(["mismatch", "missing", "non-repo", "nested", "insteadOf", "pushInsteadOf", "pushurl", "extra-fetch", "extra-push"])("doctor refuses remote %s with exit 1 while status remains healthy", mode => {
+  const f = fixture(), other = join(f.root, "other.git");
+  if (mode === "mismatch") git(f.org, "remote", "set-url", "origin", other);
+  if (mode === "missing") git(f.org, "remote", "remove", "origin");
+  if (mode === "non-repo") rmSync(join(f.org, ".git"), { recursive: true });
+  if (mode === "nested") {
+    git(f.root, "init", "--quiet");
+    rmSync(join(f.org, ".git"), { recursive: true });
+  }
+  if (mode === "insteadOf" || mode === "pushInsteadOf") git(f.org, "config", `url.${other}.${mode}`, f.remote);
+  if (mode === "pushurl") git(f.org, "config", "remote.origin.pushurl", other);
+  if (mode === "extra-fetch") git(f.org, "config", "--add", "remote.origin.url", other);
+  if (mode === "extra-push") {
+    git(f.org, "config", "remote.origin.pushurl", f.remote);
+    git(f.org, "config", "--add", "remote.origin.pushurl", other);
+  }
+  const result = run(["doctor", "--json"], f.env), report = JSON.parse(result.text);
+  expect(result.code).toBe(1);
+  expect(report.healthy).toBe(false);
+  const team = report.vaults.find((v: { id: string }) => v.id === "team");
+  expect(team.healthy).toBe(true);
+  expect(team.checks.remote.ok).toBe(false);
+  expect(team.checks.remote.issue.length).toBeGreaterThan(0);
+  const status = run(["status", "--json"], f.env);
+  expect(status.code).toBe(0);
+  expect(JSON.parse(status.text).healthy).toBe(true);
+  expect(JSON.parse(status.text).vaults.every((v: object) => !("checks" in v))).toBe(true);
+});
+
+test.each(["valid", "missing", "malformed", "no-projects", "duplicate", "invalid-id", "oversize", "denied"])("doctor uses write-time registry validation for %s", mode => {
+  const f = fixture(), file = join(f.root, "project-registry.yaml");
+  const configFile = join(f.home, "vmem.config.json"), config = JSON.parse(readFileSync(configFile, "utf8"));
+  config.vaults.find((v: { id: string }) => v.id === "team").registry = file;
+  const contents: Record<string, string> = {
+    valid: "projects:\n  - id: project-a\n    sub_projects:\n      - id: project-b\n",
+    malformed: "projects: [",
+    "no-projects": "other: []\n",
+    duplicate: "projects:\n  - id: same\n  - id: same\n",
+    "invalid-id": "projects:\n  - id: Invalid_ID\n",
+    oversize: " ".repeat(1024 * 1024 + 1),
+    denied: "projects: []\n",
+  };
+  if (contents[mode] !== undefined) writeFileSync(file, contents[mode]!);
+  if (mode === "denied") config.denyPaths = ["project-registry.yaml"];
+  writeFileSync(configFile, JSON.stringify(config));
+  const before = run(["status", "--json"], f.env);
+  const result = run(["doctor", "--json"], f.env), report = JSON.parse(result.text);
+  expect(result.code).toBe(mode === "valid" ? 0 : 1);
+  expect(report.healthy).toBe(mode === "valid");
+  const checks = report.vaults.find((v: { id: string }) => v.id === "team").checks;
+  expect(checks.remote).toEqual({ ok: true });
+  expect(checks.registry.ok).toBe(mode === "valid");
+  if (mode !== "valid") expect(checks.registry.issue.length).toBeGreaterThan(0);
+  expect(run(["status", "--json"], f.env)).toEqual(before);
+});
+
+test("doctor skips optional checks on unavailable vaults", () => {
+  const f = fixture();
+  rmSync(join(f.org, "notes"), { recursive: true });
+  const result = run(["doctor", "--json"], f.env);
+  expect(result.code).toBe(1);
+  const team = JSON.parse(result.text).vaults.find((v: { id: string }) => v.id === "team");
+  expect(team.healthy).toBe(false);
+  expect(team).not.toHaveProperty("checks");
+});
