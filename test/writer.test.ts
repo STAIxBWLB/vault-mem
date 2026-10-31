@@ -315,3 +315,42 @@ test("move preview-confirm accepts legacy duplicate H1 while create still refuse
   const creation = f.request({ op: "create", path: "third", frontmatter: { title: "Old Finding", description: "A supporting duplicate detection fixture.", type: "insight", domain: "research", topics: ["[[research]]"] } });
   expect(creation.ok).toBe(false); expect(creation.issues.some(issue => issue.code === "V08")).toBe(true);
 });
+
+test("report bounds allow 16 MiB, refuse excess and leave note limits unchanged", () => {
+  const f = fixture(), maximum = 16 * 1024 * 1024;
+  for (const prefix of ["reports", "ops"]) {
+    const operation = { op: "report" as const, path: `${prefix}/limit.md`, text: "x".repeat(maximum) };
+    expect(f.request(operation, { dryRun: true }).ok).toBe(true);
+    const refused = f.request({ ...operation, text: operation.text + "x" }, { dryRun: true });
+    expect(refused.ok).toBe(false);
+    expect(refused.issues.some(issue => issue.code === "V09" && issue.message.includes("16 MiB"))).toBe(true);
+    mkdirSync(join(f.vault, prefix), { recursive: true });
+    writeFileSync(join(f.vault, operation.path), operation.text + "x");
+    const existing = f.request({ ...operation, text: "Small replacement." }, { dryRun: true });
+    expect(existing.ok).toBe(false);
+    expect(existing.issues.some(issue => issue.code === "V09")).toBe(true);
+  }
+  const oversizedNote = f.request({ op: "check", path: "old", text: note("Old Finding", "x".repeat(256 * 1024)) });
+  expect(oversizedNote.ok).toBe(false);
+  expect(oversizedNote.issues.some(issue => issue.code === "V09" && issue.message.includes("256 KiB"))).toBe(true);
+  writeFileSync(join(f.notes, "old.md"), "x".repeat(2 * 1024 * 1024 + 1));
+  const oversizedRead = f.request({ op: "report", path: "ops/small.md", text: "Small report." }, { dryRun: true });
+  expect(oversizedRead.ok).toBe(false);
+  expect(oversizedRead.issues.some(issue => issue.code === "V09")).toBe(true);
+}, 30_000);
+
+test("rollback rereads a report above 2 MiB and restores its large original", () => {
+  const f = fixture(), file = join(f.vault, "ops", "large.md");
+  const original = "Synthetic original.\n".repeat(120000);
+  expect(Buffer.byteLength(original)).toBeGreaterThan(2 * 1024 * 1024);
+  expect(f.request({ op: "report", path: "ops/large.md", text: original }, { log: false }).ok).toBe(true);
+  const child = Bun.spawnSync([process.execPath, "test/fixtures/report-rollback.ts", f.home], { stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode).toBe(0);
+  const result = JSON.parse(child.stdout.toString());
+  expect(result.ok).toBe(false);
+  expect(result.applied).toBe(false);
+  expect(result.issues.some((issue: { code: string }) => issue.code === "IO")).toBe(true);
+  expect(result.issues.some((issue: { code: string }) => issue.code === "ROLLBACK")).toBe(false);
+  expect(readFileSync(file, "utf8")).toBe(original);
+  expect(existsSync(join(f.vault, MUTATION_LOCK))).toBe(false);
+});

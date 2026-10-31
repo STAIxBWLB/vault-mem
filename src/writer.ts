@@ -10,7 +10,7 @@ import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { moveSourcePath, notePath, planOperation, refuse, WriteRefusal } from "./write-operations.ts";
-import { validateWrite } from "./write-validation.ts";
+import { MAX_REPORT_BYTES, validateWrite } from "./write-validation.ts";
 import type { PiiSurface } from "./config.ts";
 import type { LogBinding } from "./log-types.ts";
 import type { ChangeReceipt, PlannedChange, WriteIssue, WriteReceipt, WriteRequest } from "./write-types.ts";
@@ -41,22 +41,22 @@ function safePath(root: string, path: string): string {
 function stamp(stat: { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint }): string {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }
-function readPlain(root: string, path: string): string | null {
+function readPlain(root: string, path: string, maximum = MAX_NOTE_BYTES): string | null {
   const file = safePath(root, path);
   let fd: number;
   try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   try {
     const before = fstatSync(fd, { bigint: true });
-    if (!before.isFile() || before.size > BigInt(MAX_NOTE_BYTES)) refuse("V09", "file exceeds read bound or is not regular", path);
-    const bytes = Buffer.alloc(Math.min(Number(before.size) + 1, MAX_NOTE_BYTES + 1));
+    if (!before.isFile() || before.size > BigInt(maximum)) refuse("V09", "file exceeds read bound or is not regular", path);
+    const bytes = Buffer.alloc(Math.min(Number(before.size) + 1, maximum + 1));
     let size = 0;
     while (size < bytes.length) {
       const count = readSync(fd, bytes, size, bytes.length - size, null); size += count;
       if (!count) break;
     }
     const after = fstatSync(fd, { bigint: true });
-    if (size > MAX_NOTE_BYTES || stamp(before) !== stamp(after)) refuse("V09", "file changed during read", path);
+    if (size > maximum || stamp(before) !== stamp(after)) refuse("V09", "file changed during read", path);
     const buffer = bytes.subarray(0, size), text = buffer.toString("utf8");
     if (!Buffer.from(text).equals(buffer)) refuse("V01", "note must be valid UTF-8", path);
     return text;
@@ -150,7 +150,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       // Planning validates the report's exact relative path before it can be read.
       planOperation(request.operation, notes, null);
       if (isDenied(join(root, request.operation.path), config.denyPaths)) refuse("V06", "report output path is denied");
-      reportBefore = readPlain(root, request.operation.path);
+      reportBefore = readPlain(root, request.operation.path, MAX_REPORT_BYTES);
     }
     changes = planOperation(request.operation, notes, reportBefore);
     for (const change of changes) if (isDenied(join(root, change.path), config.denyPaths)) refuse("V06", "planned mutation path is denied", change.path);
@@ -196,7 +196,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       if (current.size !== notes.size || [...current].some(([path, text]) => notes.get(path) !== text)) refuse("V09", "vault changed while staging");
       for (const change of changes) {
         const file = safePath(root, change.path);
-        if (readPlain(root, change.path) !== change.before) refuse("V09", "file changed while staging", change.path);
+        if (readPlain(root, change.path, request.operation.op === "report" ? MAX_REPORT_BYTES : MAX_NOTE_BYTES) !== change.before) refuse("V09", "file changed while staging", change.path);
         if (change.after === null) unlinkSync(file);
         else { const temp = staged.get(change.path)!; renameSync(temp, file); temps.delete(temp); }
         committed.push(change);
@@ -209,7 +209,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       for (const change of [...committed].reverse()) {
         try {
           const file = safePath(root, change.path);
-          if (readPlain(root, change.path) !== change.after) throw new Error("external write detected before rollback");
+          if (readPlain(root, change.path, request.operation.op === "report" ? MAX_REPORT_BYTES : MAX_NOTE_BYTES) !== change.after) throw new Error("external write detected before rollback");
           if (change.before === null) unlinkSync(file);
           else { const backup = backups.get(change.path)!; renameSync(backup, file); temps.delete(backup); }
         } catch {
