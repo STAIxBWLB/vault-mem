@@ -110,6 +110,12 @@ export function maskText(text: string, people: readonly string[]): string {
   for (const name of people) if (name && masked.includes(name)) masked = masked.replaceAll(name, "[PERSON]");
   return masked;
 }
+/** The vault config's `piiPatterns` (regular expressions, as everywhere in vmem) redact sample text from every source to `[PII]`. */
+export function redactPatterns(text: string, patterns: readonly string[]): string {
+  let out = text;
+  for (const pattern of patterns) if (pattern) out = out.replace(new RegExp(pattern, "gi"), "[PII]");
+  return out;
+}
 export function allPeople(projects: RegistryProject[]): string[] {
   const names = new Set<string>();
   for (const p of projects) for (const n of strings(p.people)) if (pyStr(n)) names.add(pyStr(n));
@@ -163,7 +169,7 @@ function timestamp(value: string): number | undefined {
 }
 export interface ScoreGraph { neighbors: Map<string, Set<string>>; records: Map<string, MineRecord> }
 /** community_to_candidate(): null below three records, else the scored candidate. */
-export function communityToCandidate(cid: number, members: readonly string[], graph: ScoreGraph, existing: readonly SkillEntry[], people: readonly string[] = []): Candidate | null {
+export function communityToCandidate(cid: number, members: readonly string[], graph: ScoreGraph, existing: readonly SkillEntry[], people: readonly string[] = [], piiPatterns: readonly string[] = []): Candidate | null {
   const records = members.filter(id => graph.records.has(id));
   if (records.length < 3) return null;
   const times = records.map(id => timestamp(graph.records.get(id)!.at)).filter((t): t is number => t !== undefined).sort((a, b) => a - b);
@@ -202,7 +208,7 @@ export function communityToCandidate(cid: number, members: readonly string[], gr
   const sources: Record<RecordSource, number> = { curated: 0, capture: 0, vault: 0 };
   for (const id of records) sources[graph.records.get(id)!.source]++;
   const samples = records.slice(0, 5).map(id => {
-    const record = graph.records.get(id)!, text = maskText(record.text, people).replace(/\s+/g, " ").trim();
+    const record = graph.records.get(id)!, text = redactPatterns(maskText(record.text, people), piiPatterns).replace(/\s+/g, " ").trim();
     return { source: record.source, kind: record.kind, at: record.at, text: Array.from(text).length > SAMPLE_CHARS ? Array.from(text).slice(0, SAMPLE_CHARS).join("") + "…" : text };
   });
   return {
@@ -301,7 +307,7 @@ export function vaultRecords(home: string, vault: string, since: string): { reco
 export interface MineInputs {
   vault: string; days: number; since: string; projects: string[]; records: MineRecord[];
   vocab: { actions: VocabEntry[]; objects: VocabEntry[] }; registry: RegistryProject[]; skills: SkillEntry[];
-  minSize: number; minNovelty: number; today: string;
+  minSize: number; minNovelty: number; today: string; piiPatterns?: string[];
   dropped?: Partial<MineResult["dropped"]>;
 }
 /** The pure part: screen, mask, match, cluster, score and render. */
@@ -339,7 +345,7 @@ export function mineRecords(input: MineInputs): MineResult {
   const candidates: Candidate[] = [], detailed: Candidate[] = [];
   let below3 = 0;
   for (const [cid, members] of [...groups].sort(([a], [b]) => a - b)) {
-    const candidate = communityToCandidate(cid, members, graph, input.skills, people);
+    const candidate = communityToCandidate(cid, members, graph, input.skills, people, input.piiPatterns ?? []);
     if (!candidate) { below3++; continue; }
     if (candidate.size < input.minSize) detailed.push({ ...candidate, reason: "size<min" });
     else if (candidate.novelty < input.minNovelty) detailed.push({ ...candidate, reason: "novelty<min" });
@@ -432,7 +438,7 @@ export async function mineSkills(home: string, options: MineOptions): Promise<Mi
   const { readAmemForMining } = await import("./amem/seam.ts");
   const amem = await readAmemForMining({ env: options.env, since, ...(options.project ? { project: options.project } : {}), piiPatterns: local.config.piiPatterns ?? [] });
   return mineRecords({
-    vault: options.vault, days, since, projects: amem.projects, records: [...amem.records, ...local.records], vocab, registry, skills, minSize, minNovelty,
+    vault: options.vault, days, since, projects: amem.projects, records: [...amem.records, ...local.records], vocab, registry, skills, minSize, minNovelty, piiPatterns: local.config.piiPatterns ?? [],
     today: now.toISOString().slice(0, 10), dropped: { policy: amem.screened, unreadable: amem.unreadable + local.unreadable, truncatedCapture: amem.truncatedCapture },
   });
 }

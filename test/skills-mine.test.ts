@@ -113,6 +113,7 @@ async function fixture() {
   const add = (event: string, excerpt: string, tool?: string) => capture.append({ project, agent: "claude", event, excerpt, at: `2026-10-${day++}T10:00:00.000Z`, ...(tool ? { tool } : {}) } as never);
   add("UserPromptSubmit", "요약해줘 회의록 for /Users/someone/work/notes.md and mail kim@example.org");
   add("UserPromptSubmit", "Please summarize the meeting notes and email the summary");
+  add("UserPromptSubmit", "Please summarize the meeting notes for confidential-codename and email the summary");
   add("observation", "Summary of meeting notes was emailed");
   add("summary", "Session summarized meeting notes for Kim Minsu");
   add("PostToolUse", "summarize meeting notes tool event", "Bash");
@@ -127,24 +128,30 @@ test("skills mine reads curated, capture and vault records, masks them and write
   const before = [tree(f.memoryDir), tree(f.vault), tree(f.home)];
   const result = await mineSkills(f.home, { vault: "mine", env: f.env, vocab: join(FIXTURES, "vocab"), skills: [join(FIXTURES, "skills")], now: NOW, minSize: 3, minNovelty: 0.3 });
   const after = [tree(f.memoryDir), tree(f.vault), tree(f.home)];
-  // SQLite shared-memory files may be touched by a read-only reader; content files must stay byte-identical.
-  const content = (m: Map<string, string>) => new Map([...m].filter(([file]) => !file.endsWith("-shm")).map(([file, value]) => [file, value.split(":")[0]]));
+  // A read-only SQLite open may create or refresh empty -wal/-shm sidecars next to a database it reads (Linux creates an
+  // empty -wal); every other file, including each .db, must be byte-identical and no other file may appear.
+  const sidecar = (file: string) => /\.db-(wal|shm)$/.test(file);
+  const content = (m: Map<string, string>) => new Map([...m].filter(([file]) => !sidecar(file)).map(([file, value]) => [file, value.split(":")[0]]));
   for (let i = 0; i < 3; i++) expect(content(after[i]!)).toEqual(content(before[i]!));
+  for (const [file, value] of after[0]!) if (sidecar(file) && !before[0]!.has(file)) {
+    expect(value.split(":")[0]).toBe(createHash("sha256").update("").digest("hex"));
+    expect(after[0]!.has(file.replace(/-(wal|shm)$/, ""))).toBe(true);
+  }
   expect([...after[1]!.keys()]).toEqual([...before[1]!.keys()]);
   expect([...after[2]!.keys()]).toEqual([...before[2]!.keys()]);
 
   expect(result.projects).toEqual([other, project].sort());
-  // curated: decision + fail pass, one finding screened by piiPatterns, a fact skipped; capture: 4 mined events, a tool event skipped, 1 duplicate;
+  // curated: decision + fail pass, one finding screened by piiPatterns, a fact skipped; capture: 5 mined events, a tool event skipped, 1 duplicate;
   // vault: 3 notes in the window (person, moc and an old note excluded; the undated one uses its mtime).
-  expect(result.records).toEqual({ curated: 2, capture: 4, vault: 3 });
+  expect(result.records).toEqual({ curated: 2, capture: 5, vault: 3 });
   expect(result.dropped).toEqual({ secret: 0, policy: 1, oversized: 0, duplicate: 1, unreadable: 0, truncatedCapture: 0 });
-  expect(result.graph).toEqual({ nodes: 16, edges: 25, communities: 2, partitioner: "label-propagation" });
+  expect(result.graph).toEqual({ nodes: 17, edges: 28, communities: 2, partitioner: "label-propagation" });
   const person = result.candidates[0]!.triggers[3]!;
   expect(person).toMatch(/^person--p[0-9a-f]{10}$/);
   expect(result.candidates.map(({ cid, label, gloss, size, day_span, unique_days, cohesion, novelty, rank, triggers, similar_skills, sources }) =>
     ({ cid, label, gloss, size, day_span, unique_days, cohesion, novelty, rank, triggers, similar_skills, sources }))).toEqual([
-    { cid: 1, label: "summarize-meeting-notes", gloss: "summarize + meeting-notes + email", size: 6, day_span: 5, unique_days: 5, cohesion: 0.4, novelty: 0.833, rank: 0.862,
-      triggers: ["summarize", "meeting-notes", "email", person], similar_skills: [{ name: "summarize", similarity: 0.167 }, { name: "meeting-notes", similarity: 0.1 }], sources: { curated: 1, capture: 4, vault: 1 } },
+    { cid: 1, label: "summarize-meeting-notes", gloss: "summarize + meeting-notes + email", size: 7, day_span: 6, unique_days: 6, cohesion: 0.382, novelty: 0.833, rank: 0.893,
+      triggers: ["summarize", "meeting-notes", "email", person], similar_skills: [{ name: "summarize", similarity: 0.167 }, { name: "meeting-notes", similarity: 0.1 }], sources: { curated: 1, capture: 5, vault: 1 } },
     { cid: 0, label: "create-inbox", gloss: "inbox + create + organize", size: 3, day_span: 8, unique_days: 3, cohesion: 0.4, novelty: 1, rank: 0.238,
       triggers: ["inbox", "create", "organize"], similar_skills: [], sources: { curated: 1, capture: 0, vault: 2 } },
   ]);
@@ -152,11 +159,12 @@ test("skills mine reads curated, capture and vault records, masks them and write
   expect(result.candidates[0]!.samples.map(s => s.text)).toContain("요약해줘 회의록 for [PATH] and mail [EMAIL]");
   const json = JSON.stringify(result);
   for (const secret of ["kim@example.org", "/Users/someone", "Kim Minsu", "confidential-codename"]) expect(json).not.toContain(secret);
+  expect(result.candidates[0]!.samples.map(s => s.text)).toContain("Please summarize the meeting notes for [PII] and email the summary");
   expect(json).toContain("[EMAIL]");
   expect(json).toContain("[PATH]");
   expect(json).toContain("[PERSON]");
   expect(result.report).toContain("## Candidates");
-  expect(result.report).toContain("- sources: curated 1, capture 4, vault 1");
+  expect(result.report).toContain("- sources: curated 1, capture 5, vault 1");
   expect(result.report).toContain("## Surprising connections");
 
   // Exact scores are stable for the same inputs.
