@@ -98,7 +98,7 @@ test("all covers user hosts, malformed and linked configs are refused without wr
   expect(readFileSync(f.files.kimi!, "utf8")).toBe("{ trailing, }");
   expect(report.actions.filter(a => a.change === "add")).toHaveLength(5);
   expect(existsSync(f.files.agy!)).toBe(false);
-  expect(report.notes.join(" ")).toContain("No console plugin manifest");
+  expect(report.console).toMatchObject({ change: "add" });
   expect(readdirSync(join(f.state, "setup")).map(name => name.replace(/-[0-9a-f]{16}\.json$/, "")).sort()).toEqual(["claude", "codex", "jcode", "pi", "qwen"]);
   expect(() => f.setup("cursor", "apply")).toThrow("unknown target");
 });

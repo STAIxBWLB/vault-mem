@@ -22,7 +22,9 @@ function inspect(dir: string) {
           const name = spec.text;
           const allowed = name.startsWith(".") || builtins.has(name) || name.startsWith("bun:") ||
             (name === "@staix/agent-mem/platform" && relative(root, file) === "src/platform.ts") ||
-            (name === "@staix/agent-mem" && relative(root, file) === "src/amem/seam.ts");
+            (name === "@staix/agent-mem" && relative(root, file) === "src/amem/seam.ts") ||
+            // The console contract is types only; the import is erased at runtime.
+            (name === "@staix/agent-console/contract" && ts.isImportDeclaration(node) && node.importClause?.isTypeOnly === true);
           if (!allowed) errors.push(`${file}: forbidden dependency ${name}`);
         }
       }

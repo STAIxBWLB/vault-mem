@@ -33,7 +33,7 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
     if (positional.length !== 1 || flags.some(f => !["--apply", "--undo", "--json"].includes(f)) || new Set(flags).size !== flags.length || (flags.includes("--apply") && flags.includes("--undo"))) throw new Error("setup: requires one target and at most one of --apply/--undo");
     const mode: SetupMode = flags.includes("--apply") ? "apply" : flags.includes("--undo") ? "undo" : "dry-run";
     const report = runSetup(positional[0]!, mode, { home: resolveHome(env).home, env });
-    return { text: JSON.stringify(report, null, flags.includes("--json") ? undefined : 2), code: report.actions.some(a => a.change === "refused") ? 1 : 0 };
+    return { text: JSON.stringify(report, null, flags.includes("--json") ? undefined : 2), code: [...report.actions, report.console].some(a => a?.change === "refused") ? 1 : 0 };
   }
   if (args[0] === "completion") {
     if (args.length !== 2) throw new Error("completion: requires bash, zsh or fish");

@@ -8,12 +8,15 @@
         "@staix/agent-mem": "0.11.0",
       },
       "devDependencies": {
+        "@staix/agent-console": "github:STAIxBWLB/agent-console#7750396",
         "@types/bun": "^1.3.0",
         "typescript": "^5.8.0",
       },
     },
   },
   "packages": {
+    "@staix/agent-console": ["@staix/agent-console@github:STAIxBWLB/agent-console#7750396", { "bin": { "acon": "bin/acon.js" } }, "STAIxBWLB-agent-console-7750396", "sha512-Rya08xPZNTmoUapkmQ1KKBIvoXL/9yZNX1Pj6a5TIcoYKqk9Nl3X+Z+1N9QbxcFbZ4BrHAWUWevF360XYji4dw=="],
+
     "@staix/agent-mem": ["@staix/agent-mem@0.11.0", "", { "bin": { "amem": "bin/amem.js" } }, "sha512-lFxYVTSysFCiBINvxztfmDPRf2ydBP1AIwmbX5KLSjZYLoECy4eIFZjvKl3Li8X1CJn2/0kJo0ywxoWHvCsiPA=="],
 
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],

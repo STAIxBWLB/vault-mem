@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- Console plugin for `acon` (agent-console api 1), exported as `@staix/vault-mem/ui-plugin`: Overview, Search, Note, Promote, Lint and Log panels, inbox items for promotion candidates and lint alerts, palette search, and two-step `delete`, `move`, `promote` and `promote-from-amem` behind the console's confirm dialog.
+- `vmem setup` writes, reports and undoes the console plugin manifest `$AGENTHUB_HOME/console/plugins/vmem.json`.
+
 ## [0.2.3] - 2026-10-31
 
 - Graph communities use a deterministic, dependency-free Leiden (modularity, resolution 1.0) instead of label propagation, which collapsed most of a real vault into one community. Every community is connected, ids are numbered by size then smallest member, and `vault-graph.json` and the report Overview record the partitioner, resolution and modularity. The vault graph, the workspace graph and skill mining share it.
