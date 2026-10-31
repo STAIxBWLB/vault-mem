@@ -86,6 +86,9 @@ export const plugin: ConsolePlugin = {
       catch (error) { ctx.log(`vmem: promotion candidates unavailable: ${error instanceof Error ? error.message : String(error)}`); return { projects: [], unavailable: "agent-mem candidates are unavailable; see System" }; }
     };
 
+    // The shell keys snooze and oldest-first order on `at`, so an item keeps the time it was first seen.
+    const firstSeen = new Map<string, string>();
+    const since = (id: string) => { const at = firstSeen.get(id) ?? new Date().toISOString(); firstSeen.set(id, at); return at; };
     async function inbox(): Promise<InboxItem[]> {
       const items: InboxItem[] = [];
       for (const p of (await candidates()).projects) for (const c of p.candidates) items.push({
@@ -98,12 +101,13 @@ export const plugin: ConsolePlugin = {
       for (const v of mcp.vaults.filter(x => x.kind === "personal")) {
         let report;
         try { report = lint(v.id); } catch (error) { ctx.log(`vmem: lint ${v.id} failed: ${error instanceof Error ? error.message : String(error)}`); continue; }
-        if (report.errors > 0) items.push({ id: `lint:${v.id}`, group: "alert", kind: "lint", title: `${report.errors} lint errors in ${v.id}`, detail: report.summary, at: new Date().toISOString(),
+        if (report.errors > 0) items.push({ id: `lint:${v.id}`, group: "alert", kind: "lint", title: `${report.errors} lint errors in ${v.id}`, detail: report.summary, at: since(`lint:${v.id}`),
           chip: { text: `${report.errors} errors`, tone: "err" }, verbs: [], link: { panel: "lint", params: { vault: v.id } } });
         const stale = report.findings.L11 ?? [];
-        if (stale.length) items.push({ id: `stale:${v.id}`, group: "alert", kind: "lint", title: `Graph report is stale in ${v.id}`, detail: stale[0]!, at: new Date().toISOString(),
+        if (stale.length) items.push({ id: `stale:${v.id}`, group: "alert", kind: "lint", title: `Graph report is stale in ${v.id}`, detail: stale[0]!, at: since(`stale:${v.id}`),
           chip: { text: "stale", tone: "warn" }, verbs: [], link: { panel: "lint", params: { vault: v.id } } });
       }
+      for (const id of firstSeen.keys()) if (!items.some(i => i.id === id)) firstSeen.delete(id);
       return items;
     }
 
@@ -141,7 +145,8 @@ export const plugin: ConsolePlugin = {
             const vault = vaultOf(args);
             if (!vault) return { status, vault: null };
             const [notes, mocs, log] = await Promise.all([call("vmem_list", { vault: vault.id, limit: 500 }), call("vmem_mocs", { vault: vault.id }), call("vmem_log_tail", { vault: vault.id, n: 8 })]);
-            return { status, vault: vault.id, noteCount: Array.isArray(notes.notes) ? notes.notes.length : 0, mocs: mocs.mocs ?? [], log: (Array.isArray(log.lines) ? log.lines as string[] : []).map(parseLogLine) };
+            const count = Array.isArray(notes.notes) ? notes.notes.length : 0;
+            return { status, vault: vault.id, noteCount: count, noteCountCapped: count >= 500, mocs: mocs.mocs ?? [], log: (Array.isArray(log.lines) ? log.lines as string[] : []).map(parseLogLine) };
           }
           case "notes": {
             const q = str(args.q);

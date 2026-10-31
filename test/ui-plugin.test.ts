@@ -40,6 +40,13 @@ test("panels read the vault and the palette searches it", async () => {
   expect(await p.action({ action: "promote", path: "alpha", to: "team", vault: "team" })).toMatchObject({ ok: false });
   expect(await p.snapshot({ after: 0, panel: "overview" })).toMatchObject({ vault: "mine", noteCount: 3 });
   expect(await p.snapshot({ after: 0, panel: "note", path: "missing" })).toMatchObject({ note: null });
+  // Alerts keep the time they were first seen, so snooze and oldest-first order survive polls.
+  const first = (await p.snapshot({ after: 0, panel: "inbox" })).items as { id: string; at: string }[];
+  await Bun.sleep(5);
+  const second = (await p.snapshot({ after: 0, panel: "inbox" })).items as { id: string; at: string }[];
+  expect(first.length).toBeGreaterThan(0);
+  expect(second.map(i => [i.id, i.at])).toEqual(first.map(i => [i.id, i.at]));
+  expect(await p.snapshot({ after: 0, panel: "overview" })).toMatchObject({ noteCountCapped: false });
 });
 
 test("delete writes only on the console's confirmation with the current fingerprint", async () => {

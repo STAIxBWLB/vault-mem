@@ -42,7 +42,7 @@ export default (host) => {
         h("div", { class: "cards" },
           h("section", { class: "card" }, h("h2", { text: "Vaults" }),
             rows(vaults, (v) => row(v.id, `${v.kind} · write ${v.write}${v.health && v.health !== "ok" ? ` · ${v.health}` : ""}`, () => go("overview", { vault: v.id }), v.id === s.vault ? chip("shown", "accent") : null))),
-          h("section", { class: "card" }, h("h2", { text: `${s.noteCount ?? 0} notes · maps` }),
+          h("section", { class: "card" }, h("h2", { text: `${s.noteCount ?? 0}${s.noteCountCapped ? "+" : ""} notes · maps` }),
             rows((s.mocs ?? []).slice(0, 8), (m) => row(m.title || m.path, `${m.count} links`, () => openNote(m.path))) ?? empty("No maps yet")),
           h("section", { class: "card" }, h("h2", { text: "Recent log" }),
             rows(s.log ?? [], (r) => row(r.raw ?? `${r.type} ${r.source}${r.dest ? ` → ${r.dest}` : ""}`, r.raw ? "" : `${r.at} · ${r.project}${r.agent ? " · agent" : ""}`, () => go("log"))) ?? empty("Log is empty"))),
@@ -60,7 +60,7 @@ export default (host) => {
       if (!n) return [empty("No note selected", "Open a note from Search or the palette.")];
       const fm = n.frontmatter ?? {};
       const title = fm.title || n.path;
-      const moveInput = h("input", { type: "text", class: "vmem-input", "aria-label": "New stem", placeholder: "new-stem" });
+      const moveInput = h("input", { type: "text", name: "to", class: "vmem-input", "aria-label": "New stem", placeholder: "new-stem" });
       const orgs = s.orgVaults ?? [];
       const orgSelect = orgs.length ? h("select", { class: "vmem-input", "aria-label": "Org vault" }, orgs.map((o) => h("option", { value: o, text: o }))) : null;
       const out = s.links?.out ?? [], back = s.links?.in ?? [], dead = s.links?.dead ?? [];
@@ -86,12 +86,12 @@ export default (host) => {
       const picked = all.find((c) => c.id === s.selected);
       const field = (name, label, required) => h("input", { type: "text", name, class: "vmem-input", "aria-label": label, placeholder: label, required });
       const form = picked ? (() => {
-        const domain = field("domain", "domain (required)", true), topics = field("topics", "topics, comma separated (required)", true), type = field("type", "type (optional)"), description = field("description", "description (optional)");
+        const domain = field("domain", "domain (required)", true), topics = field("topics", "topics, comma separated (required)", true), type = field("type", "type (optional)"), description = field("description", "description (optional)"), stem = field("stem", "file stem (needed when the title has no ASCII letters)");
         return h("form", { class: "card vmem-form", onsubmit: (e) => {
           e.preventDefault();
-          const meta = Object.fromEntries([["domain", domain], ["topics", topics], ["type", type], ["description", description]].filter(([, el]) => el.value.trim()).map(([k, el]) => [k, el.value.trim()]));
+          const meta = Object.fromEntries([["domain", domain], ["topics", topics], ["type", type], ["description", description], ["stem", stem]].filter(([, el]) => el.value.trim()).map(([k, el]) => [k, el.value.trim()]));
           host.action({ action: "promote-from-amem", id: picked.id, project: picked.project, ...meta, ...(params.vault ? { vault: params.vault } : {}) });
-        } }, h("h2", { text: `Promote: ${picked.title || picked.kind}` }), domain, topics, type, description, h("button", { type: "submit", class: "btn primary", text: "Preview promotion…" }));
+        } }, h("h2", { text: `Promote: ${picked.title || picked.kind}` }), domain, topics, type, description, stem, h("button", { type: "submit", class: "btn primary", text: "Preview promotion…" }));
       })() : null;
       return [s.unavailable ? err(s.unavailable) : null, form,
         rows(all, (c) => row(c.title || c.kind, `${c.kind} · ${c.project} · ${new Date(c.at).toLocaleString()}`, () => go("promote", { id: c.id, project: c.project }),
@@ -117,12 +117,15 @@ export default (host) => {
     const sig = JSON.stringify([panel, snap]);
     if (sig === last) return; // unchanged poll: keep focus and scroll
     last = sig;
-    const keep = root.contains(document.activeElement) && document.activeElement.tagName === "INPUT" ? document.activeElement.value : null;
+    // A poll re-renders the view: carry every typed value and the focus over by field name.
+    const values = new Map([...root.querySelectorAll("input[name], select[name]")].map((el) => [el.name, el.value]));
+    const focused = root.contains(document.activeElement) ? document.activeElement.getAttribute("name") : null;
     root.replaceChildren(...(views[panel]?.(snap) ?? [empty("Unknown panel")]).filter(Boolean));
-    if (keep !== null) { const input = root.querySelector("input"); if (input) { input.value = keep; input.focus(); } }
+    for (const el of root.querySelectorAll("input[name], select[name]")) if (values.has(el.name)) el.value = values.get(el.name);
+    if (focused) root.querySelector(`[name="${focused}"]`)?.focus();
   });
   return {
-    show(id, p = {}) { panel = id; params = p; last = ""; },
+    show(id, p = {}) { panel = id; params = p; last = ""; root.replaceChildren(); },
     hide() {},
     destroy() { root.remove(); },
   };
