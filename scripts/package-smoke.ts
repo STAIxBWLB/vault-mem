@@ -18,8 +18,8 @@ export async function runPackageSmoke(archive = process.env.VMEM_SMOKE_TARBALL):
     mkdirSync(consumer);mkdirSync(notes,{recursive:true});
     if(!archive)command([process.execPath,"pm","pack","--ignore-scripts","--filename",tarball],repo,env);
     const entries=command(["tar","-tzf",tarball],repo,env).split("\n").filter(Boolean);
-    requireOk(entries.every(name=>/^package\/(?:package\.json|LICENSE|README\.md|CHANGELOG\.md|bin\/vmem\.js|src\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.ts)$/.test(name)),"unexpected package contents");
-    for(const required of ["package/package.json","package/bin/vmem.js","package/src/index.ts","package/CHANGELOG.md"])requireOk(entries.includes(required),"missing artifact "+required);
+    requireOk(entries.every(name=>/^package\/(?:package\.json|LICENSE|README\.md|CHANGELOG\.md|bin\/vmem\.js|src\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.ts|src\/ui\/panel\.(?:js|css))$/.test(name)),"unexpected package contents");
+    for(const required of ["package/package.json","package/bin/vmem.js","package/src/index.ts","package/src/ui/plugin.ts","package/src/ui/panel.js","package/src/ui/panel.css","package/CHANGELOG.md"])requireOk(entries.includes(required),"missing artifact "+required);
     writeFileSync(join(consumer,"package.json"),JSON.stringify({private:true,dependencies:{"@staix/vault-mem":"file:"+tarball}}));
     command([process.execPath,"install","--production","--ignore-scripts"],consumer,env);
     const installed=join(consumer,"node_modules","@staix","vault-mem"),bin=join(consumer,"node_modules",".bin","vmem");

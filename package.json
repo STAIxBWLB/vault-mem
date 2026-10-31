@@ -15,11 +15,13 @@
     "@staix/agent-mem": "0.11.0"
   },
   "devDependencies": {
+    "@staix/agent-console": "github:STAIxBWLB/agent-console#bd7234f",
     "@types/bun": "^1.3.0",
     "typescript": "^5.8.0"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./ui-plugin": "./src/ui/plugin.ts"
   },
   "bin": {
     "vmem": "bin/vmem.js"

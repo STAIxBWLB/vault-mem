@@ -1,4 +1,4 @@
-import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -14,7 +14,8 @@ const MAX_HOST_CONFIG = 4 * 1024 * 1024;
 export interface McpEntry { command: string; args: string[] }
 interface HostFile { target: SetupTarget; file: string; format: "json" | "toml"; key: string }
 export interface SetupAction { target: SetupTarget; file: string; change: "add" | "replace" | "unchanged" | "restore" | "remove" | "refused" | "none"; reason?: string }
-export interface SetupReport { mode: SetupMode; applied: boolean; entry: McpEntry; actions: SetupAction[]; notes: string[] }
+export interface ConsoleAction { file: string; module: string; change: "add" | "replace" | "unchanged" | "remove" | "none" | "refused"; reason?: string }
+export interface SetupReport { mode: SetupMode; applied: boolean; entry: McpEntry; actions: SetupAction[]; console?: ConsoleAction; notes: string[] }
 interface Receipt { version: 1; target: SetupTarget; file: string; existed: boolean; keyExisted?: boolean; prior: unknown; priorToml?: string[]; installed: McpEntry }
 
 function hosts(env: NodeJS.ProcessEnv, cwd: string): Record<SetupTarget, HostFile> {
@@ -170,7 +171,7 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
   const targets = target === "all" ? SETUP_TARGETS.filter(t => t !== "agy") : [target as SetupTarget];
   const report: SetupReport = { mode, applied: false, entry, actions: [], notes: [
     "Registers the stdio server `vmem mcp`; restart the host session to load it.",
-    "No console plugin manifest is written: vmem ships no console plugin yet.",
+    "Writes the acon console plugin manifest ($AGENTHUB_HOME/console/plugins/vmem.json); re-run setup after upgrading vmem.",
   ] };
   if (target === "all") report.notes.push("`all` covers user-level hosts; run `vmem setup agy` inside a workspace for Antigravity.");
   for (const name of targets) {
@@ -214,6 +215,47 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
       action.change = "refused"; action.reason = error instanceof Error ? error.message : "setup failed";
     }
   }
-  report.applied = mode !== "dry-run" && report.actions.some(a => !["none", "unchanged", "refused"].includes(a.change));
+  report.console = consoleManifest(mode, env);
+  report.applied = mode !== "dry-run" && [...report.actions, report.console].some(a => !["none", "unchanged", "refused"].includes(a.change));
   return report;
+}
+
+/** The acon plugin manifest: `{api, tool, module, sha256}` in the family home, dir 0700 and file 0600 as acon requires. */
+export function consoleManifest(mode: SetupMode, env: NodeJS.ProcessEnv = process.env): ConsoleAction {
+  const family = env.AGENTHUB_HOME?.trim() ? resolve(env.AGENTHUB_HOME) : join(env.HOME?.trim() || homedir(), ".agenthub");
+  const dir = join(family, "console", "plugins"), file = join(dir, "vmem.json");
+  const module = fileURLToPath(new URL("./ui/plugin.ts", import.meta.url));
+  const action: ConsoleAction = { file, module, change: "none" };
+  try {
+    const next = { api: 1, tool: "vmem", module, sha256: createHash("sha256").update(readFileSync(module)).digest("hex") };
+    // Apply acon's own loader rules (agent-console scanPlugins): the directory and manifest must be real, owned by you
+    // and not writable by others. Kinds and owners are refused here; modes are fixed on apply.
+    for (const [path, kind] of [[dir, "directory"], [file, "file"]] as const) {
+      let info;
+      try { info = lstatSync(path); } catch { continue; }
+      if (kind === "directory" ? !info.isDirectory() : !info.isFile()) throw new Error(`${path}: acon needs a real ${kind}, not a link or other entry`);
+      if (typeof process.getuid === "function" && info.uid !== process.getuid()) throw new Error(`${path}: owned by another user; acon refuses it`);
+    }
+    const text = readText(file);
+    const current = text === null ? undefined : JSON.parse(text) as Record<string, unknown>;
+    if (mode === "undo") {
+      if (!current) { action.reason = "no manifest"; return action; }
+      if (current.module !== module) { action.change = "refused"; action.reason = "manifest points at another vmem install; left as is"; return action; }
+      unlinkSync(file); action.change = "remove"; return action;
+    }
+    const loose = (path: string, want: number) => { try { return (lstatSync(path).mode & 0o777) !== want; } catch { return false; } };
+    const modesOk = !loose(dir, 0o700) && !loose(file, 0o600);
+    if (isDeepStrictEqual(current, next) && modesOk) { action.change = "unchanged"; return action; }
+    action.change = current ? "replace" : "add";
+    if (!modesOk) action.reason = "permissions: plugin directory 0700, manifest 0600";
+    if (mode === "apply") {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      chmodSync(dir, 0o700);
+      atomicWrite(file, JSON.stringify(next, null, 2) + "\n");
+      chmodSync(file, 0o600);
+    }
+  } catch (error) {
+    action.change = "refused"; action.reason = error instanceof Error ? error.message : "manifest write failed";
+  }
+  return action;
 }
