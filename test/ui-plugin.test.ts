@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { registerConsoleConformance } from "@staix/agent-console/conformance";
 import { addVault } from "../src/registry.ts";
 import { consoleManifest } from "../src/setup.ts";
-import { parseLogLine, plugin, typedFindings } from "../src/ui/plugin.ts";
+import { followUpProblems, parseLogLine, plugin, typedFindings } from "../src/ui/plugin.ts";
 
 // The provider resolves its home from the environment, like `vmem mcp`; isolate it before any test opens it.
 const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-ui-")));
@@ -82,6 +82,22 @@ test("delete writes only on the console's confirmation with the current fingerpr
   expect(await p.action({ action: "promote", path: "alpha", to: "team", again: "maybe" })).toMatchObject({ ok: false, error: "invalid input for vmem_promote" });
   const promote = await p.action({ action: "promote", path: "alpha", to: "team", topics: "research, shared", again: "true" });
   expect("error" in promote ? promote.error : "").not.toBe("invalid input for vmem_promote");
+});
+
+test("an applied write whose log append fails is reported as applied, with what is missing", async () => {
+  const p = await plugin.open({ home: process.env.AGENTHUB_HOME!, log: () => {} });
+  const preview = await p.action({ action: "move", from: "alpha", to: "gamma", vault: "mine" });
+  if (!("needsConfirm" in preview)) throw new Error("expected a preview");
+  const lock = join(root, "mine", "log.lock");
+  writeFileSync(lock, "held by another writer\n");
+  try {
+    const done = await p.action({ action: "move", from: "alpha", to: "gamma", vault: "mine", confirmed: true, fingerprint: preview.fingerprint as string });
+    expect(done).toMatchObject({ ok: true, message: expect.stringContaining("applied, but") });
+    expect(existsSync(join(mine, "gamma.md"))).toBe(true);
+  } finally { rmSync(lock, { force: true }); }
+  expect(followUpProblems({ ok: true, applied: true, log: { ok: true } })).toEqual([]);
+  expect(followUpProblems({ ok: false, applied: true, issues: [{ severity: "error", message: "agent-mem link failed" }] })).toEqual(["agent-mem link failed"]);
+  expect(followUpProblems({ ok: true, applied: true, logs: { source: null, target: { ok: false, issues: [{ severity: "error", message: "SYNC append failed" }] } } })).toEqual(["SYNC append failed"]);
 });
 
 test("log lines and lint findings become typed rows", () => {

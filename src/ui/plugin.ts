@@ -41,6 +41,16 @@ export function typedFindings(findings: Record<string, string[]>): { code: strin
   }));
 }
 
+/** Failed steps after an applied write: the log receipt(s) of a write, a promotion or an org promotion, and the result's own issues. */
+export function followUpProblems(r: Args): string[] {
+  const out: string[] = [];
+  const failed = (x: unknown) => { const l = rec(x); if (l.ok === false) out.push(firstIssue(l)); };
+  const logs = rec(r.logs);
+  for (const receipt of [r.log, rec(r.note).log, logs.source, logs.target, r.provenance]) failed(receipt);
+  if (r.ok === false) out.push(firstIssue(r));
+  return [...new Set(out)];
+}
+
 /** Planned file changes of a vmem preview, as the shell's "What will change" list. */
 function changesOf(receipt: Args): Change[] {
   const list = Array.isArray(receipt.changes) ? receipt.changes as { path: string; beforeSha: string | null; sha256: string | null }[] : [];
@@ -151,9 +161,15 @@ export const plugin: ConsolePlugin = {
         return { ok: false, needsConfirm: true, fingerprint: preview.fingerprint, verb: d.verb, preview: d.preview, changes: d.changes, ...(d.warnings.length ? { warnings: d.warnings } : {}) };
       }
       const done = await call(tool, { ...args, confirm: true, fingerprint });
-      if (done.refused || done.ok === false) return { ok: false, error: firstIssue(done) };
-      lintCache.clear();
-      return { ok: true, message: `${describe(preview).verb}: done` };
+      const verb = describe(preview).verb;
+      // Once a write is applied it is reported as done, together with any later step that failed (a log line, the
+      // agent-mem link, SYNC lines): the person must see that the change happened and what is missing.
+      if (done.applied === true) {
+        lintCache.clear();
+        const missing = followUpProblems(done);
+        return { ok: true, message: missing.length ? `${verb}: applied, but ${missing.join("; ")}` : `${verb}: done` };
+      }
+      return { ok: false, error: firstIssue(done) };
     }
 
     return {
