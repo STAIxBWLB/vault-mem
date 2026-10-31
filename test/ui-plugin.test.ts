@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, symlinkSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerConsoleConformance } from "@staix/agent-console/conformance";
@@ -38,7 +38,7 @@ test("panels read the vault and the palette searches it", async () => {
   // Org promotion reads from the default personal vault only, so another vault never offers or runs it.
   expect(await p.snapshot({ after: 0, panel: "note", path: "alpha", vault: "team" })).toMatchObject({ orgVaults: [] });
   expect(await p.action({ action: "promote", path: "alpha", to: "team", vault: "team" })).toMatchObject({ ok: false });
-  expect(await p.snapshot({ after: 0, panel: "overview" })).toMatchObject({ vault: "mine", noteCount: 3 });
+  expect(await p.snapshot({ after: 0, panel: "overview", vault: "mine" })).toMatchObject({ vault: "mine", noteCount: 3 });
   expect(await p.snapshot({ after: 0, panel: "note", path: "missing" })).toMatchObject({ note: null });
   // Alerts keep the time they were first seen, so snooze and oldest-first order survive polls.
   const first = (await p.snapshot({ after: 0, panel: "inbox" })).items as { id: string; at: string }[];
@@ -47,6 +47,11 @@ test("panels read the vault and the palette searches it", async () => {
   expect(first.length).toBeGreaterThan(0);
   expect(second.map(i => [i.id, i.at])).toEqual(first.map(i => [i.id, i.at]));
   expect(await p.snapshot({ after: 0, panel: "overview" })).toMatchObject({ noteCountCapped: false });
+  // A vault chosen on one panel stays chosen when a tab navigates without params; actions follow it too.
+  const q = await plugin.open({ home: process.env.AGENTHUB_HOME!, log: () => {} });
+  expect(await q.snapshot({ after: 0, panel: "overview", vault: "team" })).toMatchObject({ vault: "team" });
+  expect(await q.snapshot({ after: 0, panel: "lint" })).toMatchObject({ vault: "team" });
+  expect(await q.action({ action: "promote", path: "alpha", to: "team" })).toMatchObject({ ok: false });
 });
 
 test("delete writes only on the console's confirmation with the current fingerprint", async () => {
@@ -113,4 +118,11 @@ test("setup writes, keeps and removes the acon manifest", () => {
   expect(statSync(file).mode & 0o777).toBe(0o600);
   expect(statSync(join(env.AGENTHUB_HOME, "console", "plugins")).mode & 0o777).toBe(0o700);
   expect(consoleManifest("apply", env).change).toBe("unchanged");
+  // A linked plugin directory passes stat but acon refuses it (lstat), so setup refuses too.
+  const linked = { AGENTHUB_HOME: join(root, "linked-family") };
+  mkdirSync(join(root, "real-plugins"), { recursive: true, mode: 0o700 });
+  mkdirSync(join(linked.AGENTHUB_HOME, "console"), { recursive: true });
+  symlinkSync(join(root, "real-plugins"), join(linked.AGENTHUB_HOME, "console", "plugins"));
+  expect(consoleManifest("apply", linked)).toMatchObject({ change: "refused", reason: expect.stringContaining("real directory") });
+  expect(existsSync(join(root, "real-plugins", "vmem.json"))).toBe(false);
 });

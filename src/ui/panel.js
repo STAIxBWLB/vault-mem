@@ -62,7 +62,7 @@ export default (host) => {
       const title = fm.title || n.path;
       const moveInput = h("input", { type: "text", name: "to", class: "vmem-input", "aria-label": "New stem", placeholder: "new-stem" });
       const orgs = s.orgVaults ?? [];
-      const orgSelect = orgs.length ? h("select", { class: "vmem-input", "aria-label": "Org vault" }, orgs.map((o) => h("option", { value: o, text: o }))) : null;
+      const orgSelect = orgs.length ? h("select", { name: "org", class: "vmem-input", "aria-label": "Org vault" }, orgs.map((o) => h("option", { value: o, text: o }))) : null;
       const out = s.links?.out ?? [], back = s.links?.in ?? [], dead = s.links?.dead ?? [];
       return [
         h("header", { class: "vmem-head" }, chip(fm.type || "note"), h("h2", { text: title }), fm.status ? chip(fm.status, fm.status === "superseded" ? "warn" : null) : null),
@@ -122,6 +122,7 @@ export default (host) => {
     if (sig === last) return; // unchanged poll: keep focus and scroll
     last = sig;
     // A poll re-renders the view: carry every typed value and the focus over by field name.
+    // Rule: every form control in this file has a stable name, or its state is lost on the next poll.
     const values = new Map([...root.querySelectorAll("input[name], select[name]")].map((el) => [el.name, el.type === "checkbox" ? el.checked : el.value]));
     const focused = root.contains(document.activeElement) ? document.activeElement.getAttribute("name") : null;
     root.replaceChildren(...(views[panel]?.(snap) ?? [empty("Unknown panel")]).filter(Boolean));

@@ -64,8 +64,14 @@ export const plugin: ConsolePlugin = {
     const home = resolveHome().home;
     const mcp = createVaultMcp(home);
     const call = async (name: string, args: Args): Promise<Args> => rec(await mcp.handlers[name]!(args));
-    const vaultOf = (args: Args) => mcp.vaults.find(v => v.id === (str(args.vault) ?? mcp.defaultVault));
-    const pass = (args: Args) => (str(args.vault) ? { vault: args.vault } : {});
+    // The shell's tabs navigate without params, so the vault chosen on one panel is kept for the others.
+    // ponytail: one choice per provider; fine for H0's single person, per session once H1 serves several.
+    let chosen: string | undefined;
+    const vaultOf = (args: Args) => {
+      if (str(args.vault) && mcp.vaults.some(v => v.id === args.vault)) chosen = str(args.vault);
+      return mcp.vaults.find(v => v.id === (chosen ?? mcp.defaultVault));
+    };
+    const pass = (args: Args) => { const v = vaultOf(args); return v ? { vault: v.id } : {}; };
     /**
      * Every option the MCP tool declares reaches it: the console never hand-picks arguments, so a supported
      * operation cannot be lost on the way. Form text for array options is split on commas; the result is checked
@@ -76,7 +82,7 @@ export const plugin: ConsolePlugin = {
       const out: Args = {};
       for (const [key, spec] of Object.entries(schema?.properties ?? {})) {
         if (key === "confirm" || key === "fingerprint") continue;
-        let value = key in fixed ? fixed[key] : args[key];
+        let value = key in fixed ? fixed[key] : key === "vault" ? vaultOf(args)?.id : args[key];
         if (value === undefined || value === "") continue;
         const types = Array.isArray(spec.type) ? spec.type : [spec.type];
         if (typeof value === "string" && types.includes("array") && !types.includes("string")) value = value.split(",").map(v => v.trim()).filter(Boolean);
@@ -220,7 +226,7 @@ export const plugin: ConsolePlugin = {
           case "promote": {
             const path = str(args.path), to = str(args.to);
             if (!path || !to) return { ok: false, error: "path and to are required" };
-            if (str(args.vault) && args.vault !== mcp.defaultVault) return { ok: false, error: `promotion to an org vault reads from ${mcp.defaultVault}; open the note there` };
+            if (vaultOf(args)?.id !== mcp.defaultVault) return { ok: false, error: `promotion to an org vault reads from ${mcp.defaultVault}; open the note there` };
             return twoStep("vmem_promote", forward("vmem_promote", args), confirmed, fingerprint, p => {
               const screen = rec(p.screen), dropped = Array.isArray(p.droppedLinks) ? p.droppedLinks as string[] : [];
               const target = String(p.target ?? `${to}:${path}`);
