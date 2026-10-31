@@ -1,6 +1,6 @@
 # Vault cutover checklist
 
-- Status: blocked. This PR prepares tooling and synthetic evidence only.
+- Status: the release and evidence gates passed and the package is published. Running this checklist on a live machine is the parent plan's cutover operation, outside this repository; this document does not record its result.
 - Source contract: [issue #11](https://github.com/STAIxBWLB/vault-mem/issues/11), with dependencies #4-#10 and downstream integration tracked by [the parent plan](https://github.com/STAIxBWLB/vault-mem/issues/1).
 - Release publication, host registration, reference retirement and live writer cutover are distinct actions. None is executed by this readiness work.
 
