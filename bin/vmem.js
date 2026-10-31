@@ -8,5 +8,5 @@ const { main, mainAsync, runMcp } = await import("../src/cli.ts");
 if (process.argv.length === 3 && process.argv[2] === "mcp") {
   try { await runMcp(); }
   catch (error) { console.error(`vmem mcp: ${error instanceof Error ? error.message : "failed"}`); process.exitCode = 1; }
-} else if (process.argv[2] === "promote-from-amem") process.exitCode = await mainAsync(process.argv.slice(2));
+} else if (process.argv[2] === "promote-from-amem" || process.argv[2] === "skills") process.exitCode = await mainAsync(process.argv.slice(2));
 else process.exitCode = main(process.argv.slice(2));

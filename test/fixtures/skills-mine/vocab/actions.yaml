@@ -1,0 +1,8 @@
+# Synthetic action vocabulary for the skills mine tests.
+actions:
+  - canon: summarize
+    surface: [요약, 요약해줘, summarize, summary]
+  - canon: organize
+    surface: [정리, 정리해줘, organize, tidy]
+  - canon: create
+    surface: [작성, create, write, draft]
