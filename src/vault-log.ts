@@ -31,7 +31,7 @@ function boundedPlain(file: string, maximum: number): string {
     return text;
   } finally { closeSync(fd); }
 }
-function registryIds(file: string, denyPaths: string[] = []): Set<string> {
+export function registryIds(file: string, denyPaths: string[] = []): Set<string> {
   if (isDenied(canonicalPath(file), denyPaths)) refuse("L09", "registry path is denied");
   let parsed: unknown;
   try { parsed = Bun.YAML.parse(boundedPlain(file, 1024 * 1024)); }

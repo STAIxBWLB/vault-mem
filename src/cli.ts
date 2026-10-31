@@ -1,3 +1,5 @@
+import { originCheck } from "./sync.ts";
+import { registryIds } from "./vault-log.ts";
 import { runAnalysisCommand } from "./analysis-commands.ts";
 import { runLogCommand } from "./log-commands.ts";
 import { runOrgCommand } from "./org-commands.ts";
@@ -51,7 +53,23 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
   switch (command) {
     case "status": case "doctor": {
       if (positional.length) throw new Error(`${command}: unexpected arguments`);
-      const vaults = registryStatus(home.home), healthy = vaults.every(v => v.healthy);
+      const config = command === "doctor" ? loadRegistry(home.home) : undefined;
+      const vaults = registryStatus(home.home).map(vault => {
+        if (command !== "doctor" || !vault.healthy || (!vault.remote && !vault.registry)) return vault;
+        const checks: Record<string, { ok: boolean; issue?: string }> = {};
+        if (vault.remote) {
+          try {
+            const checked = originCheck(vault.path, vault.remote, env);
+            checks.remote = { ok: checked.ok, ...(checked.issue ? { issue: checked.issue } : {}) };
+          } catch (error) { checks.remote = { ok: false, issue: error instanceof Error ? error.message : "git failed" }; }
+        }
+        if (vault.registry) {
+          try { registryIds(vault.registry, config!.denyPaths); checks.registry = { ok: true }; }
+          catch (error) { checks.registry = { ok: false, issue: error instanceof Error ? error.message : "cannot read project registry" }; }
+        }
+        return { ...vault, checks };
+      });
+      const healthy = vaults.every(v => v.healthy && (!("checks" in v) || Object.values(v.checks).every(check => check.ok)));
       result = { ...home, version, stage: "foundation", healthy, vaults };
       if (command === "doctor" && !healthy) code = 1;
       break;

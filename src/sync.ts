@@ -52,6 +52,20 @@ function gitIn(cwd: string, env: NodeJS.ProcessEnv): Git {
     return out;
   };
 }
+/** Local-only origin validation shared by doctor and sync; never fetches or pushes. */
+export function originCheck(root: string, remote: string, env: NodeJS.ProcessEnv = process.env): { ok: boolean; origin: string | null; fetchUrls: string[]; pushUrls: string[]; issue?: string } {
+  const git = gitIn(root, env);
+  if (realpathSync(git(["rev-parse", "--show-toplevel"]).stdout.trim()) !== root) throw new Error("vault path is not the root of its git repository");
+  const origin = git(["remote", "get-url", "origin"], { allowFail: true });
+  const originUrl = origin.status === 0 ? origin.stdout.trim() : null;
+  // Every effective fetch and push URL must be the configured remote; URL rewrites are refused outright
+  // because git does not report pushInsteadOf rewrites of an explicit pushurl.
+  const lines = (args: string[]) => { const out = git(args, { allowFail: true }); return out.status === 0 ? out.stdout.split("\n").map(line => line.trim()).filter(Boolean) : []; };
+  const fetchUrls = lines(["remote", "get-url", "--all", "origin"]), pushUrls = lines(["remote", "get-url", "--push", "--all", "origin"]);
+  const rewrites = lines(["config", "--get-regexp", "^url\\..*\\.(insteadof|pushinsteadof)$"]);
+  const ok = originUrl !== null && rewrites.length === 0 && fetchUrls.length > 0 && pushUrls.length > 0 && [...fetchUrls, ...pushUrls].every(url => sameRemote(url, remote));
+  return { ok, origin: originUrl, fetchUrls, pushUrls, ...(!ok ? { issue: originUrl === null ? "repository has no origin remote" : rewrites.length ? "git url insteadOf/pushInsteadOf rewrites are configured; refusing because the push destination cannot be verified" : "an origin fetch or push URL does not match the configured remote; nothing was fetched or pushed" } : {}) };
+}
 function planned(path: string): boolean { return STAGE_FILES.includes(path) || STAGE_PREFIXES.some(prefix => path.startsWith(prefix)); }
 /** Parse `status --porcelain=v1 -z` into changed paths (renames contribute both sides). */
 function changed(git: Git): string[] {
@@ -83,17 +97,13 @@ export function syncVault(home: string, request: { vault: string; confirm?: bool
   if (isDenied(root, config.denyPaths)) return { ...result, issues: [issue("V06", "vault path is denied; nothing was synced")] };
   const git = gitIn(root, options.env ?? process.env);
   try {
-    if (realpathSync(git(["rev-parse", "--show-toplevel"]).stdout.trim()) !== root) return { ...result, issues: [issue("SYNC", "vault path is not the root of its git repository")] };
-    const origin = git(["remote", "get-url", "origin"], { allowFail: true });
-    result.remote.origin = origin.status === 0 ? origin.stdout.trim() : null;
-    // Every effective fetch and push URL must be the configured remote; URL rewrites are refused outright
-    // because git does not report pushInsteadOf rewrites of an explicit pushurl.
-    const lines = (args: string[]) => { const out = git(args, { allowFail: true }); return out.status === 0 ? out.stdout.split("\n").map(line => line.trim()).filter(Boolean) : []; };
-    const fetchUrls = lines(["remote", "get-url", "--all", "origin"]), pushUrls = lines(["remote", "get-url", "--push", "--all", "origin"]);
-    const rewrites = lines(["config", "--get-regexp", "^url\\..*\\.(insteadof|pushinsteadof)$"]);
+    const checked = originCheck(root, spec.remote, options.env ?? process.env);
+    const { fetchUrls, pushUrls } = checked;
+    result.remote.origin = checked.origin;
     result.remote.push = pushUrls;
-    result.remote.matches = result.remote.origin !== null && rewrites.length === 0 && fetchUrls.length > 0 && pushUrls.length > 0 && [...fetchUrls, ...pushUrls].every(url => sameRemote(url, spec.remote!));
-    if (!result.remote.matches) return { ...result, issues: [issue("REMOTE", result.remote.origin === null ? "repository has no origin remote" : rewrites.length ? "git url insteadOf/pushInsteadOf rewrites are configured; refusing because the push destination cannot be verified" : "an origin fetch or push URL does not match the configured remote; nothing was fetched or pushed")] };
+    result.remote.matches = checked.ok;
+    if (!checked.ok) return { ...result, issues: [issue("REMOTE", checked.issue!)] };
+    const lines = (args: string[]) => { const out = git(args, { allowFail: true }); return out.status === 0 ? out.stdout.split("\n").map(line => line.trim()).filter(Boolean) : []; };
     const branch = git(["symbolic-ref", "--quiet", "--short", "HEAD"], { allowFail: true });
     if (branch.status !== 0) return { ...result, issues: [issue("SYNC", "detached HEAD; check out a branch first")] };
     result.branch = branch.stdout.trim();
