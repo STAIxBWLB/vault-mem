@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type { AnalysisSnapshot } from "../src/analysis-types.ts";
 import type { VaultSpec, VmemConfig } from "../src/config.ts";
 import { buildWorkspaceGraph, type WorkspaceSnapshot } from "../src/workspace-graph.ts";
-import { workspaceInput } from "../src/workspace-input.ts";
+import { WORK_MAX_FILES, workspaceInput } from "../src/workspace-input.ts";
 import { addVault } from "../src/registry.ts";
 import { analysisInput } from "../src/analysis-input.ts";
 import { writeAnalysisReports } from "../src/analysis-reports.ts";
@@ -181,19 +181,32 @@ test("workspace reader honors configured scratchpad roots and rejects oversized 
   const captured = workspaceInput(snapshot(), f.spec, f.config);
   expect(captured.files.map(file => file.path).sort()).toEqual(["drafts/ideas/keep.md", "scratchpad/memos/now-visible.md"]);
   expect(captured.skipRoots.sort()).toEqual(["drafts/ephemeral", "drafts/journal"]);
-  f.put("projects/too-large.md", "x".repeat(2 * 1024 * 1024 + 1));
-  expect(() => workspaceInput(snapshot(), f.spec, f.config)).toThrow();
+  f.put("projects/too-large.md", document("document_type: memo", "x".repeat(2 * 1024 * 1024 + 1)));
+  expect(() => workspaceInput(snapshot(), f.spec, f.config)).toThrow("exceeds bound");
 });
 
 test("workspace reader enforces aggregate byte and file-count bounds", () => {
   const bytes = fixture();
-  const source = "x".repeat(2 * 1024 * 1024);
-  for (let i = 0; i < 33; i++) bytes.put(`docs/file-${i}.md`, source);
-  expect(() => workspaceInput(snapshot(), bytes.spec, bytes.config)).toThrow();
+  const source = document("document_type: memo", "x".repeat(2 * 1024 * 1024 - 64));
+  for (let i = 0; i < 65; i++) bytes.put(`docs/file-${i}.md`, source);
+  expect(() => workspaceInput(snapshot(), bytes.spec, bytes.config)).toThrow("total bytes");
   const count = fixture();
-  for (let i = 0; i < 10001; i++) count.put(`docs/file-${i}.md`, "plain\n");
-  expect(() => workspaceInput(snapshot(), count.spec, count.config)).toThrow();
-}, 30_000);
+  for (let i = 0; i < WORK_MAX_FILES + 1; i++) count.put(`docs/file-${i}.md`, "plain\n");
+  expect(() => workspaceInput(snapshot(), count.spec, count.config)).toThrow("file count");
+}, 120_000);
+
+test("files without frontmatter are probed, never read, so their size does not count", () => {
+  const f = fixture();
+  f.put("docs/huge-plain.md", "# Plain\n" + "x".repeat(3 * 1024 * 1024));
+  f.put("docs/dashes.md", "---no frontmatter\n");
+  f.put("docs/short.md", "---");
+  f.put("docs/keep.md");
+  f.put("docs/crlf.md", "---\r\ndocument_type: memo\r\n---\r\nBody\r\n");
+  const captured = workspaceInput(snapshot(), f.spec, f.config);
+  expect(captured.files.map(file => file.path).sort()).toEqual(["docs/crlf.md", "docs/keep.md"]);
+  f.put("docs/huge-front.md", document("document_type: memo", "x".repeat(2 * 1024 * 1024)));
+  expect(() => workspaceInput(snapshot(), f.spec, f.config)).toThrow();
+});
 
 test("workspace build dry-run is read-only and writes only workspace graph plus one GRAPH event", async () => {
   const f = fixture(); f.put("projects/keep.md", document('document_type: memo\nprojects: ["[[a]]"]'));

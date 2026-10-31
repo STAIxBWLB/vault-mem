@@ -1,4 +1,4 @@
-import { lstatSync, opendirSync, realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, opendirSync, openSync, readSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import type { VaultSpec, VmemConfig } from "./config.ts";
@@ -10,9 +10,14 @@ import { sourceWorkspaceRoot } from "./source.ts";
 import { WORK_SKIP_DIRS, workspaceFrontmatter, workspaceSource, workSkipped, type WorkspaceSnapshot } from "./workspace-graph.ts";
 
 const CONFIG_SKIP = new Set([".git", "node_modules", ".venv", ".sync-conflicts", "archive", ".archive", "vault", "temp"]);
-export const WORK_MAX_FILES = 10000;
+export const WORK_MAX_FILES = 50000;
+/** Per-file bound for work docs that open with frontmatter (the only ones that can become nodes). */
 export const WORK_MAX_FILE_BYTES = 2 * 1024 * 1024;
-export const WORK_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+export const WORK_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
+/** Bytes probed from every `.md` file to decide whether it opens with frontmatter; plain files are never read further. */
+const PROBE_BYTES = 4;
+/** Directory entries visited per walk (symlinks included), so a runaway tree fails explicitly instead of stalling. */
+export const WORK_MAX_ENTRIES = 2_000_000;
 const DEFAULT_ROOTS = ["scratchpad/memos", "scratchpad/temp"];
 function object(value: unknown): Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 /** Filesystem-only snapshot. No directory or file symlinks are followed, including source stubs. */
@@ -30,6 +35,18 @@ export function workspaceInput(snapshot: AnalysisSnapshot, vault: VaultSpec, con
     const current = stamp(file), prior = stamps.get(file);
     if (prior !== undefined && prior !== current) throw new Error("workspace graph: input changed during snapshot");
     stamps.set(file, current);
+  };
+  /** FRONTMATTER_RE needs `---` then whitespace at offset 0; a file that cannot match is skipped unread, as in the reference. */
+  const opensWithFrontmatter = (file: string): boolean => {
+    if (++filesRead > WORK_MAX_FILES) throw new Error("workspace graph: file count exceeds bound");
+    let fd: number;
+    try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+    try {
+      if (!fstatSync(fd).isFile()) return false;
+      const head = Buffer.alloc(PROBE_BYTES), n = readSync(fd, head, 0, PROBE_BYTES, 0);
+      return n === PROBE_BYTES && head.subarray(0, 3).toString("latin1") === "---" && /\s/.test(String.fromCharCode(head[3]!));
+    } finally { closeSync(fd); }
   };
   const read = (file: string, maximum = WORK_MAX_FILE_BYTES): string => {
     if (++filesRead > WORK_MAX_FILES) throw new Error("workspace graph: file count exceeds bound");
@@ -67,7 +84,7 @@ export function workspaceInput(snapshot: AnalysisSnapshot, vault: VaultSpec, con
     try {
       for (;;) {
         const entry = handle.readSync(); if (!entry) break;
-        if (++entriesSeen > 200000) throw new Error("workspace graph: directory entry count exceeds bound");
+        if (++entriesSeen > WORK_MAX_ENTRIES) throw new Error("workspace graph: directory entry count exceeds bound");
         if (entry.isSymbolicLink()) continue;
         children.push({ name: entry.name, directory: entry.isDirectory(), file: entry.isFile() });
       }
@@ -83,7 +100,9 @@ export function workspaceInput(snapshot: AnalysisSnapshot, vault: VaultSpec, con
     remember(dir);
   };
   const files: WorkspaceSnapshot["files"] = [], buSlugs = new Set<string>();
-  walk(root, WORK_SKIP_DIRS, skipRoots, (file, path) => { if (path.endsWith(".md")) files.push({ path, text: read(file) }); });
+  walk(root, WORK_SKIP_DIRS, skipRoots, (file, path) => { if (path.endsWith(".md") && opensWithFrontmatter(file)) files.push({ path, text: read(file) }); });
+  // The bu-config walk prunes fewer trees (it must see `.maru/`), like the reference's rglob, so it gets its own entry budget.
+  entriesSeen = 0;
   walk(root, CONFIG_SKIP, [], (file, path) => {
     if (!path.endsWith("/bu-config.yaml") && path !== "bu-config.yaml") return;
     const text = read(file, 1024 * 1024);
