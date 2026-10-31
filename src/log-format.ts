@@ -1,3 +1,4 @@
+import { localDate } from "./local-date.ts";
 import { screenContent } from "./write-validation.ts";
 import { parsePii } from "./config.ts";
 function validPii(value: unknown): boolean { try { parsePii(value); return true; } catch { return false; } }
@@ -49,7 +50,7 @@ export function formatLogEvent(event: LogEvent, context: LogContext): { line?: s
     return { issues: [error("L09", "invalid log timestamp")] };
   }
   const pad = (value: number, size = 2) => String(value).padStart(size, "0");
-  const timestamp = `${pad(now.getFullYear(), 4)}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const timestamp = `${localDate(now)} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
   const env = context.env ?? process.env;
   const agent = context.channel === "mcp" || AGENT_MARKERS.some(marker => typeof env[marker] === "string" && env[marker]!.length > 0);
   const line = `${timestamp}  ${event.type}  ${event.project}  ${event.source}${event.dest === undefined ? "" : ` → ${event.dest}`}  — ${event.note}${agent ? " (vmem:agent)" : ""}\n`;

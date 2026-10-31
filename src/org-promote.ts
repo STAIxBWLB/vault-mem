@@ -1,3 +1,4 @@
+import { localDate } from "./local-date.ts";
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -225,7 +226,7 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   const transformed = dropUnresolvedLinks(parsed.body, value => targetNotes.resolved.has(linkKey(value)));
   // Body Topics section follows the target topics.
   const body = replaceTopicsSection(transformed.body, topics);
-  const day = (options.now ?? new Date()).toISOString().slice(0, 10);
+  const day = localDate(options.now ?? new Date());
   const frontmatter: Record<string, unknown> = { topics, promoted_from: result.source, promoted_at: day, promoted_to: undefined };
   // Wiki-valued fields that point outside the target vault are dropped as well.
   for (const key of ["project", "superseded_by", "supersedes", "source_ref"]) {

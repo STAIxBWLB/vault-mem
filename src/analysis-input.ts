@@ -1,3 +1,4 @@
+import { localDate } from "./local-date.ts";
 import { MAX_REPORT_BYTES } from "./write-validation.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { sourceWorkspaceRoot, missingSourceWarnings, sourceReferences } from "./source.ts";
@@ -35,7 +36,7 @@ export function analysisInput(home: string, id: string, options: { today?: strin
   if (!vault) throw new Error("analysis: unknown vault id");
   if (options.expectedVault && JSON.stringify(options.expectedVault) !== JSON.stringify(vault)) throw new Error("analysis: startup vault binding changed; restart MCP");
   const identity = lstatSync(vault.path);
-  const today = options.today ?? new Date().toISOString().slice(0,10);
+  const today = options.today ?? localDate();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(today) || !Number.isFinite(Date.parse(today)) || new Date(today).toISOString().slice(0,10) !== today) throw new Error("analysis: invalid date");
   permitted(vault.path, config);
   // Check denied paths before opening the index or reading note sources.
