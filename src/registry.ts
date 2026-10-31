@@ -1,4 +1,4 @@
-import { closeSync, constants, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -50,7 +50,8 @@ function mutate<T>(home: string, update: (config: VmemConfig) => T): T {
     try { writeFileSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(temporary, join(home, CONFIG_FILE));
     temporary = undefined;
-    syncDirectory(home);
+    try { syncDirectory(home); }
+    catch (error) { throw new Error(`${join(home, CONFIG_FILE)}: registry updated but directory fsync failed: ${message(error)}`, { cause: error }); }
     return result;
   } catch (error) {
     failed = true; primary = error;
@@ -73,9 +74,20 @@ function mutate<T>(home: string, update: (config: VmemConfig) => T): T {
     }
   }
 }
+/** Upper bound for a lock owner record; larger files are treated as unreadable. */
+const MAX_LOCK_BYTES = 4096;
 function lockOwner(lock: string): LockOwner | undefined {
   try {
-    const value = JSON.parse(readFileSync(lock, "utf8")) as Partial<LockOwner>;
+    const fd = openSync(lock, constants.O_RDONLY);
+    let text: string;
+    try {
+      const buffer = Buffer.alloc(MAX_LOCK_BYTES + 1);
+      let length = 0, read: number;
+      while (length < buffer.length && (read = readSync(fd, buffer, length, buffer.length - length, null)) > 0) length += read;
+      if (length > MAX_LOCK_BYTES) return undefined; // oversized: never trusted
+      text = buffer.subarray(0, length).toString("utf8");
+    } finally { closeSync(fd); }
+    const value = JSON.parse(text) as Partial<LockOwner>;
     if (typeof value.pid === "number" && Number.isInteger(value.pid) && value.pid > 0 && typeof value.host === "string" && typeof value.created === "string") return value as LockOwner;
   } catch { /* unreadable or legacy lock */ }
   return undefined;
