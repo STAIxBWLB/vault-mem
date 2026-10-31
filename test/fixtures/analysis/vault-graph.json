@@ -2,9 +2,11 @@
   "directed": false,
   "multigraph": false,
   "graph": {
-    "partitioner": "label-propagation",
-    "iterations": 2,
-    "max_iterations": 32
+    "partitioner": "leiden",
+    "resolution": 1,
+    "modularity": 0.444444,
+    "iterations": 4,
+    "max_iterations": 256
   },
   "nodes": [
     {
@@ -40,7 +42,7 @@
       "confidence": "8",
       "source_file": "notes/c.md",
       "topics": "",
-      "community": 1,
+      "community": 2,
       "degree": 0
     },
     {
@@ -52,7 +54,7 @@
       "confidence": "",
       "source_file": "notes/d.md",
       "topics": "projects",
-      "community": 2,
+      "community": 1,
       "degree": 1
     },
     {
@@ -64,7 +66,7 @@
       "confidence": "",
       "source_file": "notes/e.md",
       "topics": "projects",
-      "community": 2,
+      "community": 1,
       "degree": 1
     },
     {

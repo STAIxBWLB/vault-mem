@@ -46,7 +46,7 @@ export interface MineResult {
   vault: string; days: number; since: string; projects: string[];
   records: Record<RecordSource, number>;
   dropped: { secret: number; policy: number; oversized: number; duplicate: number; unreadable: number; truncatedCapture: number };
-  graph: { nodes: number; edges: number; communities: number; partitioner: "label-propagation" };
+  graph: { nodes: number; edges: number; communities: number; partitioner: "leiden" };
   godNodes: { id: string; degree: number }[];
   candidates: Candidate[];
   rejected: { below3: number; detailed: Candidate[] };
@@ -381,7 +381,7 @@ export function mineRecords(input: MineInputs): MineResult {
   for (const record of kept) counts[record.source]++;
   const result: MineResult = {
     vault: input.vault, days: input.days, since: input.since, projects: input.projects, records: counts, dropped,
-    graph: { nodes: ids.length, edges: edges.length, communities: groups.size, partitioner: "label-propagation" },
+    graph: { nodes: ids.length, edges: edges.length, communities: groups.size, partitioner: "leiden" },
     godNodes, candidates, rejected: { below3, detailed }, surprising, report: "",
   };
   result.report = renderReport(result, input.today, input.minSize, input.minNovelty);
@@ -395,7 +395,7 @@ export function renderReport(result: Omit<MineResult, "report">, today: string, 
     `- corpus: ${total} records / ${result.days} days (curated ${result.records.curated}, capture ${result.records.capture}, vault ${result.records.vault})`,
     `- projects: ${result.projects.length}`,
     `- dropped: secret ${result.dropped.secret}, policy ${result.dropped.policy}, oversized ${result.dropped.oversized}, duplicate ${result.dropped.duplicate}, unreadable ${result.dropped.unreadable}`,
-    `- graph: ${result.graph.nodes} nodes, ${result.graph.edges} edges, ${result.graph.communities} communities (deterministic label propagation)`, "",
+    `- graph: ${result.graph.nodes} nodes, ${result.graph.edges} edges, ${result.graph.communities} communities (deterministic Leiden)`, "",
   ];
   if (result.godNodes.length) {
     lines.push("## God nodes (workspace vocabulary)", "");

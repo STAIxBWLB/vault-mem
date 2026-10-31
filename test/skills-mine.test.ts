@@ -150,26 +150,26 @@ test("skills mine reads curated, capture and vault records, masks them and write
   // vault: 3 notes in the window (person, moc and an old note excluded; the undated one uses its mtime).
   expect(result.records).toEqual({ curated: 2, capture: 5, vault: 3 });
   expect(result.dropped).toEqual({ secret: 0, policy: 1, oversized: 0, duplicate: 1, unreadable: 0, truncatedCapture: 0 });
-  expect(result.graph).toEqual({ nodes: 17, edges: 28, communities: 2, partitioner: "label-propagation" });
-  const person = result.candidates[0]!.triggers[3]!;
-  expect(person).toMatch(/^person--p[0-9a-f]{10}$/);
+  expect(result.graph).toEqual({ nodes: 17, edges: 28, communities: 3, partitioner: "leiden" });
   expect(result.candidates.map(({ cid, label, gloss, size, day_span, unique_days, cohesion, novelty, rank, triggers, similar_skills, sources }) =>
     ({ cid, label, gloss, size, day_span, unique_days, cohesion, novelty, rank, triggers, similar_skills, sources }))).toEqual([
-    { cid: 1, label: "summarize-meeting-notes", gloss: "summarize + meeting-notes + email", size: 7, day_span: 6, unique_days: 6, cohesion: 0.382, novelty: 0.833, rank: 0.893,
-      triggers: ["summarize", "meeting-notes", "email", person], similar_skills: [{ name: "summarize", similarity: 0.167 }, { name: "meeting-notes", similarity: 0.1 }], sources: { curated: 1, capture: 5, vault: 1 } },
-    { cid: 0, label: "create-inbox", gloss: "inbox + create + organize", size: 3, day_span: 8, unique_days: 3, cohesion: 0.4, novelty: 1, rank: 0.238,
+    { cid: 0, label: "summarize-meeting-notes", gloss: "summarize + meeting-notes + email", size: 5, day_span: 3, unique_days: 4, cohesion: 0.5, novelty: 0.8, rank: 1.238,
+      triggers: ["summarize", "meeting-notes", "email"], similar_skills: [{ name: "summarize", similarity: 0.2 }, { name: "meeting-notes", similarity: 0.111 }], sources: { curated: 1, capture: 4, vault: 0 } },
+    { cid: 1, label: "create-inbox", gloss: "inbox + create + organize", size: 3, day_span: 8, unique_days: 3, cohesion: 0.4, novelty: 1, rank: 0.238,
       triggers: ["inbox", "create", "organize"], similar_skills: [], sources: { curated: 1, capture: 0, vault: 2 } },
   ]);
-  expect(result.rejected).toEqual({ below3: 0, detailed: [] });
+  // Leiden splits the two records that mention a registry person into their own cluster (below three records).
+  expect(result.rejected).toEqual({ below3: 1, detailed: [] });
   expect(result.candidates[0]!.samples.map(s => s.text)).toContain("요약해줘 회의록 for [PATH] and mail [EMAIL]");
   const json = JSON.stringify(result);
   for (const secret of ["kim@example.org", "/Users/someone", "Kim Minsu", "confidential-codename"]) expect(json).not.toContain(secret);
   expect(result.candidates[0]!.samples.map(s => s.text)).toContain("Please summarize the meeting notes for [PII] and email the summary");
   expect(json).toContain("[EMAIL]");
   expect(json).toContain("[PATH]");
-  expect(json).toContain("[PERSON]");
+  // Both records naming a registry person fall in the cluster below three records, so no sample carries [PERSON] here;
+  // the name is still absent above, and maskText's [PERSON] rule is pinned in the materialize parity test.
   expect(result.report).toContain("## Candidates");
-  expect(result.report).toContain("- sources: curated 1, capture 5, vault 1");
+  expect(result.report).toContain("- sources: curated 1, capture 4, vault 0");
   expect(result.report).toContain("## Surprising connections");
 
   // Exact scores are stable for the same inputs.
@@ -187,7 +187,7 @@ test("project filter, thresholds, secrets and bounds", async () => {
   await expect(mineSkills(f.home, { vault: "mine", env: f.env, days: 0 })).rejects.toThrow("--days");
   const strict = await mineSkills(f.home, { vault: "mine", env: f.env, vocab: join(FIXTURES, "vocab"), skills: [join(FIXTURES, "skills")], now: NOW, minNovelty: 0.9, minSize: 4 });
   expect(strict.candidates).toEqual([]);
-  expect(strict.rejected.detailed.map(r => [r.label, r.reason])).toEqual([["create-inbox", "size<min"], ["summarize-meeting-notes", "novelty<min"]]);
+  expect(strict.rejected.detailed.map(r => [r.label, r.reason])).toEqual([["summarize-meeting-notes", "novelty<min"], ["create-inbox", "size<min"]]);
   expect(strict.report).toContain("- create-inbox (size=3, novelty=1, reason=size<min)");
 
   const record = (text: string, at = "2026-10-30T00:00:00Z"): MineRecord => ({ source: "capture", kind: "UserPromptSubmit", at, text, project: "x" });
