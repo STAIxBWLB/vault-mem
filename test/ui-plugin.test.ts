@@ -70,6 +70,10 @@ test("delete writes only on the console's confirmation with the current fingerpr
   expect(existsSync(join(mine, "beta.md"))).toBe(false);
   expect(await p.action({ action: "delete", path: "beta" })).toMatchObject({ ok: false });
   expect(await p.action({ action: "promote-from-amem", id: "not-an-id" })).toMatchObject({ ok: false, error: "a memory id is required" });
+  // Options the MCP tool declares are forwarded and checked against its schema: a bad value is refused before anything runs.
+  expect(await p.action({ action: "promote", path: "alpha", to: "team", again: "maybe" })).toMatchObject({ ok: false, error: "invalid input for vmem_promote" });
+  const promote = await p.action({ action: "promote", path: "alpha", to: "team", topics: "research, shared", again: "true" });
+  expect("error" in promote ? promote.error : "").not.toBe("invalid input for vmem_promote");
 });
 
 test("log lines and lint findings become typed rows", () => {

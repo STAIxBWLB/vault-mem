@@ -71,8 +71,12 @@ export default (host) => {
           btn("Delete…", () => host.action({ action: "delete", path: n.path, ...(params.vault ? { vault: params.vault } : {}) }), "btn danger"),
           h("form", { class: "vmem-inline", onsubmit: (e) => { e.preventDefault(); if (moveInput.value.trim()) host.action({ action: "move", from: n.path, to: moveInput.value.trim(), ...(params.vault ? { vault: params.vault } : {}) }); } },
             moveInput, h("button", { type: "submit", class: "btn", text: "Move…" })),
-          orgSelect ? h("form", { class: "vmem-inline", onsubmit: (e) => { e.preventDefault(); host.action({ action: "promote", path: n.path, to: orgSelect.value }); } },
-            orgSelect, h("button", { type: "submit", class: "btn", text: "Promote to org…" })) : null),
+          orgSelect ? (() => {
+            const topics = h("input", { type: "text", name: "orgTopics", class: "vmem-input", "aria-label": "Org topics (comma separated, optional)", placeholder: "org topics (optional)" });
+            const again = h("input", { type: "checkbox", name: "again", "aria-label": "Promote again to another org" });
+            return h("form", { class: "vmem-inline", onsubmit: (e) => { e.preventDefault(); host.action({ action: "promote", path: n.path, to: orgSelect.value, ...(topics.value.trim() ? { topics: topics.value.trim() } : {}), ...(again.checked ? { again: true } : {}) }); } },
+              orgSelect, topics, h("label", { class: "vmem-check" }, again, h("span", { text: "again" })), h("button", { type: "submit", class: "btn", text: "Promote to org…" }));
+          })() : null),
         h("details", { open: true }, h("summary", { text: "Body" }), h("pre", { class: "vmem-body", text: n.body ?? "" }), n.truncated ? err("Truncated; open the file for the rest.") : null),
         h("details", {}, h("summary", { text: `Links (${out.length} out, ${back.length} in${dead.length ? `, ${dead.length} dead` : ""})` }),
           rows([...out.map((l) => ({ path: l.resolved, label: `→ ${l.resolved}` })), ...back.map((l) => ({ path: l.source, label: `← ${l.source}` })), ...dead.map((l) => ({ label: `✕ ${l.target}` }))],
@@ -118,10 +122,10 @@ export default (host) => {
     if (sig === last) return; // unchanged poll: keep focus and scroll
     last = sig;
     // A poll re-renders the view: carry every typed value and the focus over by field name.
-    const values = new Map([...root.querySelectorAll("input[name], select[name]")].map((el) => [el.name, el.value]));
+    const values = new Map([...root.querySelectorAll("input[name], select[name]")].map((el) => [el.name, el.type === "checkbox" ? el.checked : el.value]));
     const focused = root.contains(document.activeElement) ? document.activeElement.getAttribute("name") : null;
     root.replaceChildren(...(views[panel]?.(snap) ?? [empty("Unknown panel")]).filter(Boolean));
-    for (const el of root.querySelectorAll("input[name], select[name]")) if (values.has(el.name)) el.value = values.get(el.name);
+    for (const el of root.querySelectorAll("input[name], select[name]")) if (values.has(el.name)) el[el.type === "checkbox" ? "checked" : "value"] = values.get(el.name);
     if (focused) root.querySelector(`[name="${focused}"]`)?.focus();
   });
   return {

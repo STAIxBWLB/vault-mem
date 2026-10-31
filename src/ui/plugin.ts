@@ -7,6 +7,7 @@ import type { ActionResult, Change, ConsolePlugin, ConsoleProvider, InboxItem } 
 import { analysisInput } from "../analysis-input.ts";
 import { resolveHome } from "../home.ts";
 import { createVaultMcp } from "../mcp-vault.ts";
+import { validArguments } from "../mcp.ts";
 import { listPromotionCandidates } from "../promote.ts";
 import { loadRegistry } from "../registry.ts";
 import { lintVault } from "../vault-lint.ts";
@@ -65,6 +66,25 @@ export const plugin: ConsolePlugin = {
     const call = async (name: string, args: Args): Promise<Args> => rec(await mcp.handlers[name]!(args));
     const vaultOf = (args: Args) => mcp.vaults.find(v => v.id === (str(args.vault) ?? mcp.defaultVault));
     const pass = (args: Args) => (str(args.vault) ? { vault: args.vault } : {});
+    /**
+     * Every option the MCP tool declares reaches it: the console never hand-picks arguments, so a supported
+     * operation cannot be lost on the way. Form text for array options is split on commas; the result is checked
+     * against the tool's own schema before anything runs.
+     */
+    const forward = (tool: string, args: Args, fixed: Args = {}): Args | string => {
+      const schema = mcp.tools.find(t => t.name === tool)?.inputSchema as { properties?: Record<string, { type?: unknown }> } | undefined;
+      const out: Args = {};
+      for (const [key, spec] of Object.entries(schema?.properties ?? {})) {
+        if (key === "confirm" || key === "fingerprint") continue;
+        let value = key in fixed ? fixed[key] : args[key];
+        if (value === undefined || value === "") continue;
+        const types = Array.isArray(spec.type) ? spec.type : [spec.type];
+        if (typeof value === "string" && types.includes("array") && !types.includes("string")) value = value.split(",").map(v => v.trim()).filter(Boolean);
+        if (value === "true" && types.includes("boolean")) value = true;
+        out[key] = value;
+      }
+      return validArguments(out, schema ?? { type: "object" }) ? out : `invalid input for ${tool}`;
+    };
 
     // ponytail: lint reads every note, so inbox polls reuse one result per vault for 60 s; invalidate on writes if it lags.
     const lintCache = new Map<string, { at: number; report: ReturnType<typeof lintVault> }>();
@@ -112,7 +132,8 @@ export const plugin: ConsolePlugin = {
     }
 
     /** One two-step operation: preview, and with the console's confirmation recompute and write only on the same fingerprint. */
-    async function twoStep(tool: string, args: Args, confirmed: boolean, fingerprint: string | undefined, describe: (preview: Args) => { verb: string; preview: string[]; changes: Change[]; warnings: string[] }): Promise<ActionResult> {
+    async function twoStep(tool: string, args: Args | string, confirmed: boolean, fingerprint: string | undefined, describe: (preview: Args) => { verb: string; preview: string[]; changes: Change[]; warnings: string[] }): Promise<ActionResult> {
+      if (typeof args === "string") return { ok: false, error: args };
       const preview = await call(tool, args);
       if (preview.refused || preview.ok === false || typeof preview.fingerprint !== "string") return { ok: false, error: firstIssue(preview) };
       if (!confirmed || fingerprint !== preview.fingerprint) {
@@ -185,7 +206,7 @@ export const plugin: ConsolePlugin = {
           case "delete": {
             const path = str(args.path) ?? str(args.id);
             if (!path) return { ok: false, error: "path is required" };
-            return twoStep("vmem_delete", { path, ...pass(args) }, confirmed, fingerprint, p => {
+            return twoStep("vmem_delete", forward("vmem_delete", args, { path }), confirmed, fingerprint, p => {
               const backlinks = Array.isArray(p.backlinks) ? p.backlinks as { source: string }[] : [];
               return { verb: "Delete note", preview: [`delete ${path}`], changes: changesOf(p),
                 warnings: backlinks.length ? [`${backlinks.length} links point here: ${[...new Set(backlinks.map(b => b.source))].slice(0, 5).join(", ")}`] : [] };
@@ -194,16 +215,21 @@ export const plugin: ConsolePlugin = {
           case "move": {
             const from = str(args.from), to = str(args.to);
             if (!from || !to) return { ok: false, error: "from and to are required" };
-            return twoStep("vmem_move", { from, to, ...pass(args) }, confirmed, fingerprint, p => ({ verb: "Move note", preview: [`move ${from} → ${to}`], changes: changesOf(p), warnings: [] }));
+            return twoStep("vmem_move", forward("vmem_move", args), confirmed, fingerprint, p => ({ verb: "Move note", preview: [`move ${from} → ${to}`], changes: changesOf(p), warnings: [] }));
           }
           case "promote": {
             const path = str(args.path), to = str(args.to);
             if (!path || !to) return { ok: false, error: "path and to are required" };
             if (str(args.vault) && args.vault !== mcp.defaultVault) return { ok: false, error: `promotion to an org vault reads from ${mcp.defaultVault}; open the note there` };
-            return twoStep("vmem_promote", { path, to }, confirmed, fingerprint, p => {
+            return twoStep("vmem_promote", forward("vmem_promote", args), confirmed, fingerprint, p => {
               const screen = rec(p.screen), dropped = Array.isArray(p.droppedLinks) ? p.droppedLinks as string[] : [];
-              return { verb: "Promote note", preview: String(p.text ?? "").split("\n"),
-                changes: [{ op: "create", target: `${to}:${String(p.target ?? path)}` }, { op: "modify", target: path, note: "provenance" }, { op: "log", target: "log", note: "SYNC lines in both vaults" }],
+              const target = String(p.target ?? `${to}:${path}`);
+              // A rerun after an interrupted promotion only restores the source provenance.
+              const changes: Change[] = p.recovery === "provenance-only"
+                ? [{ op: "modify", target: path, note: `provenance → ${target}` }]
+                : [{ op: "create", target }, { op: "modify", target: path, note: "provenance" }, { op: "log", target: "log", note: "SYNC lines in both vaults" }];
+              return { verb: p.recovery === "provenance-only" ? "Restore provenance" : "Promote note", preview: String(p.text ?? "").split("\n"),
+                changes,
                 warnings: [...(dropped.length ? [`${dropped.length} links become plain text: ${dropped.slice(0, 5).join(", ")}`] : []), ...(screen.passed === false ? ["screen reported issues"] : [])] };
             });
           }
@@ -212,13 +238,14 @@ export const plugin: ConsolePlugin = {
             if (!/^[0-9a-f-]{32,36}$/i.test(id)) return { ok: false, error: "a memory id is required" };
             if (!projectOf.has(id)) await candidates();
             const project = str(args.project) ?? projectOf.get(id);
-            const topics = Array.isArray(args.topics) ? args.topics.filter((t): t is string => typeof t === "string")
-              : str(args.topics)?.split(",").map(t => t.trim()).filter(Boolean);
-            const meta = Object.fromEntries(["stem", "type", "domain", "description", "title", "linkTo"].filter(k => str(args[k])).map(k => [k, str(args[k])]));
-            return twoStep("vmem_promote_from_amem", { id, ...pass(args), ...(project ? { project } : {}), ...meta, ...(topics?.length ? { topics } : {}) }, confirmed, fingerprint, p => {
+            return twoStep("vmem_promote_from_amem", forward("vmem_promote_from_amem", args, { id, ...(project ? { project } : {}) }), confirmed, fingerprint, p => {
               const dupes = Array.isArray(p.possibleDuplicates) ? p.possibleDuplicates as string[] : [];
+              // Linking an existing note writes no vault file; it records the link in agent-mem only.
+              const changes: Change[] = p.action === "link"
+                ? [{ op: "modify", target: `agent-mem mem:${id}`, note: `vault link → ${String(p.path)}` }]
+                : [{ op: "create", target: String(p.path ?? "note") }, { op: "log", target: "log", note: "LEARN line" }, { op: "modify", target: `agent-mem mem:${id}`, note: "vault link" }];
               return { verb: p.action === "link" ? "Link memory" : "Promote memory", preview: String(p.text ?? `link mem:${id} → ${String(p.path)}`).split("\n"),
-                changes: [{ op: p.action === "link" ? "modify" : "create", target: String(p.path ?? "note") }, { op: "log", target: "log", note: "LEARN line" }],
+                changes,
                 warnings: dupes.length ? [`possible duplicates: ${dupes.slice(0, 5).join(", ")}`] : [] };
             });
           }
