@@ -1,6 +1,6 @@
 export const COMMANDS = [
   { name: "lint", usage: "lint <vault> [--note PATH] [--write] [--dry-run] [--json]", mutates: "write" },
-  { name: "graph build", usage: "graph build <vault> [--dry-run] [--json]", mutates: true },
+  { name: "graph build", usage: "graph build <vault> [--workspace] [--dry-run] [--json]", mutates: true },
   { name: "graph neighbors", usage: "graph neighbors <vault> <stem> [--hops 1..2] [--limit 1..500] [--json]", mutates: false },
   { name: "skills mine", usage: "skills mine <vault> [--days N] [--project KEY|--all-projects] [--vocab DIR] [--skills DIR] [--min-size N] [--min-novelty X] [--json]", mutates: false },
   { name: "rebuild", usage: "rebuild <vault> [--json]", mutates: "cache" },
