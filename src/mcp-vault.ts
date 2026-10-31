@@ -116,7 +116,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     },
     vmem_skills_mine: async args => {
       const { mineSkills } = await import("./skills-mine.ts");
-      return mineSkills(home, { vault: pick(args).id, env, allProjects: args.allProjects === true, ...(str(args.project) ? { project: str(args.project) } : {}), ...(str(args.vocab) ? { vocab: str(args.vocab) } : {}),
+      return mineSkills(home, { vault: pick(args).id, expectedVault: pick(args), env, allProjects: args.allProjects === true, ...(str(args.project) ? { project: str(args.project) } : {}), ...(str(args.vocab) ? { vocab: str(args.vocab) } : {}),
         ...(Array.isArray(args.skills) ? { skills: args.skills as string[] } : {}), ...(typeof args.days === "number" ? { days: args.days } : {}),
         ...(typeof args.minSize === "number" ? { minSize: args.minSize } : {}), ...(typeof args.minNovelty === "number" ? { minNovelty: args.minNovelty } : {}) });
     },

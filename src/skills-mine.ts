@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { analysisInput, analysisRead } from "./analysis-input.ts";
-import type { VmemConfig } from "./config.ts";
+import type { VaultSpec, VmemConfig } from "./config.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { codePointCompare as compare, labelCommunities } from "./vault-graph.ts";
@@ -39,6 +39,8 @@ export interface Candidate {
 export interface MineOptions {
   vault: string; days?: number; project?: string; allProjects?: boolean; vocab?: string; skills?: string[];
   minSize?: number; minNovelty?: number; env?: NodeJS.ProcessEnv; now?: Date;
+  /** MCP passes its startup vault binding; a re-registered vault is refused. */
+  expectedVault?: VaultSpec;
 }
 export interface MineResult {
   vault: string; days: number; since: string; projects: string[];
@@ -107,7 +109,12 @@ const PATH = /(?:(?:\/|~\/)[\p{L}\p{N}_.\-/]+|[A-Z]:\\[\p{L}\p{N}_.\-\\]+)/gu;
 /** mask_text(): emails, absolute paths, then registry people (longest first). */
 export function maskText(text: string, people: readonly string[]): string {
   let masked = text.replace(EMAIL, "[EMAIL]").replace(PATH, "[PATH]");
-  for (const name of people) if (name && masked.includes(name)) masked = masked.replaceAll(name, "[PERSON]");
+  for (const name of people) {
+    if (!name) continue;
+    // Same rule as findMatches: ASCII names case-insensitively, others (Hangul) exactly; names are literals.
+    const literal = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    masked = masked.replace(new RegExp(literal, isAscii(name) ? "gi" : "g"), "[PERSON]");
+  }
   return masked;
 }
 /** The vault config's `piiPatterns` (regular expressions, as everywhere in vmem) redact sample text from every source to `[PII]`. */
@@ -278,8 +285,8 @@ export function scanSkills(dirs: readonly string[], config: VmemConfig): SkillEn
   return catalog;
 }
 /** Vault notes as records: every type but person/moc/reference; `at` from created/date, else the file mtime. */
-export function vaultRecords(home: string, vault: string, since: string): { records: MineRecord[]; config: VmemConfig; registry: string | undefined; unreadable: number } {
-  const { snapshot, vault: spec, config } = analysisInput(home, vault, { memory: true });
+export function vaultRecords(home: string, vault: string, since: string, expectedVault?: VaultSpec): { records: MineRecord[]; config: VmemConfig; registry: string | undefined; unreadable: number } {
+  const { snapshot, vault: spec, config } = analysisInput(home, vault, { memory: true, ...(expectedVault ? { expectedVault } : {}) });
   const records: MineRecord[] = [];
   let unreadable = 0;
   for (const note of snapshot.notes) {
@@ -432,7 +439,7 @@ export async function mineSkills(home: string, options: MineOptions): Promise<Mi
   if (!Number.isFinite(minNovelty) || minNovelty < 0 || minNovelty > 1) throw new Error("skills mine: --min-novelty takes 0..1");
   if (options.allProjects && options.project) throw new Error("skills mine: choose either --all-projects or --project");
   const now = options.now ?? new Date(), since = new Date(now.getTime() - days * DAY).toISOString();
-  const local = vaultRecords(home, options.vault, since);
+  const local = vaultRecords(home, options.vault, since, options.expectedVault);
   const vocab = loadVocab(options.vocab, local.config), registry = loadRegistryProjects(local.registry, local.config);
   const skills = scanSkills(options.skills ?? [], local.config);
   const { readAmemForMining } = await import("./amem/seam.ts");

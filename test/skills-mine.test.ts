@@ -42,6 +42,10 @@ test("dictionary matching, slugs and masking match the Python materialize.py fun
   expect(nodeId("action", "Summarize")).toBe("action--summarize");
   expect(nodeId("org", "Acme Corp")).toBe("entity--org--acme-corp");
   expect(nodeId("project", "alpha-web")).toBe("entity--project--alpha-web");
+  // Masking follows matching: ASCII names case-insensitively (as literals), Hangul exactly.
+  expect(maskText("kim minsu and KIM MINSU met 홍길동", people)).toBe("[PERSON] and [PERSON] met [PERSON]");
+  expect(maskText("a.b c", ["a.b"])).toBe("[PERSON] c");
+  expect(maskText("axb c", ["a.b"])).toBe("axb c");
 });
 
 test("SKILL.md parsing, tokens, Jaccard and candidate scoring match the Python analyze.py functions", () => {
@@ -128,14 +132,15 @@ test("skills mine reads curated, capture and vault records, masks them and write
   const before = [tree(f.memoryDir), tree(f.vault), tree(f.home)];
   const result = await mineSkills(f.home, { vault: "mine", env: f.env, vocab: join(FIXTURES, "vocab"), skills: [join(FIXTURES, "skills")], now: NOW, minSize: 3, minNovelty: 0.3 });
   const after = [tree(f.memoryDir), tree(f.vault), tree(f.home)];
-  // A read-only SQLite open may create or refresh empty -wal/-shm sidecars next to a database it reads (Linux creates an
-  // empty -wal); every other file, including each .db, must be byte-identical and no other file may appear.
+  // A read-only SQLite open may create an empty -wal and a -shm WAL index (allocated at its mapped size, no row
+  // content) next to a database it reads. Every other file, including each .db, must be byte-identical.
   const sidecar = (file: string) => /\.db-(wal|shm)$/.test(file);
   const content = (m: Map<string, string>) => new Map([...m].filter(([file]) => !sidecar(file)).map(([file, value]) => [file, value.split(":")[0]]));
   for (let i = 0; i < 3; i++) expect(content(after[i]!)).toEqual(content(before[i]!));
   for (const [file, value] of after[0]!) if (sidecar(file) && !before[0]!.has(file)) {
-    expect(value.split(":")[0]).toBe(createHash("sha256").update("").digest("hex"));
     expect(after[0]!.has(file.replace(/-(wal|shm)$/, ""))).toBe(true);
+    if (file.endsWith("-wal")) expect(value.split(":")[0]).toBe(createHash("sha256").update("").digest("hex"));
+    else expect(statSync(file).size % 32768).toBe(0);
   }
   expect([...after[1]!.keys()]).toEqual([...before[1]!.keys()]);
   expect([...after[2]!.keys()]).toEqual([...before[2]!.keys()]);
@@ -212,6 +217,19 @@ test("CLI and MCP expose the same read-only command", async () => {
   const viaMcp = await server.handlers.vmem_skills_mine!({ vault: "mine", vocab: join(FIXTURES, "vocab"), days: 3650 }) as { records: unknown; report: string };
   expect(viaMcp.records).toEqual(parsed.records);
   expect(tree(f.vault)).toEqual(before);
+});
+
+test("vmem_skills_mine refuses a vault re-registered after server startup", async () => {
+  const f = await fixture(), other = await fixture();
+  const server = createVaultMcp(f.home, f.env);
+  const config = JSON.parse(readFileSync(join(f.home, "vmem.config.json"), "utf8"));
+  config.vaults[0].path = other.vault;
+  writeFileSync(join(f.home, "vmem.config.json"), JSON.stringify(config));
+  const before = tree(other.vault);
+  const result = await server.handlers.vmem_skills_mine!({ vault: "mine", days: 3650 }) as { refused?: boolean; issues?: { message: string }[] };
+  expect(result.refused).toBe(true);
+  expect(result.issues![0]!.message).toContain("binding changed");
+  expect(tree(other.vault)).toEqual(before);
 });
 
 test("an absent amem home yields vault records only and creates no amem home", async () => {
