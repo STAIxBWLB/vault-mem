@@ -1,3 +1,5 @@
+import { workspaceInput } from "./workspace-input.ts";
+import { buildWorkspaceGraph } from "./workspace-graph.ts";
 import { MAX_REPORT_BYTES } from "./write-validation.ts";
 import type { VaultSpec } from "./config.ts";
 import { lstatSync } from "node:fs";
@@ -12,7 +14,7 @@ import { analysisInput } from "./analysis-input.ts";
 import { lintVault } from "./vault-lint.ts";
 import { buildGraph, graphReport } from "./vault-graph.ts";
 
-export interface AnalysisRequest { vault: string; kind: "lint" | "graph"; dryRun?: boolean; channel?: "cli" | "mcp"; today?: string; note?: string; expectedVault?: VaultSpec }
+export interface AnalysisRequest { vault: string; kind: "lint" | "graph"; workspace?: boolean; dryRun?: boolean; channel?: "cli" | "mcp"; today?: string; note?: string; expectedVault?: VaultSpec }
 function trend(snapshot: AnalysisSnapshot, nodes: number, edges: number, communities: number, top: string): string {
   const seed = "---\ntype: report\nkind: graph-trend\n---\n\n# Graph Trend (vault layer)\n\n| 빌드 | Nodes | Edges | Communities | Density | Top hub (degree 1위) |\n|---|---|---|---|---|---|\n";
   const source = snapshot.reports["graph-trend.md"] ?? seed;
@@ -27,8 +29,11 @@ function trend(snapshot: AnalysisSnapshot, nodes: number, edges: number, communi
 }
 export function writeAnalysisReports(home: string, request: AnalysisRequest, env: NodeJS.ProcessEnv = process.env) {
   const {snapshot,vault,config,identity} = analysisInput(home,request.vault,{today:request.today,expectedVault:request.expectedVault});
+  if (request.workspace && request.kind !== "graph") throw new Error("workspace is only supported for graph build");
+  const work = request.workspace ? workspaceInput(snapshot,vault,config) : undefined;
   const binding = {vault,denyPaths:config.denyPaths ?? [],piiPatterns:config.piiPatterns ?? [],dev:Number(identity.dev),ino:Number(identity.ino)};
   const unchanged = () => {
+    work?.assertUnchanged?.();
     const current = loadRegistry(home), stat = lstatSync(vault.path);
     if (JSON.stringify(current) !== JSON.stringify(config) || stat.dev !== identity.dev || stat.ino !== identity.ino || stat.isSymbolicLink()) throw new Error("analysis: vault or policy changed during build");
   };
@@ -37,6 +42,10 @@ export function writeAnalysisReports(home: string, request: AnalysisRequest, env
   if (request.kind === "lint") {
     const lint = lintVault(snapshot,request.note); summary = {findings:lint.findings,errors:lint.errors,warnings:lint.warnings,summary:lint.summary};
     outputs.push({path:`reports/lint-report-${snapshot.today.slice(2).replaceAll("-","")}.md`,text:lint.markdown+"\n"+lint.summary+"\n"});
+  } else if (work) {
+    const result = buildWorkspaceGraph(snapshot,work);
+    summary = { nodes: result.graph.nodes.length, edges: result.graph.edges.length, ...result.counters, relations: result.relations };
+    outputs.push({path:"reports/workspace-graph.json",text:JSON.stringify(result.graph,null,2)+"\n"});
   } else {
     const graph = buildGraph(snapshot), communities = new Set(graph.nodes.flatMap(n => n.community === null ? [] : [n.community])).size;
     summary = {nodes:graph.nodes.length,edges:graph.edges.length,communities};
@@ -47,7 +56,7 @@ export function writeAnalysisReports(home: string, request: AnalysisRequest, env
   }
   const originals = new Map(outputs.map(out => {
     const name = out.path.slice("reports/".length);
-    return [out.path, request.kind === "graph" ? snapshot.reports[name] ?? null : analysisRead(join(vault.path,out.path), MAX_REPORT_BYTES)] as const;
+    return [out.path, request.kind === "graph" && !request.workspace ? snapshot.reports[name] ?? null : analysisRead(join(vault.path,out.path), MAX_REPORT_BYTES)] as const;
   }));
   unchanged();
   for (const out of outputs) if (analysisRead(join(vault.path,out.path), MAX_REPORT_BYTES) !== originals.get(out.path)) throw new Error("analysis: report changed during build");
@@ -65,6 +74,6 @@ export function writeAnalysisReports(home: string, request: AnalysisRequest, env
   }
   const complete = receipts.length === outputs.length && receipts.every(r => r.ok);
   unchanged();
-  const log = complete ? appendLog(home,{vault:request.vault,channel:request.channel,event:{type:request.kind === "lint" ? "LINT" : "GRAPH",project:"-",source:"vmem",dest:outputs[0]!.path,note:request.kind === "lint" ? "Vault lint report" : "Vault graph reports"}},{env,binding}) : undefined;
+  const log = complete ? appendLog(home,{vault:request.vault,channel:request.channel,event:{type:request.kind === "lint" ? "LINT" : "GRAPH",project:"-",source:"vmem",dest:outputs[0]!.path,note:request.kind === "lint" ? "Vault lint report" : request.workspace ? "Workspace graph" : "Vault graph reports"}},{env,binding}) : undefined;
   return {ok:complete && log?.ok === true,applied:receipts.some(r => r.applied),summary,paths:outputs.map(o => o.path),receipts,log};
 }

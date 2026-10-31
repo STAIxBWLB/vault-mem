@@ -6,14 +6,14 @@ export interface GraphNode {
   label: string;
   type: string;
   domain: string;
-  description: string;
-  confidence: string;
+  description?: string;
+  confidence?: string;
   source_file: string;
-  topics: string;
+  topics?: string;
   community: number | null;
   degree: number;
 }
-export interface GraphEdge { source: string; target: string; relation: "wiki_link"; confidence_tag: "EXTRACTED"; confidence: 1 }
+export interface GraphEdge { source: string; target: string; relation: "wiki_link" | "fm_ref" | "bu_member" | "source_ref" | "related" | "supersedes"; field?: string; rel?: string; confidence_tag: "EXTRACTED"; confidence: 1 }
 export interface VaultGraph {
   directed: false;
   multigraph: false;
@@ -74,7 +74,7 @@ function mapping(value: unknown): value is Record<string, unknown> { return valu
 function truthy(value: unknown): boolean {
   return yamlTruthy(value);
 }
-function pyString(value: unknown): string {
+export function pyString(value: unknown): string {
   const scalar = scalarText(value);
   if (scalar !== undefined) return scalar;
   if (value === null || value === undefined) return "None";
@@ -242,4 +242,12 @@ export function graphReport(graph: VaultGraph, today: string): string {
   if (selected.length) { out.push("| Source | Target | Score |", "|--------|--------|-------|"); for (const edge of selected) out.push(`| \`${edge.source}\` | \`${edge.target}\` | ${edge.score} |`); }
   else out.push("No cross-community edges found.");
   return out.join("\n") + "\n";
+}
+
+/** Recompute derived degrees and communities after adding workspace nodes and edges. */
+export function finalizeGraph(graph: VaultGraph): VaultGraph {
+  const neighbors = adjacency(graph);
+  for (const node of graph.nodes) node.degree = neighbors.get(node.id)!.size + Number(neighbors.get(node.id)!.has(node.id));
+  graph.graph.iterations = communities(graph.nodes, neighbors);
+  return graph;
 }
