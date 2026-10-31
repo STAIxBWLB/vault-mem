@@ -36,9 +36,15 @@ export function workspaceInput(snapshot: AnalysisSnapshot, vault: VaultSpec, con
     if (prior !== undefined && prior !== current) throw new Error("workspace graph: input changed during snapshot");
     stamps.set(file, current);
   };
-  /** FRONTMATTER_RE needs `---` then whitespace at offset 0; a file that cannot match is skipped unread, as in the reference. */
+  /**
+   * FRONTMATTER_RE needs `---` then whitespace at offset 0; a file that cannot match is skipped unread, as in the reference.
+   * Every probed file counts once toward WORK_MAX_FILES and is stamped, so one that later gains frontmatter fails assertUnchanged.
+   */
+  const probed = new Set<string>();
   const opensWithFrontmatter = (file: string): boolean => {
     if (++filesRead > WORK_MAX_FILES) throw new Error("workspace graph: file count exceeds bound");
+    probed.add(file);
+    remember(file);
     let fd: number;
     try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
@@ -49,7 +55,8 @@ export function workspaceInput(snapshot: AnalysisSnapshot, vault: VaultSpec, con
     } finally { closeSync(fd); }
   };
   const read = (file: string, maximum = WORK_MAX_FILE_BYTES): string => {
-    if (++filesRead > WORK_MAX_FILES) throw new Error("workspace graph: file count exceeds bound");
+    // A probed work doc was already counted; other reads (configs) count here.
+    if (!probed.has(file) && ++filesRead > WORK_MAX_FILES) throw new Error("workspace graph: file count exceeds bound");
     remember(file);
     const text = analysisRead(file, maximum);
     if (text === null) throw new Error("workspace graph: input disappeared");

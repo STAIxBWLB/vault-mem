@@ -195,6 +195,21 @@ test("workspace reader enforces aggregate byte and file-count bounds", () => {
   expect(() => workspaceInput(snapshot(), count.spec, count.config)).toThrow("file count");
 }, 120_000);
 
+test("each work file counts once toward the file bound, frontmatter or not", () => {
+  const f = fixture();
+  for (let i = 0; i < WORK_MAX_FILES / 2 + 1; i++) f.put(`docs/file-${i}.md`, document("title: small"));
+  expect(() => workspaceInput(snapshot(), f.spec, f.config)).not.toThrow();
+}, 120_000);
+
+test("a plain work file that gains frontmatter after the probe fails the change check", () => {
+  const f = fixture();
+  const file = f.put("docs/doc.md", "plain text\n");
+  const captured = workspaceInput(snapshot(), f.spec, f.config);
+  expect(captured.files).toEqual([]);
+  writeFileSync(file, document("document_type: memo"));
+  expect(() => captured.assertUnchanged!()).toThrow("changed");
+});
+
 test("files without frontmatter are probed, never read, so their size does not count", () => {
   const f = fixture();
   f.put("docs/huge-plain.md", "# Plain\n" + "x".repeat(3 * 1024 * 1024));
