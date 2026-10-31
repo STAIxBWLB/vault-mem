@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- A registry update whose directory flush fails after the config was replaced now reports `registry updated but directory fsync failed` instead of a failed mutation, so a retried `vaults add` is not refused as already registered. The lock is still released.
+- `vmem recover` reads at most 4 KiB of the lock owner record; a larger lock file is treated as unreadable (state `unknown`) and is never removed.
+
 ## [0.2.1] - 2026-10-30
 
 - The `tidy` LINT event and the org-promotion SYNC events are bound to the vaults resolved at the start of the run; if a vault id is re-registered before the append, the event is refused with LOG_DRIFT instead of landing in the other vault. The committed notes are not rolled back.
