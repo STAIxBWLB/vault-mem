@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `sync` and `doctor` refuse a git URL rewrite (`insteadOf`/`pushInsteadOf`) only when its prefix matches the configured remote or one of origin's configured or effective URLs, explicit `pushurl` included, and name that rule (#86). An unrelated rule, such as a global `https://github.com/` to SSH rewrite with an SSH vault remote, no longer blocks sync.
+
 ## [0.3.0] - 2026-11-01
 
 - A vault whose PII policy has members this build does not know (from a newer-format config) fails closed: note writes, `check`, tidy, `promote-from-amem`, `promote`, move and delete and log appends on it are refused with `PII_POLICY` instead of screening with an incomplete policy. Reads and `vaults pii` show still work.
