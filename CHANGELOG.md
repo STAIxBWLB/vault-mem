@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- V05 refuses newly introduced Topics placement or content problems while retaining existing problems as warnings. Existing vaults must run `vmem tidy <vault> --all` once after upgrading to the validating writer, previewing and then confirming its fingerprint; `doctor` reports pending migration counts and unparsable paths without writing (#92).
+- V05 refuses newly introduced Topics placement or content problems while retaining existing problems as warnings. All create paths, including org `promote` and `vmem_create` with a custom body, now refuse a note whose Topics is not the final H2 or does not match its frontmatter topics. Existing vaults must run `vmem tidy <vault> --all` once after upgrading to the validating writer, previewing and then confirming its fingerprint; `doctor` reports pending migration counts and unparsable paths without writing, and isolates preview failures as per-vault diagnostics (#92).
 
 - Releases publish a GitHub release next to the npm package, with the validated tarball and manifest attached and the CHANGELOG section as notes (#89).
 

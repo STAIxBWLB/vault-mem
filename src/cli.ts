@@ -76,7 +76,10 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
           try { registryIds(vault.registry, config!.denyPaths); checks.registry = { ok: true }; }
           catch (error) { checks.registry = { ok: false, issue: error instanceof Error ? error.message : "cannot read project registry" }; }
         }
-        const preview = vault.write !== "none" ? tidyVault(home.home, { vault: vault.id, rules: [...TIDY_RULES] }, { env }) : undefined;
+        let preview: ReturnType<typeof tidyVault> | undefined;
+        try {
+          if (vault.write !== "none") preview = tidyVault(home.home, { vault: vault.id, rules: [...TIDY_RULES] }, { env });
+        } catch (error) { checks.tidy = { ok: false, issue: error instanceof Error ? error.message : "cannot preview migration tidy" }; }
         const unparsable = preview?.reported.filter(item => item.message.startsWith("unparsable note skipped")).map(item => item.path) ?? [];
         const tidy = preview?.ok && (preview.notes.length || preview.skipped?.length || unparsable.length || Object.values(preview.counts).some(count => count > 0))
           ? { pending: preview.counts, notes: preview.notes.length, skipped: preview.skipped ?? [], unparsable, hint: `Run vmem tidy ${vault.id} --all, then confirm its preview fingerprint to apply the migration.` }

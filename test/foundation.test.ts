@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, readdirSync, readlinkSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILE, MAX_CONFIG_BYTES, parseConfig, readConfig } from "../src/config.ts";
@@ -277,7 +277,7 @@ describe("follow-ups", () => {
 // Synthetic migration fixtures; doctor must preserve both the vault and vmem home.
 function migrationTree(dir: string): unknown {
   return readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).map(entry =>
-    [entry.name, entry.isDirectory() ? migrationTree(join(dir, entry.name)) : readFileSync(join(dir, entry.name)).toString("base64")]);
+    [entry.name, entry.isSymbolicLink() ? { symlink: readlinkSync(join(dir, entry.name)) } : entry.isDirectory() ? migrationTree(join(dir, entry.name)) : readFileSync(join(dir, entry.name)).toString("base64")]);
 }
 const migrationMoc = "---\ntype: moc\ndescription: A synthetic research directory.\n---\n# Research\n";
 const migrationNote = '---\ndescription: Evidence supporting a synthetic claim.\ntype: insight\ndomain: research\ntopics: ["[[research]]"]\n---\n# Claim\n\n## Topics\n- [[research]]\n';
@@ -336,4 +336,26 @@ test("doctor omits tidy for read-only vaults and unenforceable PII policies", ()
     expect(JSON.parse(result.text).vaults[0]).not.toHaveProperty("tidy");
     expect(migrationTree(f.dir)).toEqual(before);
   }
+});
+
+test("doctor isolates a second vault's symlinked log and preserves every file", () => {
+  const f = fixture(), second = join(f.dir, "second"), logTarget = join(f.dir, "log-target");
+  writeFileSync(join(f.vault, "notes/research.md"), migrationMoc);
+  writeFileSync(join(f.vault, "notes/keep.md"), migrationNote.replace("## Topics\n- [[research]]\n", ""));
+  mkdirSync(join(second, "notes"), { recursive: true });
+  writeFileSync(join(second, "notes/research.md"), migrationMoc);
+  writeFileSync(logTarget, "Synthetic log target, unchanged.\n");
+  symlinkSync(logTarget, join(second, "log"));
+  addVault(f.home, f.spec);
+  addVault(f.home, { ...f.spec, id: "second", path: second });
+  const before = migrationTree(f.dir), result = run(["doctor", "--json"], { VMEM_HOME: f.home });
+  expect(result.code).toBe(1);
+  const report = JSON.parse(result.text);
+  expect(report.healthy).toBe(false);
+  expect(report.vaults).toHaveLength(2);
+  expect(report.vaults[0]).toMatchObject({ id: "personal", healthy: true, tidy: { pending: { topics: 1 }, notes: 1 } });
+  expect(report.vaults[1]).toMatchObject({ id: "second", checks: { tidy: { ok: false, issue: expect.any(String) } } });
+  expect(report.vaults[1].checks.tidy.issue.length).toBeGreaterThan(0);
+  expect(report.vaults[1]).not.toHaveProperty("tidy");
+  expect(migrationTree(f.dir)).toEqual(before);
 });
