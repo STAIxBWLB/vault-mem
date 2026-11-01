@@ -384,5 +384,5 @@ test("tidy migrates missing Topics and writes retained misplaced Topics with a w
   expect(done.written).toContain("notes/migration-missing.md");
   expect(done.written).toContain("notes/migration-misplaced.md");
   expect(f.read("migration-missing")).toContain("## Topics");
-  expect(f.read("migration-misplaced")).toContain("confidence: proven");
+  expect(parseFrontmatter(f.read("migration-misplaced")).data.confidence).toBe("proven");
 });
