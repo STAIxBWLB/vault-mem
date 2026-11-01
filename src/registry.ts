@@ -2,7 +2,7 @@ import { closeSync, constants, fsyncSync, mkdirSync, openSync, readdirSync, read
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { CONFIG_FILE, MAX_CONFIG_BYTES, parseConfig, parsePii, parseVault, readConfig, type VaultSpec, type VmemConfig } from "./config.ts";
+import { CONFIG_FILE, MAX_CONFIG_BYTES, parseConfig, parsePii, parseVault, piiExtensions, readConfig, type VaultSpec, type VmemConfig } from "./config.ts";
 import { loosenedCells, piiPolicy, piiShorthand } from "./pii.ts";
 export const LOCK_FILE = "config.lock";
 const TEMP = /^\.config-[0-9a-f-]{36}\.tmp$/;
@@ -178,6 +178,9 @@ export function setVaultPii(home: string, id: string, value: unknown, confirm = 
     if (!vault) throw new Error(`${join(home, CONFIG_FILE)}: unknown vault id ${id}`);
     const before = piiPolicy(vault);
     if (next === undefined) return { vault: id, pii: piiShorthand(vault), piiPolicy: before };
+    // A replacement would drop policy members a newer vmem wrote and this build cannot carry over.
+    const extensions = piiExtensions(vault.pii);
+    if (extensions.length) throw new Error(`vault ${id}: PII policy has members this vmem does not know (${extensions.slice(0, 8).join(", ")}); change it with the newer vmem that wrote them`);
     const updated: VaultSpec = { ...vault, pii: next }, after = piiPolicy(updated);
     const loosened = loosenedCells(before, after), changed = JSON.stringify(before) !== JSON.stringify(after);
     if (confirm && changed) vault.pii = next;

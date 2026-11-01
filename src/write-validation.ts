@@ -28,7 +28,7 @@ const KEYS = new Set([
 export const TYPED_KEYS: Readonly<Record<string, string>> = { decided_at: "decision", decided_by: "decision", email: "person", phone: "person" };
 export const SCHEMA_KEYS: ReadonlySet<string> = KEYS;
 const WIKI_FIELDS = ["topics", "project", "superseded_by", "supersedes", "source_ref"];
-// Exact regex set from @staix/agent-mem v0.11.0 src/memory/screen.ts; parity-tested against its root export.
+// Exact regex set from @staix/agent-mem v0.17.0 src/memory/screen.ts; parity-tested against its root export.
 const SECRETS = [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, /\bAKIA[0-9A-Z]{16}\b/, /\bgh[pousr]_[A-Za-z0-9]{30,}/, /\bgithub_pat_[A-Za-z0-9_]{40,}/, /\bsk-[A-Za-z0-9_-]{20,}/,
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/, /\bAIza[0-9A-Za-z_-]{35}\b/, /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, /\b(?:password|passwd|secret|api[_-]?key|token)\s*[:=]\s*\S{8,}/i];
 export const SECRET_PATTERNS: readonly RegExp[] = SECRETS;

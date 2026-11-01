@@ -1,7 +1,8 @@
 import { localDate } from "./local-date.ts";
 import { screenContent } from "./write-validation.ts";
-import { parsePii } from "./config.ts";
-function validPii(value: unknown): boolean { try { parsePii(value); return true; } catch { return false; } }
+import { newerFormat, parsePii } from "./config.ts";
+/** Known fields are always validated; members unknown to this build are accepted only from a newer-format config. */
+function validPii(value: unknown, config: unknown): boolean { try { parsePii(value, newerFormat(config)); return true; } catch { return false; } }
 import type { LogContext, LogEvent } from "./log-types.ts";
 import type { WriteIssue } from "./write-types.ts";
 
@@ -34,7 +35,7 @@ export function formatLogEvent(event: LogEvent, context: LogContext): { line?: s
   }
   if ((context.channel !== undefined && context.channel !== "cli" && context.channel !== "mcp") ||
       !record(context.vault) || !["personal", "org"].includes(context.vault.kind) ||
-      (context.vault.pii !== undefined && !validPii(context.vault.pii)) ||
+      (context.vault.pii !== undefined && !validPii(context.vault.pii, context.config)) ||
       !record(context.config) || !Array.isArray(context.config.vaults) ||
       (context.config.piiPatterns !== undefined && (!Array.isArray(context.config.piiPatterns) || context.config.piiPatterns.some(value => typeof value !== "string"))) ||
       (context.now !== undefined && !(context.now instanceof Date)) ||

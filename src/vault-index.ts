@@ -9,8 +9,13 @@ import { normalizeTarget, noteKey, proseLines, resolveLinks, type LinkNote, type
 
 export const MAX_NOTE_BYTES = 2 * 1024 * 1024;
 export const MAX_RESULTS = 500;
-/** Bump when link resolution changes, so caches written by an older version recompute every link. 2 = path-only. */
-const LINK_RESOLUTION = 2;
+/**
+ * Bump when link resolution changes. 2 = path-only. The index file is named per value, so two installed versions
+ * that resolve links differently keep separate indexes instead of rebuilding each other's links. 0.2.4 and older
+ * share the unversioned `<digest>.sqlite`; the first run of a newer version builds its own file once.
+ */
+export const LINK_RESOLUTION = 2;
+const indexName = (root: string) => `${digest(root)}-links${LINK_RESOLUTION}.sqlite`;
 export const MAX_READ_BYTES = 64 * 1024;
 export interface IndexedNote extends LinkNote { hash: string; description: string; type: string; domain: string }
 export interface NoteReadResult {
@@ -118,7 +123,7 @@ export class VaultIndex {
     if (!options.memory) {
       mkdirSync(cache, { recursive: true, mode: 0o700 });
       if (lstatSync(cache).isSymbolicLink() || !lstatSync(cache).isDirectory()) throw new Error("index: expected plain cache directory");
-      this.file = join(cache, `${digest(this.root)}.sqlite`);
+      this.file = join(cache, indexName(this.root));
       try {
         const fd = openSync(this.file, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
         closeSync(fd);
@@ -136,7 +141,7 @@ export class VaultIndex {
       CREATE TABLE IF NOT EXISTS links (source TEXT NOT NULL, ordinal INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source, ordinal));`);
     // Dry runs reuse the derived cache via a readonly connection, then refresh only changed notes in memory.
     if (options.memory) {
-      const file = join(cache, `${digest(this.root)}.sqlite`);
+      const file = join(cache, indexName(this.root));
       let exists = false;
       try { const stat = lstatSync(file); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("index: expected plain database file"); exists = true; }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
