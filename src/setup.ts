@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -38,12 +38,27 @@ function hosts(env: NodeJS.ProcessEnv, cwd: string): Record<SetupTarget, HostFil
     agy: { target: "agy", file: join(resolve(cwd), ".agents", "mcp_config.json"), format: "json", key: "mcpServers" },
   };
 }
-function readText(file: string): string | null {
-  let stat;
-  try { stat = lstatSync(file); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
-  if (!stat.isFile()) throw new Error(`${file}: expected a plain file (links are refused)`);
-  if (stat.size > MAX_HOST_CONFIG) throw new Error(`${file}: exceeds 4 MiB`);
-  return readFileSync(file, "utf8");
+const MAX_PACKAGE_JSON = 64 * 1024;
+/** Bounded plain-file read on one descriptor: links, FIFOs and other non-regular files are refused, never read. */
+function readText(file: string, max = MAX_HOST_CONFIG): string | null {
+  let fd: number;
+  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return null;
+    if (code === "ELOOP") throw new Error(`${file}: expected a plain file (links are refused)`);
+    throw error;
+  }
+  try {
+    const stat = fstatSync(fd), limit = max >= 1024 * 1024 ? `${max / 1024 / 1024} MiB` : `${max / 1024} KiB`;
+    if (!stat.isFile()) throw new Error(`${file}: expected a plain file (links are refused)`);
+    if (stat.size > max) throw new Error(`${file}: exceeds ${limit}`);
+    const buffer = Buffer.alloc(max + 1);
+    let size = 0, n: number;
+    while (size < buffer.length && (n = readSync(fd, buffer, size, buffer.length - size, null)) > 0) size += n;
+    if (size > max) throw new Error(`${file}: exceeds ${limit}`);
+    return buffer.subarray(0, size).toString("utf8");
+  } finally { closeSync(fd); }
 }
 function atomicWrite(file: string, text: string | null): void {
   if (text === null) { unlinkSync(file); return; }
@@ -168,9 +183,12 @@ export function defaultEntry(root: string = OWN_ROOT): McpEntry {
  */
 export function installRoot(root: string): InstallRoot {
   if (!isAbsolute(root)) throw new Error("setup: --root must be an absolute path");
-  let path: string, pkg: { name?: unknown; version?: unknown };
-  try { path = realpathSync(root); pkg = JSON.parse(readFileSync(join(path, "package.json"), "utf8")); }
-  catch { throw new Error(`setup: ${root} has no readable package.json`); }
+  let path: string, text: string | null, pkg: { name?: unknown; version?: unknown };
+  try { path = realpathSync(root); text = readText(join(path, "package.json"), MAX_PACKAGE_JSON); }
+  catch (error) { throw new Error(`setup: ${root}: package.json is not readable (${error instanceof Error ? error.message : "read failed"})`); }
+  if (text === null) throw new Error(`setup: ${root} has no package.json`);
+  try { pkg = JSON.parse(text); } catch { throw new Error(`setup: ${root}: package.json is not valid JSON`); }
+  if (!pkg || typeof pkg !== "object") throw new Error(`setup: ${root} is not a vault-mem install root`);
   if (pkg.name !== "@staix/vault-mem" || typeof pkg.version !== "string") throw new Error(`setup: ${root} is not a vault-mem install root`);
   try { if (!statSync(join(path, "bin", "vmem.js")).isFile()) throw new Error(); }
   catch { throw new Error(`setup: ${root} has no bin/vmem.js`); }

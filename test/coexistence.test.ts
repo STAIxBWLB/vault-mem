@@ -3,7 +3,8 @@ import { Database } from "bun:sqlite";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addVault, loadRegistry, removeVault } from "../src/registry.ts";
+import { addVault, loadRegistry, removeVault, setVaultPii } from "../src/registry.ts";
+import { appendLog, readLog } from "../src/vault-log.ts";
 import { CONFIG_FILE, CONFIG_VERSION } from "../src/config.ts";
 import { VaultIndex, LINK_RESOLUTION } from "../src/vault-index.ts";
 import { VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
@@ -93,6 +94,15 @@ test("AC2: a config written by a newer version is read without error, and its un
     vaults: raw.vaults.map((v: any, i: number) => i ? v : { ...v, futureVault: "x", pii: { email: { notes: "deny", futureSurface: "allow" }, futurePii: true, patterns: [{ name: "badge", regex: "B-\\d+", futurePattern: 1 }] } }) };
   writeFileSync(file, JSON.stringify(future));
   expect(loadRegistry(f.home).vaults.map(v => v.id)).toEqual(["mine", "team"]);
+  // Log validation takes the same tolerance: the extended policy still screens, and the append lands.
+  const logged = appendLog(f.home, { vault: "mine", event: { type: "LEARN", project: "-", source: "notes/alpha.md", note: "extended policy" }, channel: "cli" });
+  expect(logged).toMatchObject({ ok: true, appended: true });
+  expect(readLog(f.home, { vault: "mine" }).lines).toHaveLength(1);
+  // Replacing the policy would drop the members a newer vmem wrote, so it is refused and nothing changes.
+  const before = readFileSync(file, "utf8");
+  for (const confirm of [false, true]) expect(() => setVaultPii(f.home, "mine", { email: "warn" }, confirm)).toThrow("futurePii, email.futureSurface, patterns.badge.futurePattern");
+  expect(readFileSync(file, "utf8")).toBe(before);
+  expect(setVaultPii(f.home, "mine", undefined)).toMatchObject({ vault: "mine" });
   removeVault(f.home, "team", true); // this version's write
   const written = JSON.parse(readFileSync(file, "utf8"));
   expect(written).toMatchObject({ version: CONFIG_VERSION + 1, futureTop: { nested: [1, 2] } });
@@ -145,4 +155,15 @@ test("setup --root registers a versioned install root and leaves the current reg
   expect(() => runSetup("claude", "dry-run", { home: f.home, env, root: f.home })).toThrow("package.json");
   expect(JSON.parse(run(["setup", "claude", "--root", dir, "--json"], env).text)).toMatchObject({ mode: "dry-run", root: { version: "9.9.3" }, actions: [{ change: "unchanged" }] });
   expect(() => run(["setup", "claude", "--root"], env)).toThrow("value required");
+  // The root's package.json is read bounded on one descriptor: a FIFO, an oversized or a malformed file is refused, never waited on.
+  const bad = join(f.root, "bad"); mkdirSync(join(bad, "bin"), { recursive: true }); writeFileSync(join(bad, "bin", "vmem.js"), "");
+  const pkg = join(bad, "package.json"), refuse = () => runSetup("claude", "dry-run", { home: f.home, env, root: bad });
+  expect(Bun.spawnSync(["mkfifo", pkg]).exitCode).toBe(0);
+  expect(refuse).toThrow("expected a plain file");
+  rmSync(pkg); writeFileSync(pkg, " ".repeat(64 * 1024 + 1));
+  expect(refuse).toThrow("exceeds 64 KiB");
+  writeFileSync(pkg, "{");
+  expect(refuse).toThrow("not valid JSON");
+  writeFileSync(pkg, "null");
+  expect(refuse).toThrow("not a vault-mem install root");
 });

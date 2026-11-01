@@ -34,6 +34,11 @@ function object(value: unknown, keys: string[], label: string, tolerant = false)
   if (!tolerant) for (const key of Object.keys(record)) if (!keys.includes(key)) throw new Error(`${label}: unknown key ${key}`);
   return record;
 }
+/** True when `config` is in a format newer than this build: its unknown keys are kept, not refused. */
+export function newerFormat(config: unknown): boolean {
+  const version = config && typeof config === "object" ? (config as { version?: unknown }).version : undefined;
+  return typeof version === "number" && Number.isSafeInteger(version) && version > CONFIG_VERSION;
+}
 /** The keys of `record` this build does not know, kept only when the config is newer than this build. */
 function unknown(record: Record<string, unknown>, keys: string[], tolerant: boolean): Record<string, unknown> {
   return tolerant ? Object.fromEntries(Object.entries(record).filter(([key]) => !keys.includes(key))) : {};
@@ -73,23 +78,32 @@ function cell(value: unknown, label: string, tolerant = false): PiiCell {
 export function parsePii(value: unknown, tolerant = false): "allow" | "deny" | PiiSpec {
   if (value === "allow" || value === "deny") return value;
   if (typeof value === "string") throw new Error("vault.pii: expected allow, deny or a policy object");
-  const keys = ["email", "phone", "custom", "patterns", "allow"], raw = object(value, keys, "vault.pii", tolerant), spec: PiiSpec = unknown(raw, keys, tolerant);
+  const raw = object(value, PII_KEYS, "vault.pii", tolerant), spec: PiiSpec = unknown(raw, PII_KEYS, tolerant);
   for (const key of ["email", "phone", "custom"] as const) if (raw[key] !== undefined) spec[key] = cell(raw[key], `vault.pii.${key}`, tolerant);
   if (raw.patterns !== undefined) {
     if (!Array.isArray(raw.patterns) || raw.patterns.length > 32) throw new Error("vault.pii.patterns: expected at most 32 patterns");
     const names = new Set<string>();
     spec.patterns = raw.patterns.map((item, index) => {
-      const p = object(item, ["name", "regex", "action"], `vault.pii.patterns[${index}]`, tolerant);
+      const p = object(item, PATTERN_KEYS, `vault.pii.patterns[${index}]`, tolerant);
       const name = string(p.name, "vault.pii.patterns.name"), regex = string(p.regex, "vault.pii.patterns.regex");
       if (!/^[a-z][a-z0-9-]{0,31}$/.test(name) || names.has(name)) throw new Error(`vault.pii.patterns: invalid or duplicate name ${name.slice(0, 40)}`);
       if (Buffer.byteLength(regex) > 256) throw new Error("vault.pii.patterns.regex: exceeds 256 bytes");
       try { new RegExp(regex, "u"); } catch { throw new Error(`vault.pii.patterns.${name}: invalid regular expression`); }
       names.add(name);
-      return { ...unknown(p, ["name", "regex", "action"], tolerant), name, regex, ...(p.action !== undefined ? { action: cell(p.action, `vault.pii.patterns.${name}.action`, tolerant) } : {}) };
+      return { ...unknown(p, PATTERN_KEYS, tolerant), name, regex, ...(p.action !== undefined ? { action: cell(p.action, `vault.pii.patterns.${name}.action`, tolerant) } : {}) };
     });
   }
   if (raw.allow !== undefined) spec.allow = strings(raw.allow, "vault.pii.allow");
   return spec;
+}
+const PII_KEYS = ["email", "phone", "custom", "patterns", "allow"], PATTERN_KEYS = ["name", "regex", "action"];
+/** Members of a parsed policy that this build does not know (kept from a newer-format config), as dotted paths. */
+export function piiExtensions(pii: VaultSpec["pii"]): string[] {
+  if (!pii || typeof pii !== "object") return [];
+  const extra = (value: unknown, keys: readonly string[], at: string) => value && typeof value === "object" ? Object.keys(value).filter(key => !keys.includes(key)).map(key => at + key) : [];
+  const record = pii as Record<string, unknown>;
+  return [...extra(record, PII_KEYS, ""), ...(["email", "phone", "custom"] as const).flatMap(key => extra(record[key], PII_SURFACES, `${key}.`)),
+    ...(pii.patterns ?? []).flatMap(p => [...extra(p, PATTERN_KEYS, `patterns.${p.name}.`), ...extra(p.action, PII_SURFACES, `patterns.${p.name}.action.`)])];
 }
 export function parseVault(value: unknown, tolerant = false): VaultSpec {
   const keys = ["id", "path", "kind", "write", "pii", "remote", "registry"], v = object(value, keys, "vault", tolerant);
@@ -107,7 +121,7 @@ export function parseConfig(value: unknown): VmemConfig {
   const keys = ["version", "home", "vaults", "denyPaths", "piiPatterns"];
   const version = (value as Record<string, unknown> | null)?.version;
   if (version !== undefined && (!Number.isSafeInteger(version) || (version as number) < 1)) throw new Error("config.version: expected a positive integer");
-  const tolerant = version !== undefined && (version as number) > CONFIG_VERSION, raw = object(value, keys, "config", tolerant);
+  const tolerant = newerFormat(value), raw = object(value, keys, "config", tolerant);
   const stamp = version === undefined ? {} : { version: version as number };
   if (raw.home !== undefined) {
     if (["vaults", "denyPaths", "piiPatterns"].some(key => raw[key] !== undefined)) throw new Error("config: home pointer must not contain vaults or policy");

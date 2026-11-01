@@ -4,7 +4,7 @@
 
 - Versions coexist on one machine (#82). `vmem mcp` loads every module a tool can run at startup, the agent-mem root included, so a running server keeps its own code and tool list when its install is replaced or a newer release is installed beside it.
 - `vmem setup <target> --root <path>` registers another install root, such as `<install>/releases/<version>/`, resolved to its real path. Without `--root` setup registers the running install as before.
-- `vmem.config.json` accepts an optional `version` (format 1). A config from a newer format is read tolerantly and its unknown keys survive registry writes; at or below format 1 unknown keys stay errors.
+- `vmem.config.json` accepts an optional `version` (format 1). A config from a newer format is read tolerantly and its unknown keys survive registry writes; at or below format 1 unknown keys stay errors. Log screening accepts the same extended PII policy, and `vaults pii --set` refuses to replace a policy whose unknown members it would drop.
 - The derived index is `indexes/<sha256>-links<N>.sqlite`, named per link-resolution version, so two versions alternating on one vault no longer rebuild each other's links. The first run after upgrading builds it once.
 - `vmem manifest --json` lists the version, the config format, the MCP tool names and the CLI commands.
 - The embedded `@staix/agent-mem` pin moves from 0.11.0 to 0.17.0, at or above agent-mem's 0.13 floor for agent workflows.
