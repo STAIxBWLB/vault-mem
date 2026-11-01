@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-01
+
 - A vault whose PII policy has members this build does not know (from a newer-format config) fails closed: note writes, `check`, tidy, `promote-from-amem`, `promote`, move and delete and log appends on it are refused with `PII_POLICY` instead of screening with an incomplete policy. Reads and `vaults pii` show still work.
 - Versions coexist on one machine (#82). `vmem mcp` loads every module a tool can run at startup, the agent-mem root included, so a running server keeps its own code and tool list when its install is replaced or a newer release is installed beside it.
 - `vmem setup <target> --root <path>` registers another install root, such as `<install>/releases/<version>/`, resolved to its real path. Without `--root` setup registers the running install as before.
