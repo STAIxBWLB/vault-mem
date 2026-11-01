@@ -354,8 +354,9 @@ test("doctor isolates a second vault's symlinked log and preserves every file", 
   expect(report.healthy).toBe(false);
   expect(report.vaults).toHaveLength(2);
   expect(report.vaults[0]).toMatchObject({ id: "personal", healthy: true, tidy: { pending: { topics: 1 }, notes: 1 } });
-  expect(report.vaults[1]).toMatchObject({ id: "second", checks: { tidy: { ok: false, issue: expect.any(String) } } });
+  expect(typeof report.vaults[1].checks.tidy.issue).toBe("string");
   expect(report.vaults[1].checks.tidy.issue.length).toBeGreaterThan(0);
+  expect(report.vaults[1]).toMatchObject({ id: "second", checks: { tidy: { ok: false } } });
   expect(report.vaults[1]).not.toHaveProperty("tidy");
   expect(migrationTree(f.dir)).toEqual(before);
 });
