@@ -1,7 +1,7 @@
 /**
- * The only module that imports the `@staix/agent-mem` root. It is loaded lazily by promotion, so
- * `vmem mcp`, reads and writes never pay for it. No agent memory is indexed or copied here: the seam
- * lists candidates from amem's own selection and records amem's own vault link.
+ * The only module that imports the `@staix/agent-mem` root. Promotion and mining load it lazily, so reads,
+ * writes and other commands never pay for it; `vmem mcp` loads it at start (`preloadAmem`). No agent memory
+ * is indexed or copied here: the seam lists candidates from amem's own selection and records amem's own vault link.
  */
 import type { MemoryStore, View } from "@staix/agent-mem";
 
@@ -17,6 +17,8 @@ export interface AmemSeam {
 }
 export interface AmemOptions { env?: NodeJS.ProcessEnv; project?: string; cwd?: string; piiPatterns?: string[] }
 const ID = /^[a-f0-9]{32}$/;
+/** Load the agent-mem root now. `vmem mcp` calls it at start; every other caller keeps the lazy load. */
+export async function preloadAmem(): Promise<void> { await import("@staix/agent-mem"); }
 function view(value: View): AmemCandidate {
   return { id: value.id, project: value.project, kind: value.kind, title: value.title, text: value.text, about: value.about.map(node => String(node)), at: value.at };
 }

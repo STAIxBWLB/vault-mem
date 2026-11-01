@@ -139,7 +139,7 @@ test("protocol bounds: frame limit, invalid params, unknown tools, init order an
   expect(validArguments({ a: 1 }, { type: "object", properties: {}, additionalProperties: false })).toBe(false);
 });
 
-test("bin `vmem mcp` speaks only protocol on stdout without a TTY and never loads the agent-mem root", () => {
+test("bin `vmem mcp` speaks only protocol on stdout without a TTY; importing the MCP modules never loads the agent-mem root", () => {
   const f = fixture();
   const frames = [{ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } }, { jsonrpc: "2.0", method: "notifications/initialized" }, call("vmem_search", { query: "lanterns" })];
   const result = Bun.spawnSync([process.execPath, "bin/vmem.js", "mcp"], { env: { ...process.env, VMEM_HOME: f.home, CLAUDECODE: "1" }, stdin: Buffer.from(frames.map(x => JSON.stringify(x)).join("\n") + "\n"), stdout: "pipe", stderr: "pipe" });

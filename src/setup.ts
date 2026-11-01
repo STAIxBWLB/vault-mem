@@ -15,7 +15,8 @@ export interface McpEntry { command: string; args: string[] }
 interface HostFile { target: SetupTarget; file: string; format: "json" | "toml"; key: string }
 export interface SetupAction { target: SetupTarget; file: string; change: "add" | "replace" | "unchanged" | "restore" | "remove" | "refused" | "none"; reason?: string }
 export interface ConsoleAction { file: string; module: string; change: "add" | "replace" | "unchanged" | "remove" | "none" | "refused"; reason?: string }
-export interface SetupReport { mode: SetupMode; applied: boolean; entry: McpEntry; actions: SetupAction[]; console?: ConsoleAction; notes: string[] }
+export interface SetupReport { mode: SetupMode; applied: boolean; entry: McpEntry; root?: InstallRoot; actions: SetupAction[]; console?: ConsoleAction; notes: string[] }
+export interface InstallRoot { path: string; version: string }
 interface Receipt { version: 1; target: SetupTarget; file: string; existed: boolean; keyExisted?: boolean; prior: unknown; priorToml?: string[]; installed: McpEntry }
 
 function hosts(env: NodeJS.ProcessEnv, cwd: string): Record<SetupTarget, HostFile> {
@@ -155,21 +156,39 @@ export function stableRuntime(execPath: string = process.execPath, onPath: strin
   if (!onPath || !isAbsolute(onPath)) return execPath;
   try { return realpathSync(onPath) === realpathSync(execPath) ? onPath : execPath; } catch { return execPath; }
 }
-export function defaultEntry(): McpEntry {
-  return { command: stableRuntime(), args: ["--smol", fileURLToPath(new URL("../bin/vmem.js", import.meta.url)), "mcp"] };
+/** The root of the running install: the directory that holds `bin/`, `src/` and `package.json`. */
+const OWN_ROOT = fileURLToPath(new URL("..", import.meta.url));
+export function defaultEntry(root: string = OWN_ROOT): McpEntry {
+  return { command: stableRuntime(), args: ["--smol", join(root, "bin", "vmem.js"), "mcp"] };
+}
+/**
+ * A vault-mem install root to register, such as `<install>/releases/<version>/`. It is resolved to its real
+ * path, so a `current` link registers the release it names and an upgrade beside it never changes what running
+ * hosts load.
+ */
+export function installRoot(root: string): InstallRoot {
+  if (!isAbsolute(root)) throw new Error("setup: --root must be an absolute path");
+  let path: string, pkg: { name?: unknown; version?: unknown };
+  try { path = realpathSync(root); pkg = JSON.parse(readFileSync(join(path, "package.json"), "utf8")); }
+  catch { throw new Error(`setup: ${root} has no readable package.json`); }
+  if (pkg.name !== "@staix/vault-mem" || typeof pkg.version !== "string") throw new Error(`setup: ${root} is not a vault-mem install root`);
+  try { if (!statSync(join(path, "bin", "vmem.js")).isFile()) throw new Error(); }
+  catch { throw new Error(`setup: ${root} has no bin/vmem.js`); }
+  return { path, version: pkg.version };
 }
 /**
  * Plan, apply or undo vmem MCP registration. Dry-run writes nothing. Apply is idempotent, edits only
  * the `vmem` server entry and records the prior value. Undo restores that prior value only while the
  * entry is still the one setup installed; a later user edit is left alone and reported as refused.
  */
-export function runSetup(target: string, mode: SetupMode, options: { home: string; env?: NodeJS.ProcessEnv; cwd?: string; entry?: McpEntry }): SetupReport {
-  const env = options.env ?? process.env, entry = options.entry ?? defaultEntry();
+export function runSetup(target: string, mode: SetupMode, options: { home: string; env?: NodeJS.ProcessEnv; cwd?: string; entry?: McpEntry; root?: string }): SetupReport {
+  const env = options.env ?? process.env, root = options.root === undefined ? undefined : installRoot(options.root);
+  const entry = options.entry ?? defaultEntry(root?.path);
   if (target !== "all" && !(SETUP_TARGETS as readonly string[]).includes(target)) throw new Error(`setup: unknown target ${target}; use ${SETUP_TARGETS.join("|")}|all`);
   if (!isAbsolute(entry.command) || entry.args.some(arg => arg.includes("\0"))) throw new Error("setup: MCP command must be absolute");
   const table = hosts(env, options.cwd ?? process.cwd());
   const targets = target === "all" ? SETUP_TARGETS.filter(t => t !== "agy") : [target as SetupTarget];
-  const report: SetupReport = { mode, applied: false, entry, actions: [], notes: [
+  const report: SetupReport = { mode, applied: false, entry, ...(root ? { root } : {}), actions: [], notes: [
     "Registers the stdio server `vmem mcp`; restart the host session to load it.",
     "Writes the acon console plugin manifest ($AGENTHUB_HOME/console/plugins/vmem.json); re-run setup after upgrading vmem.",
   ] };
@@ -215,16 +234,16 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
       action.change = "refused"; action.reason = error instanceof Error ? error.message : "setup failed";
     }
   }
-  report.console = consoleManifest(mode, env);
+  report.console = consoleManifest(mode, env, root?.path);
   report.applied = mode !== "dry-run" && [...report.actions, report.console].some(a => !["none", "unchanged", "refused"].includes(a.change));
   return report;
 }
 
 /** The acon plugin manifest: `{api, tool, module, sha256}` in the family home, dir 0700 and file 0600 as acon requires. */
-export function consoleManifest(mode: SetupMode, env: NodeJS.ProcessEnv = process.env): ConsoleAction {
+export function consoleManifest(mode: SetupMode, env: NodeJS.ProcessEnv = process.env, root: string = OWN_ROOT): ConsoleAction {
   const family = env.AGENTHUB_HOME?.trim() ? resolve(env.AGENTHUB_HOME) : join(env.HOME?.trim() || homedir(), ".agenthub");
   const dir = join(family, "console", "plugins"), file = join(dir, "vmem.json");
-  const module = fileURLToPath(new URL("./ui/plugin.ts", import.meta.url));
+  const module = join(root, "src", "ui", "plugin.ts");
   const action: ConsoleAction = { file, module, change: "none" };
   try {
     const next = { api: 1, tool: "vmem", module, sha256: createHash("sha256").update(readFileSync(module)).digest("hex") };

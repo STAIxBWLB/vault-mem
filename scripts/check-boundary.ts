@@ -35,6 +35,6 @@ function inspect(dir: string) {
 }
 inspect(join(root, "src"));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-if (JSON.stringify(pkg.dependencies) !== JSON.stringify({ "@staix/agent-mem": "0.11.0" })) errors.push("runtime dependency must be exactly @staix/agent-mem 0.11.0");
+if (JSON.stringify(pkg.dependencies) !== JSON.stringify({ "@staix/agent-mem": "0.17.0" })) errors.push("runtime dependency must be exactly @staix/agent-mem 0.17.0");
 if (errors.length) { console.error(errors.join("\n")); process.exit(1); }
 console.log("boundary: ok");

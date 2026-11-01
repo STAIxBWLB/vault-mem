@@ -6,7 +6,9 @@ import { runOrgCommand } from "./org-commands.ts";
 import { isWriteCommand, runWriteCommand } from "./write-commands.ts";
 import { isReadCommand, runReadCommand } from "./read-commands.ts";
 import { version } from "../package.json";
-import { completionScript, help } from "./commands-table.ts";
+import { COMMANDS, completionScript, help } from "./commands-table.ts";
+import { VMEM_TOOL_NAMES } from "./mcp-vault.ts";
+import { CONFIG_VERSION } from "./config.ts";
 import { runSetup, type SetupMode } from "./setup.ts";
 import { resolveHome } from "./home.ts";
 import { addVault, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault, setVaultPii } from "./registry.ts";
@@ -28,12 +30,18 @@ function parse(args: string[], allowed: string[], values: string[]) {
 export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
   if (!args.length || (args.length === 1 && ["--help", "-h", "help"].includes(args[0]!))) return { text: help(), code: 0 };
   if (args.length === 1 && args[0] === "--version") return { text: version, code: 0 };
+  if (args[0] === "manifest") {
+    const { flags, positional } = parse(args.slice(1), ["--json"], []);
+    if (positional.length) throw new Error("manifest: unexpected arguments");
+    const manifest = { name: "@staix/vault-mem", version, configVersion: CONFIG_VERSION, mcp: { server: "vmem", tools: [...VMEM_TOOL_NAMES] }, commands: COMMANDS.map(c => c.name) };
+    return { text: JSON.stringify(manifest, null, flags["--json"] ? undefined : 2), code: 0 };
+  }
   if (args[0] === "setup") {
-    const rest = args.slice(1), flags = rest.filter(a => a.startsWith("--")), positional = rest.filter(a => !a.startsWith("--"));
-    if (positional.length !== 1 || flags.some(f => !["--apply", "--undo", "--json"].includes(f)) || new Set(flags).size !== flags.length || (flags.includes("--apply") && flags.includes("--undo"))) throw new Error("setup: requires one target and at most one of --apply/--undo");
-    const mode: SetupMode = flags.includes("--apply") ? "apply" : flags.includes("--undo") ? "undo" : "dry-run";
-    const report = runSetup(positional[0]!, mode, { home: resolveHome(env).home, env });
-    return { text: JSON.stringify(report, null, flags.includes("--json") ? undefined : 2), code: [...report.actions, report.console].some(a => a?.change === "refused") ? 1 : 0 };
+    const { flags, positional } = parse(args.slice(1), ["--apply", "--undo", "--json", "--root"], ["--root"]);
+    if (positional.length !== 1 || (flags["--apply"] && flags["--undo"])) throw new Error("setup: requires one target and at most one of --apply/--undo");
+    const mode: SetupMode = flags["--apply"] ? "apply" : flags["--undo"] ? "undo" : "dry-run";
+    const report = runSetup(positional[0]!, mode, { home: resolveHome(env).home, env, ...(typeof flags["--root"] === "string" ? { root: flags["--root"] } : {}) });
+    return { text: JSON.stringify(report, null, flags["--json"] ? undefined : 2), code: [...report.actions, report.console].some(a => a?.change === "refused") ? 1 : 0 };
   }
   if (args[0] === "completion") {
     if (args.length !== 2) throw new Error("completion: requires bash, zsh or fish");
@@ -107,9 +115,15 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
   }
   return { text: JSON.stringify(result, null, flags["--json"] ? undefined : 2), code };
 }
-/** `vmem mcp`: the vault set is fixed now; stdout carries protocol frames only. */
+/**
+ * `vmem mcp`: the vault set is fixed now; stdout carries protocol frames only. Every module a tool handler
+ * loads lazily, the agent-mem root included, is loaded here at start, so an install replaced under a running
+ * server never mixes two versions in one process.
+ */
 export async function runMcp(env: NodeJS.ProcessEnv = process.env): Promise<void> {
-  const [{ serveMcp }, { createVaultMcp }] = await Promise.all([import("./mcp.ts"), import("./mcp-vault.ts")]);
+  const [{ serveMcp }, { createVaultMcp }, , , , seam] = await Promise.all([import("./mcp.ts"), import("./mcp-vault.ts"),
+    import("./promote.ts"), import("./org-promote.ts"), import("./skills-mine.ts"), import("./amem/seam.ts")]);
+  await seam.preloadAmem();
   const server = createVaultMcp(resolveHome(env).home, env);
   await serveMcp({ tools: server.tools, handlers: server.handlers, name: "vmem", version });
 }

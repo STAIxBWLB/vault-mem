@@ -32,7 +32,8 @@ export const COMMANDS = [
   { name: "promote", usage: "promote <personal-vault> <note> --to ORG [--topics a,b] [--again] [--log-project ID] [--confirm --fingerprint SHA] [--json]", mutates: "confirm" },
   { name: "sync", usage: "sync <vault> [--message TEXT] [--confirm --fingerprint SHA] [--json]", mutates: "confirm" },
   { name: "mcp", usage: "mcp", mutates: false },
-  { name: "setup", usage: "setup <claude|codex|kimi|pi|qwen|jcode|agy|all> [--apply|--undo] [--json]", mutates: "apply" },
+  { name: "setup", usage: "setup <claude|codex|kimi|pi|qwen|jcode|agy|all> [--root PATH] [--apply|--undo] [--json]", mutates: "apply" },
+  { name: "manifest", usage: "manifest [--json]", mutates: false },
   { name: "completion", usage: "completion <bash|zsh|fish>", mutates: false },
 ] as const;
 const RELATIONS = ["supports", "contradicts", "extends", "applies-to", "context-for"] as const;

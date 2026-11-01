@@ -12,7 +12,7 @@
     "bun": ">=1.4.2"
   },
   "dependencies": {
-    "@staix/agent-mem": "0.11.0"
+    "@staix/agent-mem": "0.17.0"
   },
   "devDependencies": {
     "@staix/agent-console": "github:STAIxBWLB/agent-console#bd7234f",

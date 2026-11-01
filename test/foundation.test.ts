@@ -253,14 +253,14 @@ describe("follow-ups", () => {
     expect(resolveHome({ AGENTHUB_HOME: `${hub}/./x/..` }).home).toBe(join(hub, "vmem"));
   });
   test("boundary check rejects forbidden imports in negative fixtures", () => {
-    const pin = JSON.stringify({ dependencies: { "@staix/agent-mem": "0.11.0" } });
+    const pin = JSON.stringify({ dependencies: { "@staix/agent-mem": "0.17.0" } });
     const cases: [string, Record<string, string>, string, string?][] = [
       ["third-party", { "src/a.ts": "import x from \"left-pad\";" }, "forbidden dependency left-pad"],
       ["platform outside seam", { "src/a.ts": "import \"@staix/agent-mem/platform\";" }, "forbidden dependency @staix/agent-mem/platform"],
       ["root outside seam", { "src/platform.ts": "export * from \"@staix/agent-mem\";" }, "forbidden dependency @staix/agent-mem"],
       ["dynamic nonliteral", { "src/a.ts": "const m = \"x\"; await import(m);" }, "nonliteral import"],
       ["require", { "src/a.ts": "require(\"fs-extra\");" }, "forbidden dependency fs-extra"],
-      ["dependency drift", { "src/a.ts": "" }, "exactly @staix/agent-mem 0.11.0", JSON.stringify({ dependencies: { "@staix/agent-mem": "^0.11.0" } })],
+      ["dependency drift", { "src/a.ts": "" }, "exactly @staix/agent-mem 0.17.0", JSON.stringify({ dependencies: { "@staix/agent-mem": "^0.17.0" } })],
       ["allowed", { "src/platform.ts": "export * from \"@staix/agent-mem/platform\";", "src/amem/seam.ts": "export * from \"@staix/agent-mem\"; import \"node:fs\"; import \"./x.ts\";" }, "boundary: ok"],
     ];
     for (const [, files, expected, pkg] of cases) {
