@@ -364,3 +364,25 @@ test("a log rewrite that lands before its lock removal fails is reported as writ
   expect(result.issues.some((i: { code: string }) => i.code === "LOG")).toBe(true);
   expect(readFileSync(join(f.vault, "log"), "utf8")).not.toContain(TOKEN);
 });
+
+test("tidy migrates missing Topics and writes retained misplaced Topics with a warning", () => {
+  const f = fixture();
+  const missing = fm(base(["confidence: confirmed"])) + "# Missing topics\n\nText.\n";
+  const misplaced = fm(base(["confidence: confirmed"])) + "# Misplaced topics\n\n## Topics\n- [[research]]\n\n## Detail\nText.\n";
+  writeFileSync(join(f.notes, "migration-missing.md"), missing);
+  writeFileSync(join(f.notes, "migration-misplaced.md"), misplaced);
+  const preview = f.tidy(ALL);
+  for (const path of ["notes/migration-missing.md", "notes/migration-misplaced.md"]) {
+    expect(preview.notes.some(note => note.path === path)).toBe(true);
+    expect(preview.skipped).not.toContain(path);
+  }
+  const warned = applyWrite(f.home, { vault: "mine", operation: { op: "sanitize", path: "notes/migration-misplaced.md", text: misplaced.replace("confirmed", "proven") }, dryRun: true, log: false });
+  expect(warned.ok).toBe(true);
+  expect(warned.issues).toContainEqual(expect.objectContaining({ code: "V05", severity: "warning" }));
+  const done = f.tidy(ALL, { confirm: true, fingerprint: preview.fingerprint });
+  expect(done.ok).toBe(true);
+  expect(done.written).toContain("notes/migration-missing.md");
+  expect(done.written).toContain("notes/migration-misplaced.md");
+  expect(f.read("migration-missing")).toContain("## Topics");
+  expect(f.read("migration-misplaced")).toContain("confidence: proven");
+});

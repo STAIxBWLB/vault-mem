@@ -45,7 +45,7 @@ describe("writer validation schema and topics", () => {
     expect(errors([create(note({ topics: ["[[research alias]]"] }))], context(aliases)).some(value => value.code === "V02")).toBe(true);
   });
   test("the final snapshot resolves new MOCs and refuses removing an existing topic target", () => {
-    expect(errors([create(note({ topics: ["[[new-moc]]"] })), create(moc.replace("# Research", "# New synthetic MOC"), "notes/new-moc.md")])).toEqual([]);
+    expect(errors([create(note({ topics: ["[[new-moc]]"] }).replace("- [[research]]", "- [[new-moc]]")), create(moc.replace("# Research", "# New synthetic MOC"), "notes/new-moc.md")])).toEqual([]);
     const existing = note();
     const ctx = context(new Map([["notes/research.md", moc], ["notes/claim.md", existing]]), { op: "delete", path: "notes/research.md" });
     expect(errors([{ path: "notes/research.md", before: moc, after: null }], ctx).some(value => value.code === "V02")).toBe(true);
@@ -55,7 +55,7 @@ describe("writer validation schema and topics", () => {
     expect(validateWrite([create(after)], context()).filter(value => value.code === "V05")).toEqual([]);
     for (const body of ["# Claim\n", "# Claim\n## Topics\n- [[research]]\n## Extra\n", "# Claim\n## Topics\n- [[research]]\nextra text", "# Claim\n## Topics\n- [[research]]\n- [[research]]\n"]) {
       const found = validateWrite([create(note({}, body))], context()).filter(value => value.code === "V05");
-      expect(found).toHaveLength(1); expect(found[0]!.severity).toBe("warning");
+      expect(found).toHaveLength(1); expect(found[0]!.severity).toBe("error");
     }
   });
 });

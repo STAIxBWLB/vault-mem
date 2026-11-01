@@ -181,8 +181,8 @@ function topicIssues(note: ParsedNote, index: Map<string, Set<ParsedNote>>, seve
   }
   return [];
 }
-function topicPlacement(note: ParsedNote): WriteIssue[] {
-  if (note.data.type === "moc" && note.data.topics === undefined) return [];
+function validTopicPlacement(note: ParsedNote): boolean {
+  if (note.data.type === "moc" && note.data.topics === undefined) return true;
   const lines = proseLines(note.body), h2s = lines.flatMap((line, index) => /^ {0,3}##[ \t]+/.test(line) ? [index] : []);
   const topics = h2s.filter(index => /^ {0,3}##[ \t]+Topics(?:[ \t]+#+)?[ \t]*$/i.test(lines[index]!));
   let valid = topics.length === 1 && h2s[h2s.length - 1] === topics[0];
@@ -196,7 +196,11 @@ function topicPlacement(note: ParsedNote): WriteIssue[] {
   const expected = Array.isArray(note.data.topics) ? note.data.topics.map(value => typeof value === "string" ? noteKey(value.slice(2, -2)) : "") : [];
   const sortedExpected = [...expected].sort();
   if (actual.length !== expected.length || [...actual].sort().some((value, index) => value !== sortedExpected[index])) valid = false;
-  return valid ? [] : [issue("V05", "Topics must be the final H2 and list exactly the frontmatter topics", "warning", note.path)];
+  return valid;
+}
+function topicPlacement(note: ParsedNote, old: ParsedNote | undefined, context: ValidationContext): WriteIssue[] {
+  const retained = context.operation.op !== "create" && old !== undefined && !validTopicPlacement(old);
+  return validTopicPlacement(note) ? [] : [issue("V05", "Topics must be the final H2 and list exactly the frontmatter topics", retained ? "warning" : "error", note.path)];
 }
 
 /** Validate a complete mutation plan against the final overlaid snapshot, without filesystem writes. */
@@ -226,7 +230,7 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
     const note = newNotes.get(change.path);
     if (!note) { issues.push(issue("V01", "invalid frontmatter", "error", change.path)); continue; }
     const prior=context.operation.op==="move"&&noteKey(context.operation.to)===noteKey(note.path)?oldNotes.get(movedFrom(context.operation.from, context)):oldNotes.get(note.path);
-    issues.push(...schemaIssues(note,prior,context), ...topicPlacement(note));
+    issues.push(...schemaIssues(note,prior,context), ...topicPlacement(note,prior,context));
     const source = note.data.source;
     let sourceDenied=strings(source).some(entry=>isDenied(entry.replaceAll("\\","/"),context.config.denyPaths));
     if(source!==undefined&&!sourceDenied)try{

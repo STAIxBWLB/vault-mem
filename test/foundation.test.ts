@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, readdirSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILE, MAX_CONFIG_BYTES, parseConfig, readConfig } from "../src/config.ts";
@@ -272,4 +272,68 @@ describe("follow-ups", () => {
       expect(result.stdout.toString() + result.stderr.toString()).toContain(expected);
     }
   });
+});
+
+// Synthetic migration fixtures; doctor must preserve both the vault and vmem home.
+function migrationTree(dir: string): unknown {
+  return readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).map(entry =>
+    [entry.name, entry.isDirectory() ? migrationTree(join(dir, entry.name)) : readFileSync(join(dir, entry.name)).toString("base64")]);
+}
+const migrationMoc = "---\ntype: moc\ndescription: A synthetic research directory.\n---\n# Research\n";
+const migrationNote = '---\ndescription: Evidence supporting a synthetic claim.\ntype: insight\ndomain: research\ntopics: ["[[research]]"]\n---\n# Claim\n\n## Topics\n- [[research]]\n';
+test("writer refuses introduced V05 and preserves retained V05 warnings", () => {
+  const f = fixture();
+  writeFileSync(join(f.vault, "notes/research.md"), migrationMoc);
+  const file = join(f.vault, "notes/keep.md");
+  addVault(f.home, f.spec);
+  const env = { VMEM_HOME: f.home };
+  const patch = () => run(["patch", "personal", "keep", "--old", "- [[research]]", "--new", "- [[research]]\n## X\n", "--json"], env);
+  writeFileSync(file, migrationNote);
+  const before = migrationTree(f.dir), refused = patch();
+  expect(refused.code).toBe(1);
+  expect(JSON.parse(refused.text)).toMatchObject({ applied: false, issues: expect.arrayContaining([expect.objectContaining({ code: "V05", severity: "error" })]) });
+  expect(migrationTree(f.dir)).toEqual(before);
+  const frontmatter = run(["frontmatter", "personal", "keep", "--set", JSON.stringify({ topics: ["[[research]]", "[[research]]"] }), "--json"], env);
+  expect(frontmatter.code).toBe(1);
+  expect(JSON.parse(frontmatter.text).issues).toContainEqual(expect.objectContaining({ code: "V05", severity: "error" }));
+  expect(migrationTree(f.dir)).toEqual(before);
+  writeFileSync(file, migrationNote + "\n## Existing\n");
+  const retained = patch();
+  expect(retained.code).toBe(0);
+  expect(JSON.parse(retained.text)).toMatchObject({ applied: true, issues: expect.arrayContaining([expect.objectContaining({ code: "V05", severity: "warning" })]) });
+  expect(readFileSync(file, "utf8")).toContain("## X");
+});
+
+test("doctor reports pending tidy counts and unparsable paths without writing", () => {
+  const f = fixture();
+  writeFileSync(join(f.vault, "notes/research.md"), migrationMoc);
+  writeFileSync(join(f.vault, "notes/keep.md"), migrationNote.replace('type: insight', 'type: insight\nconfidence: confirmed').replace("## Topics\n- [[research]]\n", "## Connections (legacy)\n"));
+  writeFileSync(join(f.vault, "notes/broken.md"), "---\ntopics: [\n---\n# Broken\n");
+  addVault(f.home, f.spec);
+  const before = migrationTree(f.dir);
+  const result = run(["doctor", "--json"], { VMEM_HOME: f.home });
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.text).vaults[0].tidy).toMatchObject({ pending: { connections: 1, enums: 1, topics: 1 }, notes: 1, skipped: [], unparsable: ["notes/broken.md"], hint: expect.stringContaining("vmem tidy personal --all") });
+  expect(migrationTree(f.dir)).toEqual(before);
+  writeFileSync(join(f.vault, "notes/keep.md"), migrationNote);
+  rmSync(join(f.vault, "notes/broken.md"));
+  const cleanBefore = migrationTree(f.dir);
+  expect(JSON.parse(run(["doctor", "--json"], { VMEM_HOME: f.home }).text).vaults[0]).not.toHaveProperty("tidy");
+  expect(migrationTree(f.dir)).toEqual(cleanBefore);
+});
+
+test("doctor omits tidy for read-only vaults and unenforceable PII policies", () => {
+  for (const write of ["none", "mcp"] as const) {
+    const f = fixture();
+    addVault(f.home, { ...f.spec, write });
+    if (write === "mcp") {
+      const file = join(f.home, CONFIG_FILE), config = JSON.parse(readFileSync(file, "utf8"));
+      config.version = 2; config.vaults[0].pii = { default: "deny", future: true };
+      writeFileSync(file, JSON.stringify(config));
+    }
+    const before = migrationTree(f.dir), result = run(["doctor", "--json"], { VMEM_HOME: f.home });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.text).vaults[0]).not.toHaveProperty("tidy");
+    expect(migrationTree(f.dir)).toEqual(before);
+  }
 });

@@ -306,7 +306,7 @@ Runtime changes intentionally make `release:verify` report stale historical rele
 
 # Migration tidy
 
-`vmem tidy <vault> [--connections --escapes --enums --keys --sources --topics --secrets --log | --all] [--map <file>] [--json] [--confirm --fingerprint SHA]` sanitizes debt from older, unvalidated writers. It is meant for the one-time V2 cutover and later imports.
+`vmem tidy <vault> [--connections --escapes --enums --keys --sources --topics --secrets --log | --all] [--map <file>] [--json] [--confirm --fingerprint SHA]` sanitizes debt from older, unvalidated writers. Existing vaults must run `vmem tidy <vault> --all` once after upgrading to the validating writer, previewing first and then confirming the returned fingerprint. `vmem doctor` reports pending migration counts, skipped notes and unparsable paths for writable vaults; it writes nothing. Tidy also handles later imports.
 
 - **Two steps.** Without `--confirm` it prints per-rule `counts`, a per-note change list (`key: old -> new`, dropped keys with their values, sections added) and `reported` items that were left unchanged; nothing is written. With `--confirm` the fingerprint must match: it covers the rules, the map file, and the before/after sha of every touched file (and of the log). Each note is then written through `applyWrite` (atomic per note, under the vault lock) and one `LINT` event is appended, for example `tidy: escapes 1, enums 13, keys 78, ...`.
 - **Never blocked by one note.** A sanitized note that the writer would still refuse (for example an unknown key) is left unchanged, listed under `skipped` and `reported`, and the rest of the run proceeds. Counts and the `LINT` event cover only notes that are written.

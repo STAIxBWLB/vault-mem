@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- V05 refuses newly introduced Topics placement or content problems while retaining existing problems as warnings. Existing vaults must run `vmem tidy <vault> --all` once after upgrading to the validating writer, previewing and then confirming its fingerprint; `doctor` reports pending migration counts and unparsable paths without writing (#92).
+
 - Releases publish a GitHub release next to the npm package, with the validated tarball and manifest attached and the CHANGELOG section as notes (#89).
 
 ## [0.3.1] - 2026-11-01
@@ -67,7 +69,7 @@
 
 - Add vault registration, bounded configuration, home resolution, diagnostics and explicit unregister confirmation.
 - Add lossless frontmatter, local wiki-link resolution and incremental SQLite FTS indexing.
-- Add validated atomic note mutations, preview fingerprints and append-only attributed vault events.
+- Add validated atomic note mutations, preview fingerprints and append-only attributed vault events. Existing vaults must run `vmem tidy <vault> --all` once after upgrading, previewing first and then confirming its fingerprint.
 - Add bounded CLI/MCP providers, reversible host setup and agent-mem promotion with provenance.
 - Add indexed lint, deterministic graph reports, bounded neighborhoods and synthetic reference-parity checks.
 - Reuse unchanged parsed notes and link analysis during write validation, refresh derived links only for affected sources, and recheck the staging snapshot by direct content comparison instead of rehashing.
