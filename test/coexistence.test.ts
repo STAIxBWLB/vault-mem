@@ -94,10 +94,10 @@ test("AC2: a config written by a newer version is read without error, and its un
     vaults: raw.vaults.map((v: any, i: number) => i ? v : { ...v, futureVault: "x", pii: { email: { notes: "deny", futureSurface: "allow" }, futurePii: true, patterns: [{ name: "badge", regex: "B-\\d+", futurePattern: 1 }] } }) };
   writeFileSync(file, JSON.stringify(future));
   expect(loadRegistry(f.home).vaults.map(v => v.id)).toEqual(["mine", "team"]);
-  // Log validation takes the same tolerance: the extended policy still screens, and the append lands.
+  // This build cannot enforce the extended policy, so a log append on that vault fails closed (test/fail-closed.test.ts covers every write).
   const logged = appendLog(f.home, { vault: "mine", event: { type: "LEARN", project: "-", source: "notes/alpha.md", note: "extended policy" }, channel: "cli" });
-  expect(logged).toMatchObject({ ok: true, appended: true });
-  expect(readLog(f.home, { vault: "mine" }).lines).toHaveLength(1);
+  expect(logged).toMatchObject({ ok: false, appended: false, issues: [{ code: "PII_POLICY" }] });
+  expect(readLog(f.home, { vault: "mine" }).lines).toHaveLength(0);
   // Replacing the policy would drop the members a newer vmem wrote, so it is refused and nothing changes.
   const before = readFileSync(file, "utf8");
   for (const confirm of [false, true]) expect(() => setVaultPii(f.home, "mine", { email: "warn" }, confirm)).toThrow("futurePii, email.futureSurface, patterns.badge.futurePattern");

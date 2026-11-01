@@ -105,6 +105,14 @@ export function piiExtensions(pii: VaultSpec["pii"]): string[] {
   return [...extra(record, PII_KEYS, ""), ...(["email", "phone", "custom"] as const).flatMap(key => extra(record[key], PII_SURFACES, `${key}.`)),
     ...(pii.patterns ?? []).flatMap(p => [...extra(p, PATTERN_KEYS, `patterns.${p.name}.`), ...extra(p.action, PII_SURFACES, `patterns.${p.name}.action.`)])];
 }
+/**
+ * Fail closed: a vault whose PII policy has members this build does not know (kept from a newer-format config)
+ * cannot be screened as that policy asks, so every write and log append on it is refused with this reason.
+ */
+export function unenforceablePii(vault: VaultSpec): string | undefined {
+  const members = piiExtensions(vault.pii);
+  return members.length ? `vault ${vault.id}: PII policy has members this vmem cannot enforce (${members.slice(0, 8).join(", ")}); write with the newer vmem that wrote the policy` : undefined;
+}
 export function parseVault(value: unknown, tolerant = false): VaultSpec {
   const keys = ["id", "path", "kind", "write", "pii", "remote", "registry"], v = object(value, keys, "vault", tolerant);
   const id = string(v.id, "vault.id");
