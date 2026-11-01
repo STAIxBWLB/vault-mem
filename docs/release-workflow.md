@@ -11,6 +11,7 @@ Tag pushes publish through this workflow. The `npm-production` environment (requ
 - Linux uploads its validated tarball and manifest only after its check passes. The publish job waits for both validation jobs and consumes that same Linux artifact without rebuilding it.
 - Tag validation additionally runs `bun run release:verify` for runtime/method and external-parity evidence freshness and the declared synthetic thresholds. Ordinary PR tests check evidence shape and sample consistency, so routine code edits do not require rerunning the benchmark.
 - Before publication, the job checks artifact hash, embedded package identity and tag/commit binding. Stable versions use the `latest` npm dist-tag; prerelease versions use `next`.
+- After npm publication succeeds, the `github-release` job (the only job with `contents: write`) checks the same artifact's tag and commit, then creates the GitHub release for the tag with the tarball and manifest attached as `staix-vault-mem-<version>.tgz` and `.manifest.json`. Notes are the version's CHANGELOG section, the install line, the tarball SHA-256 and a compare link from the previous CHANGELOG version. Prereleases are marked prerelease; a rerun replaces the assets and notes of an existing release.
 
 ## Deployment prerequisites
 
