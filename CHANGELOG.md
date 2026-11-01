@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-01
+
 - `sync` and `doctor` refuse a git URL rewrite (`insteadOf`/`pushInsteadOf`) only when its prefix matches the configured remote or one of origin's configured or effective URLs, explicit `pushurl` included, and name that rule (#86). An unrelated rule, such as a global `https://github.com/` to SSH rewrite with an SSH vault remote, no longer blocks sync.
 
 ## [0.3.0] - 2026-11-01
