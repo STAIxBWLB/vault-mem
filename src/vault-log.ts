@@ -8,6 +8,7 @@ import { formatLogEvent, LOG_TYPES } from "./log-format.ts";
 import type { LogBinding, LogContext, LogReadOptions, LogReadResult, LogReceipt, LogRequest } from "./log-types.ts";
 import type { WriteIssue } from "./write-types.ts";
 import type { VaultSpec, VmemConfig } from "./config.ts";
+import { unenforceablePii } from "./config.ts";
 export const LOG_LOCK = "log.lock";
 export const MAX_LOG_READ_BYTES = 32 * 1024 * 1024;
 export const LARGE_LOG_LINES = 20000;
@@ -60,6 +61,8 @@ function context(home: string, id: string, channel: "cli" | "mcp" | undefined, w
   if (!vault) refuse("L09", "unknown vault id");
   if (channel !== undefined && channel !== "cli" && channel !== "mcp") refuse("POLICY", "unknown log channel");
   if (write && (vault.write === "none" || (channel === "mcp" && vault.write !== "mcp"))) refuse("POLICY", "vault write policy refuses log append");
+  const unenforceable = write ? unenforceablePii(vault) : undefined;
+  if (unenforceable) refuse("PII_POLICY", unenforceable);
   if (realpathSync(vault.path) !== vault.path || !lstatSync(vault.path).isDirectory()) refuse("L09", "registered vault path changed");
   if (isDenied(join(vault.path, "log"), config.denyPaths)) refuse("V06", "log path is denied");
   return { vault, config, channel, ...(write && vault.registry ? { projectIds: registryIds(vault.registry, config.denyPaths) } : {}) };

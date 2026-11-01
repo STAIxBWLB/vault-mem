@@ -12,6 +12,7 @@ import { canonicalPath, isDenied } from "./platform.ts";
 import { moveSourcePath, notePath, planOperation, refuse, WriteRefusal } from "./write-operations.ts";
 import { MAX_REPORT_BYTES, validateWrite } from "./write-validation.ts";
 import type { PiiSurface } from "./config.ts";
+import { unenforceablePii } from "./config.ts";
 import type { LogBinding } from "./log-types.ts";
 import type { ChangeReceipt, PlannedChange, WriteIssue, WriteReceipt, WriteRequest } from "./write-types.ts";
 export const MUTATION_LOCK = "mutation.lock";
@@ -129,6 +130,8 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     const config = loadRegistry(home), vault = config.vaults.find(value => value.id === request.vault);
     if (options.binding && !matchesBinding(config, request.vault, options.binding)) refuse("VAULT_DRIFT", "vault identity or policy changed since the run started; nothing written");
     if (!vault) refuse("V04", "unknown vault id");
+    const unenforceable = unenforceablePii(vault);
+    if (unenforceable) refuse("PII_POLICY", unenforceable);
     if (request.operation.op !== "check" && (vault.write === "none" || (request.channel === "mcp" && vault.write !== "mcp"))) refuse("POLICY", "vault write policy refuses this channel");
     root = realpathSync(vault.path);
     if (root !== vault.path || isDenied(root, config.denyPaths)) refuse("V06", "vault path denied or changed");

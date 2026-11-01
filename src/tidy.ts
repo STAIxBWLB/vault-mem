@@ -4,6 +4,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { VaultSpec, VmemConfig } from "./config.ts";
+import { unenforceablePii } from "./config.ts";
 import { emitFrontmatter, parseFrontmatter } from "./frontmatter.ts";
 import { extractLinks, normalizeTarget } from "./links.ts";
 import { isDenied } from "./platform.ts";
@@ -335,6 +336,8 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
   const config = loadRegistry(home), vault = config.vaults.find(v => v.id === request.vault);
   if (!vault) return { ...result, issues: [issue("V04", "unknown vault id")] };
   if (vault.write === "none" || (request.channel === "mcp" && vault.write !== "mcp")) return { ...result, issues: [issue("POLICY", "vault write policy refuses this channel")] };
+  const unenforceable = unenforceablePii(vault);
+  if (unenforceable) return { ...result, issues: [issue("PII_POLICY", unenforceable)] };
   const root = realpathSync(vault.path);
   if (root !== vault.path || isDenied(root, config.denyPaths)) return { ...result, issues: [issue("V06", "vault path denied or changed")] };
   // The LINT event must land in the vault this run read and wrote, even if the registry is changed meanwhile.
