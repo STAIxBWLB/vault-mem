@@ -242,6 +242,16 @@ test("sync refuses when any push URL or URL rewrite points away from the configu
   git(f.org, "config", `url.${elsewhere}.pushInsteadOf`, f.remote);
   expect(syncVault(f.home, { vault: "team" }, { env: f.env })).toMatchObject({ ok: false, issues: [{ code: "REMOTE" }] });
   git(f.org, "config", "--unset", `url.${elsewhere}.pushInsteadOf`);
+  // pushInsteadOf matching only an explicit pushurl: git does not report that rewrite, so it is refused too.
+  git(f.org, "config", "remote.origin.pushurl", `file://${f.remote}`);
+  git(f.org, "config", `url.${elsewhere}.pushInsteadOf`, "file://");
+  expect(syncVault(f.home, { vault: "team" }, { env: f.env })).toMatchObject({ ok: false, issues: [{ code: "REMOTE", message: expect.stringContaining("pushinsteadof file://") }] });
+  git(f.org, "config", "--unset", `url.${elsewhere}.pushInsteadOf`);
+  git(f.org, "config", "--unset", "remote.origin.pushurl");
+  // A rewrite that matches none of the vault's URLs (a global https-to-ssh rule) does not block sync.
+  git(f.org, "config", "url.git@example.invalid:.insteadOf", "https://example.invalid/");
+  expect(syncVault(f.home, { vault: "team" }, { env: f.env })).toMatchObject({ ok: true, remote: { matches: true } });
+  git(f.org, "config", "--unset", "url.git@example.invalid:.insteadOf");
   // A pushurl added after the preview is caught by the fingerprint, and nothing is pushed anywhere.
   const plan = syncVault(f.home, { vault: "team" }, { env: f.env });
   expect(plan).toMatchObject({ ok: true, remote: { matches: true } });
@@ -337,6 +347,7 @@ test("doctor validates a matching remote locally, leaves status unchanged and om
   const f = fixture();
   // An unreachable origin still passes: doctor must never fetch or test reachability.
   rmSync(f.remote, { recursive: true });
+  git(f.org, "config", "url.git@example.invalid:.insteadOf", "https://example.invalid/"); // unrelated rewrite
   const before = { status: run(["status", "--json"], f.env), config: readFileSync(join(f.home, "vmem.config.json"), "utf8"), head: git(f.org, "rev-parse", "HEAD"), files: snapshot(f.org) };
   const result = run(["doctor", "--json"], f.env), report = JSON.parse(result.text);
   expect(result.code).toBe(0);
