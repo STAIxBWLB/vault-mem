@@ -68,7 +68,7 @@ test("spec registration refuses missing, plain, nested and bare paths with a usa
   mkdirSync(plain); mkdirSync(nested);
   const before = tree(repo);
   for (const path of [join(f.root, "missing"), plain, nested, f.repo("bare", true)]) {
-    expect(() => addSpec(f.home, { id: "source", path })).toThrow(/vmem specs|git rev-parse/);
+    expect(() => addSpec(f.home, { id: "source", path })).toThrow(/vmem specs|rev-parse/);
   }
   expect(existsSync(f.home)).toBe(false);
   expect(tree(repo)).toEqual(before);
@@ -175,4 +175,47 @@ test("spec CLI uses the command table, rejects unknown flags and stays read-only
   for (const shell of ["bash", "zsh", "fish"]) expect(completionScript(shell)).toContain("specs");
   const syntax = Bun.spawnSync(["bash", "-n"], { stdin: new TextEncoder().encode(completionScript("bash")), stdout: "pipe", stderr: "pipe" });
   expect(syntax.exitCode).toBe(0);
+});
+
+test("spec roots containing a backslash register and remain healthy", () => {
+  const f = fixture(), repo = f.repo("repo\\with-backslash");
+  expect(addSpec(f.home, { id: "backslash", path: repo }).path).toBe(repo);
+  expect(specStatus(f.home)[0]).toMatchObject({ id: "backslash", healthy: true });
+  const result = run(["doctor", "--json"], f.env);
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.text).specs[0].healthy).toBe(true);
+});
+
+test("spec root failures distinguish missing git, non-root paths and git refusals", () => {
+  const f = fixture(), repo = f.repo("repo"), nested = join(repo, "nested"), plain = join(f.root, "plain");
+  mkdirSync(nested); mkdirSync(plain);
+  const noGit = { ...f.env, PATH: join(f.root, "no-git") };
+  expect(() => addSpec(f.home, { id: "missing-git", path: repo }, noGit)).toThrow("git could not run (ENOENT); install git or fix PATH");
+  expect(() => addSpec(f.home, { id: "nested", path: nested })).toThrow(`not its root; register the reported root ${repo}`);
+  expect(() => addSpec(f.home, { id: "plain", path: plain })).toThrow("git refused the root check");
+  addSpec(f.home, { id: "source", path: repo });
+  const missing = run(["doctor", "--json"], noGit);
+  expect(missing.code).toBe(1);
+  expect(JSON.parse(missing.text).specs[0].issue).toContain("install git or fix PATH");
+  const file = join(f.home, CONFIG_FILE), config = JSON.parse(f.config());
+  config.specs[0].path = nested; writeFileSync(file, JSON.stringify(config));
+  expect(specStatus(f.home)[0]).toMatchObject({ issue: expect.stringContaining(`reported root ${repo}`) });
+  config.specs[0].path = plain; writeFileSync(file, JSON.stringify(config));
+  expect(specStatus(f.home)[0]).toMatchObject({ issue: expect.stringContaining("not a git repository") });
+});
+
+test("spec root timeout and output-limit diagnostics retain the applicable next step", () => {
+  const f = fixture(), repo = f.repo("repo");
+  for (const code of ["ETIMEDOUT", "ENOBUFS"]) {
+    const child = Bun.spawnSync([process.execPath, "-e", `
+      import { mock } from "bun:test";
+      const child = await import("node:child_process");
+      mock.module("node:child_process", () => ({ ...child, spawnSync: () => ({ status: null, stdout: "", stderr: "", error: Object.assign(new Error("synthetic failure"), { code: ${JSON.stringify(code)} }) }) }));
+      const { addSpec } = await import("./src/registry.ts");
+      try { addSpec(${JSON.stringify(f.home)}, { id: "source", path: ${JSON.stringify(repo)} }); process.exit(2); }
+      catch (error) { process.stdout.write(error.message); }
+    `], { stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    expect(child.stdout.toString()).toContain(code === "ETIMEDOUT" ? "timed out after 5000 ms; retry" : "output exceeded 64 KiB; inspect git");
+  }
 });

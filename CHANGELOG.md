@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Register local git roots separately with `specs add|list|remove`; removal previews and unregisters only. Spec sources default to `write: none` and `pii: deny`, share IDs and the atomic registry lock with vaults, and get root diagnostics in `doctor`. Config writes use format 2 only when `specs` is present; vault-only settings and output stay compatible. Spec graph/read/validation tools and spec content writes are not part of this increment (#91 T1).
+- Register local git roots separately with `specs add|list|remove`; removal previews and unregisters only. Spec root diagnostics distinguish a missing git executable, timeout, git refusal and non-root path, and support repository names containing backslashes. Spec sources default to `write: none` and `pii: deny`, share IDs and the atomic registry lock with vaults, and get root diagnostics in `doctor`. Config writes use format 2 only when `specs` is present; vault-only settings and output stay compatible. Spec graph/read/validation tools and spec content writes are not part of this increment (#91 T1).
 
 - MCP argument errors name the first failing path and reason without echoing values; unknown tools have a separate diagnostic. `vmem_create` accepts top-level `created` and checks a real YYYY-MM-DD calendar date. Writer/log CLI errors name rejected options, writer arity errors show the expected form, and per-command `--help`/`-h` prints usage (#94).
 

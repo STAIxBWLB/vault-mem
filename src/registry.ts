@@ -1,6 +1,6 @@
 import { closeSync, constants, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { memoryGitArgv, memoryGitEnv } from "./platform.ts";
+import { realPath, memoryGitArgv, memoryGitEnv } from "./platform.ts";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -207,18 +207,29 @@ export function registryStatus(home: string) {
 function requireSpecRoot(path: string, env: NodeJS.ProcessEnv): void {
   const argv = memoryGitArgv(["-C", path, "rev-parse", "--show-toplevel"]);
   const result = spawnSync(argv[0]!, argv.slice(1), { env: memoryGitEnv({ ...env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }, { repositoryIsolation: true }), encoding: "utf8", timeout: 5000, maxBuffer: 65536, stdio: ["ignore", "pipe", "pipe"] });
-  if (result.status !== 0 || result.stdout.replace(/\r?\n$/, "") !== path) throw new Error("spec source path is not a readable git work-tree root; use the canonical root reported by git rev-parse --show-toplevel, or unregister it with vmem specs remove <id>");
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    if (code === "ETIMEDOUT") throw new Error("spec source: git root check timed out after 5000 ms; retry and check for a locked repository or slow mount");
+    if (code === "ENOBUFS") throw new Error("spec source: git root check output exceeded 64 KiB; inspect git -C <path> rev-parse --show-toplevel and repair unexpected output before retrying");
+    throw new Error(`spec source: git could not run (${code ?? "spawn failure"}); install git or fix PATH, then retry the root check`);
+  }
+  if (result.status !== 0) {
+    const firstLine = result.stderr.split(/\r?\n/, 1)[0]?.split(path).join("<path>").slice(0, 240) || "no diagnostic";
+    throw new Error(`spec source: git refused the root check (exit ${result.status ?? "signal"}): ${firstLine}; inspect git -C <path> rev-parse --show-toplevel and repair the repository or ownership configuration`);
+  }
+  const root = result.stdout.replace(/\r?\n$/, "");
+  if (root !== path) throw new Error(`spec source: selected path is inside a work tree but not its root; register the reported root ${root} with vmem specs add <id> <absolute-path>`);
 }
 export function addSpec(home: string, value: unknown, env: NodeJS.ProcessEnv = process.env): SpecSourceSpec {
   const spec = parseSpec(value);
-  try { spec.path = realpathSync(spec.path); }
+  try { spec.path = realPath(spec.path); }
   catch { throw new Error(`spec source ${spec.id}: path is unavailable; restore the repository or pass its existing absolute root to vmem specs add`); }
   requireSpecRoot(spec.path, env);
   return mutate(home, config => {
     if ([...config.vaults, ...(config.specs ?? [])].some(source => source.id === spec.id)) throw new Error(`spec source ${spec.id}: id already registered; use vmem specs list and vmem vaults list, then choose a unique id`);
     if ((config.specs ?? []).some(source => {
       if (source.path === spec.path) return true;
-      try { return realpathSync(source.path) === spec.path; }
+      try { return realPath(source.path) === spec.path; }
       catch (error) {
         if (["ENOENT", "ENOTDIR", "EACCES", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
         throw error;
@@ -240,9 +251,12 @@ export function removeSpec(home: string, id: string, confirm = false): { applied
 export function specStatus(home: string, env: NodeJS.ProcessEnv = process.env) {
   return (loadRegistry(home).specs ?? []).map(spec => {
     try {
-      if (realpathSync(spec.path) !== spec.path) throw new Error("spec source path changed; restore the canonical repository root or unregister it with vmem specs remove <id>");
+      if (realPath(spec.path) !== spec.path) throw new Error("spec source path changed; restore the canonical repository root or unregister it with vmem specs remove <id>");
       requireSpecRoot(spec.path, env);
       return { ...spec, healthy: true };
-    } catch { return { ...spec, healthy: false, issue: "spec source path is unavailable, changed, or no longer a git work-tree root; restore its canonical root or unregister it with vmem specs remove <id>" }; }
+    } catch (error) {
+      const cause = error instanceof Error ? error.message : "spec source path inspection failed";
+      return { ...spec, healthy: false, issue: `${cause}; restore a readable canonical root, or unregister it with vmem specs remove <id>` };
+    }
   });
 }
