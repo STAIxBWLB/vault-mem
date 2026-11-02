@@ -75,3 +75,31 @@ test("fish completion keeps spec graph options out of graph build and log grep",
   expect(optionsFor(["graph", "build"])).not.toContain("direction");
   expect(optionsFor(["log", "grep"])).not.toContain("source");
 });
+
+
+test("fish parent suggestions use the first subcommand rather than any matching word", () => {
+  const script = run(["completion", "fish"]).text;
+  const suggestions = (first: string) => script.split("\n").flatMap(line => {
+    const parent = /-n '__fish_seen_subcommand_from [a-z]+; and test \(commandline -opc\)\[2\] = ([a-z]+)' -a '([^']*)'/.exec(line);
+    return parent?.[1] === first ? parent[2]!.split(" ") : [];
+  });
+  expect(suggestions("spec")).toContain("graph");
+  expect(suggestions("spec")).not.toContain("build");
+  expect(suggestions("graph")).toContain("build");
+  for (const parent of ["vaults", "specs", "spec", "log", "graph", "skills"]) expect(script).toContain(`test (commandline -opc)[2] = ${parent}`);
+});
+
+test("help tokens after -- stay literal in the native CLI and normal help stays available", () => {
+  const f = fixture();
+  writeFileSync(join(f.repo, "SPEC.md"), "---\nid: root\ntype: goal\ntitle: Synthetic root\n---\n# Root\n-h marker\n--help marker\n");
+  addSpec(f.home, { id: "repo", path: f.repo });
+  for (const query of ["-h", "--help"]) {
+    const args = ["spec", "grep", "--literal", "--json", "--", query];
+    expect(JSON.parse(run(args, f.env).text).hits.map((hit: any) => hit.id)).toEqual(["root"]);
+    const child = Bun.spawnSync([process.execPath, "bin/vmem.js", ...args], { env: f.env, stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    expect(JSON.parse(child.stdout.toString()).hits.map((hit: any) => hit.id)).toEqual(["root"]);
+  }
+  expect(run(["check", "--help"], f.env).code).toBe(0);
+  expect(() => run(["check", "--", "-h"], f.env)).toThrow("unknown");
+});

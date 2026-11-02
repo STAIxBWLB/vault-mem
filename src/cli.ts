@@ -30,6 +30,7 @@ function parse(args: string[], allowed: string[], values: string[]) {
   return { flags, positional };
 }
 function commandHelp(args: string[]): string | undefined {
+  if (args.includes("--")) return undefined;
   if (!["--help", "-h"].includes(args.at(-1) ?? "")) return undefined;
   const name = args.slice(0, -1).join(" ");
   if (!name) return undefined;
