@@ -420,6 +420,21 @@ test("frontmatter Topics refiling keeps CRLF and setting unchanged topics keeps 
   expect(parseFrontmatter(after).body).toBe(parseFrontmatter(original).body.replace("* [[research]]   ", "- [[other]]"));
 });
 
+test("frontmatter Topics refiling replaces only the leading list run and keeps later links byte for byte", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  writeFileSync(join(f.notes, "other.md"), "---\ntype: moc\ndescription: Another synthetic directory.\n---\n# Other\n");
+  writeFileSync(join(f.notes, "foo.md"), note("Foo Finding"));
+  for (const tail of ["\n### Related\n- [[foo]]\n- [[research]]\n", "\nSee also:\n[[foo]]\n"]) {
+    const original = note("Old Finding").replace(/\n?$/, "\n") + tail;
+    writeFileSync(file, original);
+    const result = f.request({ op: "frontmatter", path: "old", set: { topics: ["[[other]]"] } });
+    expect(result.ok).toBe(true);
+    const body = parseFrontmatter(readFileSync(file, "utf8")).body;
+    expect(body).toBe(parseFrontmatter(original).body.replace("- [[research]]\n", "- [[other]]\n"));
+    expect(body.endsWith(tail)).toBe(true);
+  }
+});
+
 test("frontmatter inserts a missing Topics list after its heading without deleting legacy content", () => {
   const f = fixture(), file = join(f.notes, "old.md");
   const original = note("Old Finding").replace("- [[research]]\n", "### Detail\nLegacy prose.\n");
