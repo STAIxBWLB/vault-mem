@@ -113,6 +113,7 @@ export interface IndexSourceAdapter {
   accept(path: string, document: FrontmatterDocument, hash: string): boolean;
   invalid(path: string): void;
 }
+export class IndexCacheError extends Error {}
 export interface IndexOptions { memory?: boolean; adapter?: IndexSourceAdapter; reuseCache?: boolean }
 /** Derived cache only. No vault or application configuration files are written. */
 export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
@@ -127,62 +128,67 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     const notes = join(this.root, "notes");
     if (this.adapter) this.adapter.validate();
     else if (realpathSync(notes) !== notes || !lstatSync(notes).isDirectory()) throw new Error(`vault ${vault.id}: notes must be a plain directory`);
-    const cacheName = this.adapter ? `spec-${indexName(this.root)}` : indexName(this.root);
-    const cache = resolve(home, "indexes");
-    const noDisk = options.memory && options.reuseCache === false;
-    const canonicalize = this.adapter ? realPath : realpathSync;
-    const canonical = noDisk ? cache : canonicalLocation(cache, canonicalize);
-    for (const root of noDisk ? [] : vaultRoots) {
-      if (within(canonicalLocation(resolve(root), canonicalize), canonical)) throw new Error(this.adapter ? "spec index: cache is inside a protected source; choose VMEM_HOME outside every repository and vault" : "index: VMEM_HOME cache must be outside every vault");
-    }
-    // Canonical home resolution is allowed, but a linked cache directory/file is not.
-    if (!options.memory) {
-      mkdirSync(cache, { recursive: true, mode: 0o700 });
-      if (lstatSync(cache).isSymbolicLink() || !lstatSync(cache).isDirectory()) throw new Error("index: expected plain cache directory");
-      this.file = join(cache, cacheName);
-      try {
-        const fd = openSync(this.file, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
-        closeSync(fd);
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-      if (!lstatSync(this.file).isFile() || lstatSync(this.file).isSymbolicLink() || (this.adapter && lstatSync(this.file).nlink !== 1)) throw new Error("index: expected plain database file");
-    } else this.file = ":memory:";
-    this.db = new Database(this.file);
-    this.db.run("PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE;");
-    this.db.run(`CREATE TABLE IF NOT EXISTS notes (
-      path TEXT PRIMARY KEY, hash TEXT NOT NULL, metadata TEXT NOT NULL,
-      title TEXT NOT NULL, description TEXT NOT NULL, body TEXT NOT NULL,
-      type TEXT NOT NULL, domain TEXT NOT NULL, aliases TEXT NOT NULL, source TEXT NOT NULL);
-      CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(path UNINDEXED, title, description, body, tokenize='unicode61');
-      CREATE TABLE IF NOT EXISTS analysis_notes (path TEXT PRIMARY KEY, source TEXT NOT NULL, hash TEXT NOT NULL, metadata TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS links (source TEXT NOT NULL, ordinal INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source, ordinal));`);
-    // Dry runs reuse the derived cache via a readonly connection, then refresh only changed notes in memory.
-    if (options.memory && options.reuseCache !== false) {
-      const file = join(cache, cacheName);
-      let exists = false;
-      try { const stat = lstatSync(file); if (!stat.isFile() || stat.isSymbolicLink() || (this.adapter && stat.nlink !== 1)) throw new Error("index: expected plain database file"); exists = true; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      if (exists) {
-        if (canonicalize(cache) !== cache) throw new Error("index: linked cache directory");
-        const disk = new Database(file, { readonly: true });
-        try {
-          disk.transaction(() => {
-            const size = disk.query<{count:number;bytes:number}, []>("SELECT count(*) AS count, coalesce(sum(length(CAST(source AS BLOB))),0) AS bytes FROM notes").get()!;
-            if (size.count > 10000 || size.bytes > 64 * 1024 * 1024) throw new Error("analysis: cached snapshot exceeds bound");
-            for (const row of disk.query<Omit<StoredNote,"aliases"> & {aliases:string}, []>("SELECT * FROM notes").all()) {
-              this.db.query("INSERT INTO notes VALUES (?,?,?,?,?,?,?,?,?,?)").run(row.path,row.hash,row.metadata,row.title,row.description,row.body,row.type,row.domain,row.aliases,row.source);
-              this.db.query("INSERT INTO fts VALUES (?,?,?,?)").run(row.path,row.title,row.description,row.body);
-            }
-            for (const row of disk.query<{source:string;ordinal:number;data:string}, []>("SELECT * FROM links").all()) this.db.query("INSERT INTO links VALUES (?,?,?)").run(row.source,row.ordinal,row.data);
-            this.db.run(`PRAGMA user_version = ${Number(disk.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0)}`);
-            const exists = disk.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='analysis_notes'").get();
-            if (exists) {
-              const size = disk.query<{count:number;bytes:number}, []>("SELECT count(*) AS count, coalesce(sum(length(CAST(source AS BLOB))),0) AS bytes FROM analysis_notes").get()!;
-              if (size.count > 10000 || size.bytes > 64 * 1024 * 1024) throw new Error("analysis: cached snapshot exceeds bound");
-              for (const row of disk.query<{path:string;source:string;hash:string;metadata:string}, []>("SELECT * FROM analysis_notes").all()) this.db.query("INSERT INTO analysis_notes VALUES (?,?,?,?)").run(row.path,row.source,row.hash,row.metadata);
-            }
-          })();
-        } finally { disk.close(); }
+    try {
+      const cacheName = this.adapter ? `spec-${indexName(this.root)}` : indexName(this.root);
+      const cache = resolve(home, "indexes");
+      const noDisk = options.memory && options.reuseCache === false;
+      const canonicalize = this.adapter ? realPath : realpathSync;
+      const canonical = noDisk ? cache : canonicalLocation(cache, canonicalize);
+      for (const root of noDisk ? [] : vaultRoots) {
+        if (within(canonicalLocation(resolve(root), canonicalize), canonical)) throw new Error(this.adapter ? "spec index: cache is inside a protected source; choose VMEM_HOME outside every repository and vault" : "index: VMEM_HOME cache must be outside every vault");
       }
+      // Canonical home resolution is allowed, but a linked cache directory/file is not.
+      if (!options.memory) {
+        mkdirSync(cache, { recursive: true, mode: 0o700 });
+        if (lstatSync(cache).isSymbolicLink() || !lstatSync(cache).isDirectory()) throw new Error("index: expected plain cache directory");
+        this.file = join(cache, cacheName);
+        try {
+          const fd = openSync(this.file, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
+          closeSync(fd);
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+        if (!lstatSync(this.file).isFile() || lstatSync(this.file).isSymbolicLink() || (this.adapter && lstatSync(this.file).nlink !== 1)) throw new Error("index: expected plain database file");
+      } else this.file = ":memory:";
+      this.db = new Database(this.file);
+      this.db.run("PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE;");
+      this.db.run(`CREATE TABLE IF NOT EXISTS notes (
+        path TEXT PRIMARY KEY, hash TEXT NOT NULL, metadata TEXT NOT NULL,
+        title TEXT NOT NULL, description TEXT NOT NULL, body TEXT NOT NULL,
+        type TEXT NOT NULL, domain TEXT NOT NULL, aliases TEXT NOT NULL, source TEXT NOT NULL);
+        CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(path UNINDEXED, title, description, body, tokenize='unicode61');
+        CREATE TABLE IF NOT EXISTS analysis_notes (path TEXT PRIMARY KEY, source TEXT NOT NULL, hash TEXT NOT NULL, metadata TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS links (source TEXT NOT NULL, ordinal INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source, ordinal));`);
+      // Dry runs reuse the derived cache via a readonly connection, then refresh only changed notes in memory.
+      if (options.memory && options.reuseCache !== false) {
+        const file = join(cache, cacheName);
+        let exists = false;
+        try { const stat = lstatSync(file); if (!stat.isFile() || stat.isSymbolicLink() || (this.adapter && stat.nlink !== 1)) throw new Error("index: expected plain database file"); exists = true; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        if (exists) {
+          if (canonicalize(cache) !== cache) throw new Error("index: linked cache directory");
+          const disk = new Database(file, { readonly: true });
+          try {
+            disk.transaction(() => {
+              const size = disk.query<{count:number;bytes:number}, []>("SELECT count(*) AS count, coalesce(sum(length(CAST(source AS BLOB))),0) AS bytes FROM notes").get()!;
+              if (size.count > 10000 || size.bytes > 64 * 1024 * 1024) throw new Error("analysis: cached snapshot exceeds bound");
+              for (const row of disk.query<Omit<StoredNote,"aliases"> & {aliases:string}, []>("SELECT * FROM notes").all()) {
+                this.db.query("INSERT INTO notes VALUES (?,?,?,?,?,?,?,?,?,?)").run(row.path,row.hash,row.metadata,row.title,row.description,row.body,row.type,row.domain,row.aliases,row.source);
+                this.db.query("INSERT INTO fts VALUES (?,?,?,?)").run(row.path,row.title,row.description,row.body);
+              }
+              for (const row of disk.query<{source:string;ordinal:number;data:string}, []>("SELECT * FROM links").all()) this.db.query("INSERT INTO links VALUES (?,?,?)").run(row.source,row.ordinal,row.data);
+              this.db.run(`PRAGMA user_version = ${Number(disk.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0)}`);
+              const exists = disk.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='analysis_notes'").get();
+              if (exists) {
+                const size = disk.query<{count:number;bytes:number}, []>("SELECT count(*) AS count, coalesce(sum(length(CAST(source AS BLOB))),0) AS bytes FROM analysis_notes").get()!;
+                if (size.count > 10000 || size.bytes > 64 * 1024 * 1024) throw new Error("analysis: cached snapshot exceeds bound");
+                for (const row of disk.query<{path:string;source:string;hash:string;metadata:string}, []>("SELECT * FROM analysis_notes").all()) this.db.query("INSERT INTO analysis_notes VALUES (?,?,?,?)").run(row.path,row.source,row.hash,row.metadata);
+              }
+            })();
+          } finally { disk.close(); }
+        }
+      }
+    } catch (error) {
+      if (this.adapter) throw new IndexCacheError(error instanceof Error ? error.message : "cache initialization failed", { cause: error });
+      throw error;
     }
   }
   close(): void { this.db.close(); }
@@ -207,8 +213,8 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
       for (const path of paths) {
         this.adapter?.validatePath(path);
         const file = join(this.adapter ? this.root : notesDir, path), before = lstatSync(file);
-        if (!before.isFile() || before.isSymbolicLink()) throw new Error(`vault ${this.vault.id}: note path changed`);
-        if (before.size > MAX_NOTE_BYTES) throw new Error(this.adapter ? `spec discovery: Markdown file exceeds ${MAX_NOTE_BYTES} bytes; split the file before rebuilding` : `vault ${this.vault.id}, ${path}: note exceeds ${MAX_NOTE_BYTES} bytes`);
+        if (!before.isFile() || before.isSymbolicLink()) throw new Error(this.adapter ? `spec discovery ${path}: selected path changed; restore a plain file and retry` : `vault ${this.vault.id}: note path changed`);
+        if (before.size > MAX_NOTE_BYTES) throw new Error(this.adapter ? `spec discovery ${path}: Markdown exceeds ${MAX_NOTE_BYTES} bytes; split the file before rebuilding` : `vault ${this.vault.id}, ${path}: note exceeds ${MAX_NOTE_BYTES} bytes`);
         live.add(path); present.add(path);
         if (options.captureInvalidFrontmatter || this.adapter) {
           analysisBytes += before.size;
@@ -224,7 +230,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
           let buffer: Buffer;
           try {
             const stat = fstatSync(fd);
-            if (!stat.isFile() || stat.size > MAX_NOTE_BYTES || metadata(stat) !== stamp) throw new Error(`vault ${this.vault.id}, ${path}: note changed during scan`);
+            if (!stat.isFile() || stat.size > MAX_NOTE_BYTES || metadata(stat) !== stamp) throw new Error(this.adapter ? `spec discovery ${path}: file changed during scan; retry on a stable worktree` : `vault ${this.vault.id}, ${path}: note changed during scan`);
             // Fixed bound even if a concurrent writer grows the file.
             buffer = Buffer.alloc(MAX_NOTE_BYTES + 1);
             let size = 0;
@@ -234,15 +240,15 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
               if (!count || size === buffer.length) break;
             }
             buffer = buffer.subarray(0, size);
-            if (size > MAX_NOTE_BYTES || metadata(fstatSync(fd)) !== stamp) throw new Error(`vault ${this.vault.id}, ${path}: note changed during scan`);
+            if (size > MAX_NOTE_BYTES || metadata(fstatSync(fd)) !== stamp) throw new Error(this.adapter ? `spec discovery ${path}: file changed during scan; retry on a stable worktree` : `vault ${this.vault.id}, ${path}: note changed during scan`);
           } finally { closeSync(fd); }
           if (this.adapter) {
             try { source = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer); }
-            catch { throw new Error("spec discovery: Markdown is not valid UTF-8; re-encode the file as UTF-8 before rebuilding"); }
+            catch { throw new Error(`spec discovery ${path}: Markdown is not valid UTF-8; re-encode the file as UTF-8 before rebuilding`); }
           } else source = buffer.toString("utf8");
           hash = digest(buffer);
           this.adapter?.validatePath(path);
-          if (this.adapter && metadata(lstatSync(file)) !== stamp) throw new Error("spec discovery: file changed during read; retry on a stable worktree");
+          if (this.adapter && metadata(lstatSync(file)) !== stamp) throw new Error(`spec discovery ${path}: file changed during read; retry on a stable worktree`);
           this.db.query("INSERT OR REPLACE INTO analysis_notes VALUES (?,?,?,?)").run(path, source, hash, stamp);
         }
         if (!this.adapter && !rebuild && old?.hash === hash) { this.db.query("UPDATE notes SET metadata=? WHERE path=?").run(stamp, path); continue; }
@@ -255,7 +261,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
         }
         if (this.adapter) {
           this.adapter.validatePath(path);
-          if (metadata(lstatSync(file)) !== stamp) throw new Error("spec discovery: file changed during scan; retry on a stable worktree");
+          if (metadata(lstatSync(file)) !== stamp) throw new Error(`spec discovery ${path}: file changed during scan; retry on a stable worktree`);
           if (!this.adapter.accept(path, document, hash)) { live.delete(path); continue; }
           const row = this.db.query<{hash:string}, [string]>("SELECT hash FROM notes WHERE path=?").get(path);
           if (!rebuild && row?.hash === hash) { this.db.query("UPDATE notes SET metadata=? WHERE path=?").run(stamp, path); continue; }
@@ -305,15 +311,17 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     const notes = this.db.query<{path: string; source: string}, []>("SELECT path,source FROM analysis_notes ORDER BY path").all();
     return { ...inputs, notes };
   }
-  search(query: string, options: SearchOptions = {}): SearchResult[] {
+  search(query: string, options: SearchOptions = {}, snapshot?: ReadonlyMap<string, string>): SearchResult[] {
     const limit = resultLimit(options.limit);
     if (!query.trim() || Buffer.byteLength(query) > 1024) throw new Error("search: query must contain 1..1024 bytes");
     // Literal AND terms: users cannot inject FTS operators, columns or SQL.
     const terms = query.trim().split(/\s+/).map(term => `"${term.replaceAll('"', '""')}"`).join(" AND ");
-    return this.db.query<SearchResult, [string, string | null, string | null, string | null, string | null, number]>(`SELECT n.path, n.title, substr(n.description,1,512) AS description, n.type, n.domain,
-      bm25(fts,0,5,2,1) AS score, snippet(fts,3,'','',' ... ',32) AS snippet FROM fts JOIN notes n ON n.path=fts.path
+    const hashColumn = snapshot ? ",n.hash AS sourceHash" : "";
+    return this.db.query<SearchResult & { sourceHash?: string }, [string, string | null, string | null, string | null, string | null, number]>(`SELECT n.path, n.title, substr(n.description,1,512) AS description, n.type, n.domain,
+      bm25(fts,0,5,2,1) AS score, snippet(fts,3,'','',' ... ',32) AS snippet${hashColumn} FROM fts JOIN notes n ON n.path=fts.path
       WHERE fts MATCH ? AND (? IS NULL OR n.type=?) AND (? IS NULL OR n.domain=?) ORDER BY score,n.path LIMIT ?`).all(terms, options.type ?? null, options.type ?? null, options.domain ?? null, options.domain ?? null, limit)
-      .map(row => ({ ...row, title: boundedText(row.title, 512).content, snippet: boundedText(row.snippet, 1024).content, type: boundedText(row.type, 256).content, domain: boundedText(row.domain, 256).content }));
+      .filter(row => !snapshot || snapshot.get(row.path) === row.sourceHash)
+      .map(({ sourceHash: _, ...row }) => ({ ...row, title: boundedText(row.title, 512).content, snippet: boundedText(row.snippet, 1024).content, type: boundedText(row.type, 256).content, domain: boundedText(row.domain, 256).content }));
   }
   private find(target: string): string {
     if (!target || Buffer.byteLength(target) > 1024) throw new Error("note: expected target <=1024 bytes");

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { absolute, type SpecSourceSpec } from "./config.ts";
 import { realPath, memoryGitArgv, memoryGitEnv } from "./platform.ts";
-import { VaultIndex, type IndexSourceAdapter, type SearchOptions, type SearchResult } from "./vault-index.ts";
+import { VaultIndex, IndexCacheError, type IndexSourceAdapter, type SearchOptions, type SearchResult } from "./vault-index.ts";
 
 /** Private spec input snapshot; raw sources are for library transforms, never graph results. */
 export interface SpecDocument {
@@ -79,12 +79,12 @@ function validate(binding: Binding): void {
 /** Reject every symlink component. A path first selected as plain must stay plain throughout its read. */
 function plainPath(root: string, path: string): boolean {
   const parts = path.split("/");
-  if (!path.endsWith(".md") || isAbsolute(path) || parts.some(part => !part || part === "." || part === "..")) throw new Error("spec source: git returned an unsafe Markdown path; repair the index and retry discovery");
+  if (!path.endsWith(".md") || isAbsolute(path) || parts.some(part => !part || part === "." || part === "..")) throw new Error(`spec source ${path}: git returned an unsafe Markdown path; repair the index and retry discovery`);
   let current = root;
   for (let i = 0; i < parts.length; i++) {
     current = join(current, parts[i]!);
     let stat;
-    try { stat = lstatSync(current); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw new Error("spec source: Markdown path cannot be inspected; restore read access and retry discovery"); }
+    try { stat = lstatSync(current); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw new Error(`spec source ${path}: Markdown path cannot be inspected; restore read access and retry discovery`); }
     if (stat.isSymbolicLink() || (i < parts.length - 1 ? !stat.isDirectory() : !stat.isFile())) return false;
   }
   return realPath(current) === current && !relative(root, current).startsWith("../");
@@ -106,7 +106,7 @@ function adapter(binding: Binding) {
       return paths.filter(path => plainPath(binding.root, path));
     },
     validatePath: path => {
-      if (!plainPath(binding.root, path)) throw new Error("spec source: selected Markdown path changed or became a symlink; restore a plain in-repository file and retry");
+      if (!plainPath(binding.root, path)) throw new Error(`spec source ${path}: selected Markdown path changed or became a symlink; restore a plain in-repository file and retry`);
     },
     invalid: path => diagnostics.push({ code: "invalid_frontmatter", path, message: "spec source: invalid frontmatter; repair the Markdown YAML before rebuilding" }),
     accept: (path, document, hash) => {
@@ -138,7 +138,10 @@ export class SpecIndex {
     this.adapter = adapter(binding);
     try {
       this.index = new VaultIndex(home, { ...source, path: binding.root }, [...new Set([source.path, binding.root, ...(options.protectedRoots ?? [])])], { memory: options.memory, reuseCache: options.reuseCache, adapter: this.adapter.source });
-    } catch (error) { throw new Error(`spec index: ${error instanceof Error ? error.message : "cache initialization failed"}; choose a readable plain cache directory outside protected sources and retry`); }
+    } catch (error) {
+      if (error instanceof IndexCacheError) throw new Error(`spec index: ${error.message}; choose a readable plain cache directory outside protected sources and retry`);
+      throw error;
+    }
   }
   get file(): string { return this.index.file; }
   close(): void { this.index.close(); }
@@ -152,7 +155,11 @@ export class SpecIndex {
   snapshot(): SpecSnapshot { if (!this.current) this.scan(); return this.current!; }
   search(query: string, options: SearchOptions = {}): SpecSearchResult[] {
     const snapshot = this.snapshot(), ids = new Map(snapshot.specs.map(spec => [spec.path, spec.id]));
-    return this.index.search(query, options).map(hit => ({ ...hit, id: ids.get(hit.path)! }));
+    const hashes = new Map(snapshot.specs.map(spec => [spec.path, spec.hash]));
+    return this.index.search(query, options, hashes).flatMap(hit => {
+      const id = ids.get(hit.path);
+      return id === undefined ? [] : [{ ...hit, id }];
+    });
   }
 }
 /** One-shot discovery is in memory and never opens or creates a cache on disk. */

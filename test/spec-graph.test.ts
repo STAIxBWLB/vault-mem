@@ -175,10 +175,10 @@ test("spec discovery rejects oversized and invalid-UTF8 Markdown and stale workt
   try {
     index.scan();
     writeFileSync(join(repo, "large.md"), "x".repeat(MAX_NOTE_BYTES + 1));
-    expect(() => discoverSpecs(source)).toThrow("split the file");
+    expect(() => discoverSpecs(source)).toThrow("large.md: Markdown exceeds");
     rmSync(join(repo, "large.md"));
     writeFileSync(join(repo, "invalid.md"), Buffer.from([255]));
-    expect(() => discoverSpecs(source)).toThrow("UTF-8");
+    expect(() => discoverSpecs(source)).toThrow("invalid.md: Markdown is not valid UTF-8");
     rmSync(join(repo, "invalid.md"));
     renameSync(join(repo, ".git"), join(repo, "old-git"));
     expect(() => index.scan()).toThrow("git refused inspection");
@@ -214,4 +214,80 @@ test("spec discovery and cache scanning accept backslash repository roots", () =
   expect(discoverSpecs(source).specs[0]?.id).toBe("backslash");
   const index = new SpecIndex(f.home, source);
   try { index.scan(); expect(index.search("Backslashquasar")[0]?.id).toBe("backslash"); } finally { index.close(); }
+});
+
+test("shared-cache searches exclude paths and replacements outside the instance snapshot", () => {
+  const f = fixture(), repo = f.repo("repo");
+  f.write(repo, "a.md", spec("a", {}, "Existingquasar."));
+  const source = f.source(repo), a = new SpecIndex(f.home, source), b = new SpecIndex(f.home, source);
+  try {
+    a.scan();
+    f.write(repo, "b.md", spec("b", {}, "Addedquasar."));
+    b.scan();
+    expect(a.file).toBe(b.file);
+    expect(b.search("Addedquasar")[0]?.id).toBe("b");
+    expect(a.search("Addedquasar")).toEqual([]);
+    expect(a.search("Existingquasar")[0]?.id).toBe("a");
+    f.write(repo, "a.md", spec("replacement", {}, "Replacedquasar."));
+    b.scan();
+    expect(a.search("Replacedquasar")).toEqual([]);
+    expect(b.search("Replacedquasar")[0]?.id).toBe("replacement");
+    a.scan();
+    expect(a.search("Addedquasar")[0]?.id).toBe("b");
+    expect(a.search("Replacedquasar")[0]?.id).toBe("replacement");
+  } finally { a.close(); b.close(); }
+});
+
+test("spec file failures name relative paths and keep spec wording during read drift", () => {
+  const f = fixture(), repo = f.repo("repo"), path = "nested/changed-during.md";
+  f.write(repo, path, spec("changed", {}, "Synthetic original."));
+  const source = f.source(repo);
+  for (const mode of ["read", "inspect", "unsafe"]) {
+    const child = Bun.spawnSync([process.execPath, "-e", `
+      import { mock } from "bun:test";
+      const fs = await import("node:fs"), original = { ...fs };
+      const cp = await import("node:child_process"), spawn = cp.spawnSync;
+      const file = ${JSON.stringify(join(repo, path))}, mode = ${JSON.stringify(mode)};
+      let target, changed = false;
+      mock.module("node:fs", () => ({ ...original,
+        openSync: (...args) => { const fd = original.openSync(...args); if (String(args[0]) === file) target = fd; return fd; },
+        lstatSync: (...args) => { if (mode === "inspect" && String(args[0]) === file) throw Object.assign(new Error("synthetic denied"), { code: "EACCES" }); return original.lstatSync(...args); },
+        readSync: (...args) => { const n = original.readSync(...args); if (mode === "read" && args[0] === target && !changed) { changed = true; original.appendFileSync(file, "Mutated by the synthetic race fixture."); } return n; }
+      }));
+      if (mode === "unsafe") mock.module("node:child_process", () => ({ ...cp, spawnSync: (exe, args, options) => args.includes("ls-files")
+        ? { status: 0, stdout: Buffer.concat([Buffer.from("../outside.md"), Buffer.alloc(1)]), stderr: Buffer.alloc(0) }
+        : spawn(exe, args, options) }));
+      const { discoverSpecs } = await import("./src/spec-source.ts");
+      try { discoverSpecs(${JSON.stringify(source)}); process.exit(2); }
+      catch (error) { process.stdout.write(error.message); }
+    `], { stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    const message = child.stdout.toString();
+    expect(message).toContain(mode === "unsafe" ? "../outside.md" : path);
+    expect(message).not.toContain("vault specs");
+    expect(message).toContain(mode === "read" ? "file changed during scan" : mode === "inspect" ? "restore read access" : "repair the index");
+  }
+});
+
+test("constructor Git and binding failures do not receive cache-directory advice", () => {
+  const f = fixture(), repo = f.repo("repo"), other = f.repo("other"), source = f.source(repo);
+  for (const mode of ["timeout", "binding"]) {
+    const child = Bun.spawnSync([process.execPath, "-e", `
+      import { mock } from "bun:test";
+      const cp = await import("node:child_process"), spawn = cp.spawnSync; let calls = 0;
+      mock.module("node:child_process", () => ({ ...cp, spawnSync: (...args) => {
+        if (++calls === 2) return ${JSON.stringify(mode)} === "timeout"
+          ? { status: null, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), error: Object.assign(new Error("synthetic timeout"), { code: "ETIMEDOUT" }) }
+          : { status: 0, stdout: Buffer.from(${JSON.stringify(repo + "\n" + join(other, ".git") + "\n")}), stderr: Buffer.alloc(0) };
+        return spawn(...args);
+      } }));
+      const { SpecIndex } = await import("./src/spec-source.ts");
+      try { new SpecIndex(${JSON.stringify(f.home)}, ${JSON.stringify(source)}); process.exit(2); }
+      catch (error) { process.stdout.write(error.message); }
+    `], { stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    expect(child.stdout.toString()).toContain(mode === "timeout" ? "timed out" : "binding changed");
+    expect(child.stdout.toString()).not.toContain("cache directory");
+  }
+  expect(() => new SpecIndex(join(repo, "cache"), source)).toThrow("choose a readable plain cache directory");
 });
