@@ -14,7 +14,7 @@ export function createSpecMcp(home: string, env: NodeJS.ProcessEnv = process.env
     const invalid = argumentError(args, item.inputSchema);
     if (invalid) throw new Error(invalid);
     const selected = registered.find(source => source.id === (args.source ?? registered[0]?.id));
-    if (!selected) throw new Error("spec source: no matching registered source; register one with vmem specs add or supply --source");
+    if (!selected) throw new Error("spec source: no matching source in the server's startup registry; pass the source argument with a registered id, or register with vmem specs add and restart the MCP server");
     const current = loadRegistry(home).specs?.find(source => source.id === selected.id);
     if (!current || JSON.stringify(current) !== JSON.stringify(selected)) throw new Error("spec source: registry changed since server startup; restart the MCP server before reading");
     return executeSpecCommand(home, item.command, { ...args, source: selected.id }, env);

@@ -62,3 +62,16 @@ test("CLI freshness exit codes, command help, closed flags and manifest match th
   }
   expect(manifest.mcp.tools).not.toContain("vmem_spec_create");
 });
+
+
+test("fish completion keeps spec graph options out of graph build and log grep", () => {
+  const script = run(["completion", "fish"]).text;
+  const optionsFor = (words: string[]) => script.split("\n").flatMap(line => {
+    const condition = /-n '([^']+)'/.exec(line)?.[1], option = /-l ([a-z-]+)$/.exec(line)?.[1];
+    if (!condition || !option) return [];
+    return condition.split("; and ").every(part => part.startsWith("__fish_seen_subcommand_from ") && words.includes(part.split(" ").at(-1)!)) ? [option] : [];
+  });
+  expect(optionsFor(["spec", "graph"])).toContain("direction");
+  expect(optionsFor(["graph", "build"])).not.toContain("direction");
+  expect(optionsFor(["log", "grep"])).not.toContain("source");
+});

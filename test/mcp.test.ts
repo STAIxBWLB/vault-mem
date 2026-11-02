@@ -273,3 +273,14 @@ test("spec tools find nested designs, isolate linked worktrees, refuse foreign r
   expect(payload(refused)).toMatchObject({ refused: true });
   expect(git(["status", "--porcelain=v1", "-z"]).stdout).toHaveLength(0);
 });
+
+
+test("MCP spec source refusal names startup registration, source argument and restart", async () => {
+  const f = fixture(), server = createVaultMcp(f.home), repo = join(f.root, "late-repo"); mkdirSync(repo);
+  specGit(repo, ["-c", "init.templateDir=", "init", "--quiet"]);
+  addSpec(f.home, { id: "late", path: repo });
+  const refused: any = await server.handlers.vmem_spec_get!({ id: "root", source: "late" });
+  const message = refused.issues[0].message;
+  for (const phrase of ["startup registry", "source argument", "vmem specs add", "restart the MCP server"]) expect(message).toContain(phrase);
+  expect(message).not.toContain("--source");
+});

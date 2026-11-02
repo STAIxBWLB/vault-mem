@@ -84,8 +84,8 @@ function metadataMatch(document: SpecDocument, args: Record<string, unknown>): b
   return true;
 }
 function grep(index: SpecIndex, snapshot: SpecSnapshot, args: Record<string, unknown>, env: NodeJS.ProcessEnv, source: string): Record<string, unknown> {
-  const query = text(args.query), offset = (args.offset as number | undefined) ?? 0, limit = (args.limit as number | undefined) ?? 50;
-  if (Buffer.byteLength(query) > 1024) throw new Error("spec grep: query exceeds 1024 UTF-8 bytes; shorten the query before retrying");
+  const rawQuery = text(args.query), query = args.literal === true ? rawQuery : rawQuery.trim(), offset = (args.offset as number | undefined) ?? 0, limit = (args.limit as number | undefined) ?? 50;
+  if (Buffer.byteLength(rawQuery) > 1024) throw new Error("spec grep: query exceeds 1024 UTF-8 bytes; shorten the query before retrying");
   let documents = snapshot.specs.filter(document => metadataMatch(document, args));
   if (typeof args.coversPath === "string") {
     const covered = new Set(specsCoveringPath({ ...snapshot, specs: documents }, args.coversPath, { env }).map(document => document.path));
@@ -129,6 +129,9 @@ export function executeSpecCommand(home: string, command: SpecCommand, args: Rec
   if (!["get", "graph", "grep", "validate"].includes(command)) throw new Error("spec provider: unknown command; choose get, graph, grep or validate");
   const invalid = argumentError(args, specCommandSchema(command));
   if (invalid) throw new Error(`spec ${command}: ${invalid}; use vmem spec ${command} --help to correct the arguments`);
+  if (command === "grep") for (const field of ["parent", "dependsOn"] as const) {
+    if (args[field] !== undefined && specReference(args[field]) === undefined) throw new Error(`spec grep: ${field} filter resolves to no id; pass an id or [[id]]`);
+  }
   const config = loadRegistry(home), sources = config.specs ?? [];
   const source = args.source === undefined ? sources[0] : sources.find(item => item.id === args.source);
   if (!source) throw new Error(sources.length ? "spec source is not registered; use vmem specs list and pass --source with a registered id" : "no spec sources are registered; run vmem specs add <id> <absolute-repository-root> first");

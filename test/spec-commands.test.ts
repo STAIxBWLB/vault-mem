@@ -79,6 +79,21 @@ test("grep shares FTS/literal search, metadata filters, source scope and post-fi
   expect(f.run("grep", { offset: 10000 }).hits).toEqual([]);
 });
 
+test("unresolved relationship filters refuse rather than matching missing or malformed fields", () => {
+  const f = fixture();
+  f.write("architecture.md", markdown({ id: "support", type: "architecture", title: "Support", "depends-on": ["[[]]"] }, "Support body.\n"));
+  for (const field of ["parent", "dependsOn"]) for (const value of ["[[]]", " ", "[[x"]) {
+    expect(() => f.run("grep", { [field]: value })).toThrow(`${field} filter resolves to no id; pass an id or [[id]]`);
+  }
+  expect(f.run("grep", { parent: "[[root|Goal]]" }).hits.map((hit: { id: string }) => hit.id)).toEqual(["engine"]);
+});
+
+test("blank non-literal query lists filtered specs while literal spaces stay literal", () => {
+  const f = fixture();
+  expect(f.run("grep", { query: " \t ", type: "module" }).hits.map((hit: { id: string }) => hit.id)).toEqual(["engine"]);
+  expect(f.run("grep", { query: " \t ", literal: true }).hits).toEqual([]);
+});
+
 test("FTS metadata filtering fills pages after more than 500 earlier nonmatching hits", () => {
   const f = fixture();
   for (let index = 0; index < 505; index++) {
