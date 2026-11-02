@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeSource } from "./source.ts";
 import { parseFrontmatter, emitFrontmatter } from "./frontmatter.ts";
 import { normalizeTarget, proseLines, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
@@ -57,6 +58,27 @@ export function replaceTopicsSection(body: string, topics: string[]): string {
   for (let i = start + 1; i < prose.length; i++) if (/^ {0,3}#{1,2}[ \t]/.test(prose[i]!)) { end = i; break; }
   const tail = raw.slice(end);
   return [...raw.slice(0, start), ...section, ...(tail.length ? tail : [])].join("\n").replace(/\n*$/, "\n");
+}
+/** In-place refiling replaces only visible wiki-list lines, preserving all other bytes. */
+function replaceTopicsList(body: string, topics: string[], newline: string): string {
+  const visible = proseLines(body), raw = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  let start = -1;
+  for (let i = visible.length - 1; i >= 0; i--) if (/^ {0,3}##[ \t]+Topics(?:[ \t]+#+)?[ \t]*$/i.test(visible[i]!)) { start = i; break; }
+  const list = topics.map(topic => `- ${topic}`).join(newline);
+  if (start < 0) return body + (body && !body.endsWith("\n") ? newline : "") + newline + `## Topics${newline}${newline}${list}${newline}`;
+  const items = new Set<number>();
+  for (let i = start + 1; i < raw.length; i++) {
+    const line = visible[i] ?? "";
+    if (/^ {0,3}#{1,2}[ \t]/.test(line)) break;
+    if (/^[ \t]*(?:[-*+][ \t]+)?(\[\[[^\]|#]+\]\])[ \t]*$/.test(line)) items.add(i);
+  }
+  const first = items.values().next().value;
+  if (first === undefined) {
+    const addition = (raw[start]!.endsWith("\n") ? "" : newline) + list + (list ? newline : "");
+    return raw.slice(0, start + 1).join("") + addition + raw.slice(start + 1).join("");
+  }
+  const ending = /\r?\n$/.exec(raw[first]!)?.[0] ?? "";
+  return raw.map((line, i) => i === first ? list + (list ? ending : "") : items.has(i) ? "" : line).join("");
 }
 export function appendSection(source: string, section: string, markdown: string, path: string): string {
   if (typeof section !== "string" || !section.trim() || section.length > 120 || /[\r\n]/.test(section) || section.trim().replace(/[ \t]+#+$/, "").trim().toLowerCase() === "topics") refuse("V05", "append cannot target Topics or an invalid section");
@@ -139,10 +161,11 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
       const changes = {...operation.set};
       for (const key of operation.unset ?? []) changes[key] = undefined;
       try {
-        let after = emitFrontmatter(document(source, path), normalizedSourceChanges(changes));
-        if (Object.hasOwn(operation.set, "topics") && Array.isArray(changes.topics) && changes.topics.every((value): value is string => typeof value === "string")) {
+        const before = document(source, path);
+        let after = emitFrontmatter(before, normalizedSourceChanges(changes));
+        if (Object.hasOwn(operation.set, "topics") && !isDeepStrictEqual(changes.topics, before.data.topics) && Array.isArray(changes.topics) && changes.topics.every((value): value is string => typeof value === "string")) {
           const doc = document(after, path);
-          after = (doc.frontmatter ?? "") + replaceTopicsSection(doc.body, changes.topics);
+          after = (doc.frontmatter ?? "") + replaceTopicsList(doc.body, changes.topics, /\r?\n/.exec(source)?.[0] ?? "\n");
         }
         set(path, after);
       } catch (error) { if (error instanceof WriteRefusal) throw error; refuse("V01", "cannot emit frontmatter", path); }
