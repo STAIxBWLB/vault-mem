@@ -62,6 +62,15 @@ function aliases(value: unknown): string[] {
 function metadata(stat: NonNullable<ReturnType<typeof lstatSync>>): string {
   return [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
 }
+/** Adapter file I/O gets path-specific guidance without rewriting unrelated Git or binding errors. */
+function specFileIO<T>(path: string, action: string, operation: () => T): T {
+  try { return operation(); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code ?? "I/O failure";
+    const advice = action === "close" ? "retry the scan and inspect local file I/O if the failure repeats" : "restore read access and a stable file, then retry";
+    throw new Error(`spec discovery ${path}: cannot ${action} Markdown (${code}); ${advice}`, { cause: error });
+  }
+}
 function boundedText(value: string, bytes: number): { content: string; truncated: boolean } {
   const buffer = Buffer.from(value);
   if (buffer.length <= bytes) return { content: value, truncated: false };
@@ -212,13 +221,14 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
       const paths = this.adapter ? this.adapter.paths() : readdirSync(notesDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).filter(entry => entry.name.endsWith(".md") && entry.isFile()).map(entry => entry.name);
       for (const path of paths) {
         this.adapter?.validatePath(path);
-        const file = join(this.adapter ? this.root : notesDir, path), before = lstatSync(file);
+        const file = join(this.adapter ? this.root : notesDir, path);
+        const before = this.adapter ? specFileIO(path, "inspect", () => lstatSync(file)) : lstatSync(file);
         if (!before.isFile() || before.isSymbolicLink()) throw new Error(this.adapter ? `spec discovery ${path}: selected path changed; restore a plain file and retry` : `vault ${this.vault.id}: note path changed`);
         if (before.size > MAX_NOTE_BYTES) throw new Error(this.adapter ? `spec discovery ${path}: Markdown exceeds ${MAX_NOTE_BYTES} bytes; split the file before rebuilding` : `vault ${this.vault.id}, ${path}: note exceeds ${MAX_NOTE_BYTES} bytes`);
         live.add(path); present.add(path);
         if (options.captureInvalidFrontmatter || this.adapter) {
           analysisBytes += before.size;
-          if (present.size > 10000 || analysisBytes > 64 * 1024 * 1024) throw new Error(this.adapter ? "spec discovery: more than 10000 Markdown files or 64 MiB of input; reduce the repository discovery scope before rebuilding" : "analysis: snapshot exceeds bound");
+          if (present.size > 10000 || analysisBytes > 64 * 1024 * 1024) throw new Error(this.adapter ? `spec discovery ${path}: more than 10000 Markdown files or 64 MiB of input; ignore large or vendored Markdown via .gitignore and untrack already-tracked excluded files with git rm --cached before rebuilding` : "analysis: snapshot exceeds bound");
         }
         const old = previous.get(path), stamp = metadata(before);
         if (!this.adapter && !rebuild && old?.metadata === stamp && this.db.query("SELECT 1 FROM analysis_notes WHERE path=?").get(path)) continue;
@@ -226,29 +236,29 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
         let source: string, hash: string;
         if (cached && old) { source = cached.source; hash = old.hash; }
         else {
-          const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+          const fd = this.adapter ? specFileIO(path, "open", () => openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)) : openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
           let buffer: Buffer;
           try {
-            const stat = fstatSync(fd);
+            const stat = this.adapter ? specFileIO(path, "inspect", () => fstatSync(fd)) : fstatSync(fd);
             if (!stat.isFile() || stat.size > MAX_NOTE_BYTES || metadata(stat) !== stamp) throw new Error(this.adapter ? `spec discovery ${path}: file changed during scan; retry on a stable worktree` : `vault ${this.vault.id}, ${path}: note changed during scan`);
             // Fixed bound even if a concurrent writer grows the file.
             buffer = Buffer.alloc(MAX_NOTE_BYTES + 1);
             let size = 0;
             for (;;) {
-              const count = readSync(fd, buffer, size, buffer.length - size, null);
+              const count = this.adapter ? specFileIO(path, "read", () => readSync(fd, buffer, size, buffer.length - size, null)) : readSync(fd, buffer, size, buffer.length - size, null);
               size += count;
               if (!count || size === buffer.length) break;
             }
             buffer = buffer.subarray(0, size);
-            if (size > MAX_NOTE_BYTES || metadata(fstatSync(fd)) !== stamp) throw new Error(this.adapter ? `spec discovery ${path}: file changed during scan; retry on a stable worktree` : `vault ${this.vault.id}, ${path}: note changed during scan`);
-          } finally { closeSync(fd); }
+            if (size > MAX_NOTE_BYTES || metadata(this.adapter ? specFileIO(path, "inspect", () => fstatSync(fd)) : fstatSync(fd)) !== stamp) throw new Error(this.adapter ? `spec discovery ${path}: file changed during scan; retry on a stable worktree` : `vault ${this.vault.id}, ${path}: note changed during scan`);
+          } finally { if (this.adapter) specFileIO(path, "close", () => closeSync(fd)); else closeSync(fd); }
           if (this.adapter) {
             try { source = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer); }
             catch { throw new Error(`spec discovery ${path}: Markdown is not valid UTF-8; re-encode the file as UTF-8 before rebuilding`); }
           } else source = buffer.toString("utf8");
           hash = digest(buffer);
           this.adapter?.validatePath(path);
-          if (this.adapter && metadata(lstatSync(file)) !== stamp) throw new Error(`spec discovery ${path}: file changed during read; retry on a stable worktree`);
+          if (this.adapter && metadata(specFileIO(path, "inspect", () => lstatSync(file))) !== stamp) throw new Error(`spec discovery ${path}: file changed during read; retry on a stable worktree`);
           this.db.query("INSERT OR REPLACE INTO analysis_notes VALUES (?,?,?,?)").run(path, source, hash, stamp);
         }
         if (!this.adapter && !rebuild && old?.hash === hash) { this.db.query("UPDATE notes SET metadata=? WHERE path=?").run(stamp, path); continue; }
@@ -261,7 +271,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
         }
         if (this.adapter) {
           this.adapter.validatePath(path);
-          if (metadata(lstatSync(file)) !== stamp) throw new Error(`spec discovery ${path}: file changed during scan; retry on a stable worktree`);
+          if (metadata(specFileIO(path, "inspect", () => lstatSync(file))) !== stamp) throw new Error(`spec discovery ${path}: file changed during scan; retry on a stable worktree`);
           if (!this.adapter.accept(path, document, hash)) { live.delete(path); continue; }
           const row = this.db.query<{hash:string}, [string]>("SELECT hash FROM notes WHERE path=?").get(path);
           if (!rebuild && row?.hash === hash) { this.db.query("UPDATE notes SET metadata=? WHERE path=?").run(stamp, path); continue; }

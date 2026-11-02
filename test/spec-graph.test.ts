@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { addSpec } from "../src/registry.ts";
@@ -289,5 +289,169 @@ test("constructor Git and binding failures do not receive cache-directory advice
     expect(child.stdout.toString()).toContain(mode === "timeout" ? "timed out" : "binding changed");
     expect(child.stdout.toString()).not.toContain("cache directory");
   }
-  expect(() => new SpecIndex(join(repo, "cache"), source)).toThrow("choose a readable plain cache directory");
+  expect(() => new SpecIndex(join(repo, "cache"), source)).toThrow("choose VMEM_HOME outside every repository and vault");
+});
+
+test("NFD-named directories and files survive Git precomposition during discovery and indexing", () => {
+  const f = fixture(), repo = f.repo("repo");
+  const path = `${"é-한글".normalize("NFD")}/${"설계-é.md".normalize("NFD")}`;
+  f.git(repo, ["config", "core.precomposeunicode", "true"]);
+  f.write(repo, path, spec("normalized", {}, "Normalizedquasar."));
+  f.commit(repo);
+  const source = f.source(repo), snapshot = discoverSpecs(source);
+  expect(snapshot.specs.map(document => document.id)).toEqual(["normalized"]);
+  expect(snapshot.specs[0]?.path.normalize("NFC")).toBe("é-한글/설계-é.md");
+  expect(snapshot.diagnostics.filter(item => item.code === "skipped_path")).toEqual([]);
+  const index = new SpecIndex(f.home, source);
+  try {
+    index.scan();
+    expect(index.search("Normalizedquasar")[0]?.id).toBe("normalized");
+    expect(index.snapshot().specs[0]?.path.normalize("NFC")).toBe(path.normalize("NFC"));
+  } finally { index.close(); }
+});
+
+test("case aliases resolve on case-insensitive filesystems and missing indexed spellings are diagnosed otherwise", () => {
+  const f = fixture(), repo = f.repo("repo");
+  f.git(repo, ["config", "core.ignorecase", "true"]);
+  f.write(repo, "Case.md", spec("case", {}, "Casequasar.")); f.commit(repo);
+  renameSync(join(repo, "Case.md"), join(repo, "temporary.md"));
+  renameSync(join(repo, "temporary.md"), join(repo, "case.md"));
+  const snapshot = discoverSpecs(f.source(repo));
+  if (existsSync(join(repo, "Case.md"))) {
+    expect(snapshot.specs.map(document => document.id)).toEqual(["case"]);
+    expect(snapshot.diagnostics.filter(item => item.code === "skipped_path")).toEqual([]);
+  } else {
+    expect(snapshot.diagnostics).toContainEqual(expect.objectContaining({ code: "skipped_path", path: "Case.md", message: expect.stringContaining("missing") }));
+  }
+});
+
+test("every listed path excluded by file guards has a diagnostic", () => {
+  const f = fixture(), repo = f.repo("repo"), outside = join(f.root, "outside");
+  f.write(repo, "SPEC.md", spec("root"));
+  for (const path of ["gone.md", "nonfile.md", "blocked/file.md"]) f.write(repo, path, spec(path));
+  f.commit(repo);
+  f.write(outside, "file.md", spec("external"));
+  rmSync(join(repo, "gone.md")); rmSync(join(repo, "nonfile.md")); mkdirSync(join(repo, "nonfile.md"));
+  renameSync(join(repo, "blocked"), join(f.root, "original-blocked"));
+  symlinkSync(outside, join(repo, "blocked"));
+  symlinkSync(join(outside, "file.md"), join(repo, "linked.md"));
+  const source = f.source(repo), before = tree(f.root), snapshot = discoverSpecs(source);
+  const skipped = snapshot.diagnostics.filter(item => item.code === "skipped_path");
+  expect(skipped.map(item => item.path)).toEqual(["blocked/file.md", "gone.md", "linked.md", "nonfile.md"]);
+  for (const item of skipped) expect(item.message).toContain(item.path);
+  expect(snapshot.specs.map(document => document.id)).toEqual(["root"]);
+  expect(tree(f.root)).toEqual(before);
+});
+
+test("cache messages have one prefix and one applicable hint, and scan keeps Git cause and advice", () => {
+  const f = fixture(), repo = f.repo("repo"); f.write(repo, "SPEC.md", spec("root"));
+  const source = f.source(repo);
+  const failure = (operation: () => unknown): Error => {
+    try { operation(); } catch (error) { expect(error).toBeInstanceOf(Error); return error as Error; }
+    throw new Error("expected synthetic operation to fail");
+  };
+  const protectedError = failure(() => new SpecIndex(join(repo, "cache"), source));
+  expect(protectedError.message.match(/spec index:/g)).toHaveLength(1);
+  expect(protectedError.message.match(/choose/g)).toHaveLength(1);
+  expect(protectedError.message).toContain("choose VMEM_HOME");
+  expect(protectedError.cause).toBeInstanceOf(Error);
+  const target = join(f.root, "external-cache"); mkdirSync(target);
+  symlinkSync(target, join(f.home, "indexes"));
+  const cacheError = failure(() => new SpecIndex(f.home, source));
+  expect(cacheError.message.match(/spec index:/g)).toHaveLength(1);
+  expect(cacheError.message).toContain("choose a readable plain cache directory");
+  expect(cacheError.cause).toBeInstanceOf(Error);
+  rmSync(join(f.home, "indexes"));
+  const env = { ...process.env }, index = new SpecIndex(f.home, source, { env });
+  try {
+    index.scan(); env.PATH = join(f.root, "no-git");
+    const gitError = failure(() => index.scan());
+    expect(gitError.message).toContain("install git or fix PATH");
+    expect(gitError.message).not.toContain("restore a stable, readable worktree");
+    expect((gitError.cause as NodeJS.ErrnoException).code).toBe("ENOENT");
+  } finally { index.close(); }
+});
+
+test("temporary root or ancestor rebinding cannot introduce outside Markdown into a source", () => {
+  for (const ancestor of [false, true]) for (const link of [false, true]) {
+    const f = fixture();
+    if (ancestor) mkdirSync(join(f.root, "container"));
+    const repo = f.repo(ancestor ? "container/repo" : "repo"), entry = ancestor ? dirname(repo) : repo;
+    const backup = join(f.root, "original"), outside = join(f.root, "outside");
+    f.write(repo, "SPEC.md", spec("inside", {}, "Insidequasar."));
+    f.write(outside, ancestor ? "repo/SPEC.md" : "SPEC.md", spec("outside", {}, "Outsidequasar."));
+    const source = f.source(repo);
+    const child = Bun.spawnSync([process.execPath, "-e", `
+      import { mock } from "bun:test";
+      const fs = await import("node:fs"), original = { ...fs };
+      const cp = await import("node:child_process"), spawn = cp.spawnSync;
+      const root = ${JSON.stringify(repo)}, entry = ${JSON.stringify(entry)}, backup = ${JSON.stringify(backup)}, outside = ${JSON.stringify(outside)};
+      let swapped = false, link = ${JSON.stringify(link)};
+      const restore = () => { if (swapped) { if (link) original.unlinkSync(entry); else original.renameSync(entry, outside); original.renameSync(backup, entry); swapped = false; } };
+      mock.module("node:fs", () => ({ ...original, realpathSync: (...args) => {
+        if (swapped && String(args[0]) === root) restore();
+        return original.realpathSync(...args);
+      } }));
+      mock.module("node:child_process", () => ({ ...cp, spawnSync: (...args) => {
+        const result = spawn(...args);
+        if (args[1].includes("ls-files")) { original.renameSync(entry, backup); if (link) original.symlinkSync(outside, entry); else original.renameSync(outside, entry); swapped = true; }
+        return result;
+      } }));
+      const { SpecIndex } = await import("./src/spec-source.ts");
+      let index;
+      try {
+        index = new SpecIndex(${JSON.stringify(f.home)}, ${JSON.stringify(source)});
+        index.scan();
+        console.log(JSON.stringify({ ids: index.snapshot().specs.map(spec => spec.id), outsideHits: index.search("Outsidequasar").length, skipped: index.snapshot().diagnostics.some(item => item.code === "skipped_path") }));
+      } finally { index?.close(); restore(); }
+    `], { stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    const result = JSON.parse(child.stdout.toString());
+    expect(result.ids).not.toContain("outside");
+    expect(result.outsideHits).toBe(0);
+    expect(result.skipped).toBe(true);
+    expect(readFileSync(join(repo, "SPEC.md"), "utf8")).toContain("Insidequasar");
+  }
+});
+
+test.skipIf(process.getuid?.() === 0)("unreadable plain Markdown names its relative file and repair step", () => {
+  const f = fixture(), repo = f.repo("repo"), path = "nested/unreadable.md";
+  f.write(repo, path, spec("unreadable"));
+  const source = f.source(repo), file = join(repo, path);
+  chmodSync(file, 0);
+  try {
+    let failure: unknown;
+    try { discoverSpecs(source); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) throw new Error("expected a synthetic read refusal");
+    expect(failure.message).toContain(path);
+    expect(failure.message).toContain("restore read access");
+    expect((failure.cause as NodeJS.ErrnoException).code).toBe("EACCES");
+  } finally { chmodSync(file, 0o600); }
+});
+
+test("spec descriptor open and read errors retain file-specific repair guidance and causes", () => {
+  const f = fixture(), repo = f.repo("repo"), path = "nested/descriptor.md";
+  f.write(repo, path, spec("descriptor"));
+  const source = f.source(repo);
+  for (const mode of ["open", "read"]) {
+    const child = Bun.spawnSync([process.execPath, "-e", `
+      import { mock } from "bun:test";
+      const fs = await import("node:fs"), original = { ...fs };
+      const file = ${JSON.stringify(join(repo, path))}, mode = ${JSON.stringify(mode)}; let target;
+      mock.module("node:fs", () => ({ ...original,
+        openSync: (...args) => { if (mode === "open" && String(args[0]) === file) throw Object.assign(new Error("synthetic denied"), { code: "EACCES" }); const fd = original.openSync(...args); if (String(args[0]) === file) target = fd; return fd; },
+        readSync: (...args) => { if (mode === "read" && args[0] === target) throw Object.assign(new Error("synthetic read failed"), { code: "EIO" }); return original.readSync(...args); }
+      }));
+      const { discoverSpecs } = await import("./src/spec-source.ts");
+      try { discoverSpecs(${JSON.stringify(source)}); process.exit(2); }
+      catch (error) { console.log(JSON.stringify({ message: error.message, code: error.cause?.code })); }
+    `], { stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    const result = JSON.parse(child.stdout.toString());
+    expect(result.message).toContain(path);
+    expect(result.message).toContain(`cannot ${mode} Markdown`);
+    expect(result.message).toContain("restore read access");
+    expect(result.code).toBe(mode === "open" ? "EACCES" : "EIO");
+  }
 });
