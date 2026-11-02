@@ -1,3 +1,5 @@
+import { createSpecMcp } from "./mcp-spec.ts";
+import { SPEC_COMMANDS } from "./spec-command-table.ts";
 import { analysisInput } from "./analysis-input.ts";
 import { buildGraph, graphNeighbors } from "./vault-graph.ts";
 import { lintVault } from "./vault-lint.ts";
@@ -27,7 +29,7 @@ const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLeng
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote", "vmem_skills_mine"] as const;
+  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote", "vmem_skills_mine", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Tool definitions for a fixed vault set: `vault` is an enum of the registered ids. */
 export function vaultTools(ids: readonly string[], orgIds: readonly string[] = []): McpTool[] {
@@ -169,11 +171,13 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
       return { ...receipt, backlinks };
     },
   };
+  const specs = createSpecMcp(home, env);
+  Object.assign(handlers, specs.handlers);
   // Every handler returns a structured value; provider errors become refusals, never protocol errors.
   const guarded: Record<string, McpHandler> = {};
   for (const [name, handler] of Object.entries(handlers)) guarded[name] = async args => {
     try { return await handler(args); }
     catch (error) { return refusal((error as { code?: unknown }).code === "V04" ? "V04" : "REFUSED", error instanceof Error ? error.message.slice(0, 500) : "operation refused"); }
   };
-  return { tools: vaultTools(ids, vaults.filter(v => v.kind === "org").map(v => v.id)), handlers: guarded, vaults, defaultVault };
+  return { tools: [...vaultTools(ids, vaults.filter(v => v.kind === "org").map(v => v.id)), ...specs.tools], handlers: guarded, vaults, defaultVault };
 }

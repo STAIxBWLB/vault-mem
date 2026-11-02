@@ -342,7 +342,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     const notes = this.db.query<{path: string; source: string}, []>("SELECT path,source FROM analysis_notes ORDER BY path").all();
     return { ...inputs, notes };
   }
-  search(query: string, options: SearchOptions = {}, snapshot?: ReadonlyMap<string, string>): SearchResult[] {
+  search(query: string, options: SearchOptions = {}, snapshot?: ReadonlyMap<string, string>, snapshotOffset = 0, allSnapshotRows = false): SearchResult[] {
     const limit = resultLimit(options.limit);
     if (!query.trim() || Buffer.byteLength(query) > 1024) throw new Error("search: query must contain 1..1024 bytes");
     // Literal AND terms: users cannot inject FTS operators, columns or SQL.
@@ -350,8 +350,9 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     const hashColumn = snapshot ? ",n.hash AS sourceHash" : "";
     return this.db.query<SearchResult & { sourceHash?: string }, [string, string | null, string | null, string | null, string | null, number]>(`SELECT n.path, n.title, substr(n.description,1,512) AS description, n.type, n.domain,
       bm25(fts,0,5,2,1) AS score, snippet(fts,3,'','',' ... ',32) AS snippet${hashColumn} FROM fts JOIN notes n ON n.path=fts.path
-      WHERE fts MATCH ? AND (? IS NULL OR n.type=?) AND (? IS NULL OR n.domain=?) ORDER BY score,n.path LIMIT ?`).all(terms, options.type ?? null, options.type ?? null, options.domain ?? null, options.domain ?? null, limit)
+      WHERE fts MATCH ? AND (? IS NULL OR n.type=?) AND (? IS NULL OR n.domain=?) ORDER BY score,n.path LIMIT ?`).all(terms, options.type ?? null, options.type ?? null, options.domain ?? null, options.domain ?? null, snapshot ? 10000 : limit)
       .filter(row => !snapshot || snapshot.get(row.path) === row.sourceHash)
+      .slice(snapshot ? snapshotOffset : 0, (snapshot ? snapshotOffset : 0) + (snapshot && allSnapshotRows ? 10000 : limit))
       .map(({ sourceHash: _, ...row }) => ({ ...row, title: boundedText(row.title, 512).content, snippet: boundedText(row.snippet, 1024).content, type: boundedText(row.type, 256).content, domain: boundedText(row.domain, 256).content }));
   }
   private find(target: string): string {
