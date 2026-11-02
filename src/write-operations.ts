@@ -67,10 +67,12 @@ function replaceTopicsList(body: string, topics: string[], newline: string): str
   const list = topics.map(topic => `- ${topic}`).join(newline);
   if (start < 0) return body + (body && !body.endsWith("\n") ? newline : "") + newline + `## Topics${newline}${newline}${list}${newline}`;
   const items = new Set<number>();
-  // Only the leading run of blank and list lines is the Topics list; the first other line (heading, prose, fence) ends it.
+  // The Topics list is the leading run of list lines as V05 sees them: blank and fenced lines continue it (fences are kept),
+  // the first visible heading or prose line ends it.
   for (let i = start + 1; i < raw.length; i++) {
-    if (/^[ \t]*(?:[-*+][ \t]+)?(\[\[[^\]|#]+\]\])[ \t]*$/.test(visible[i] ?? "")) items.add(i);
-    else if (raw[i]!.trim()) break;
+    const line = visible[i] ?? "";
+    if (/^[ \t]*(?:[-*+][ \t]+)?(\[\[[^\]|#]+\]\])[ \t]*$/.test(line)) items.add(i);
+    else if (line.trim()) break;
   }
   const first = items.values().next().value;
   if (first === undefined) {

@@ -424,6 +424,11 @@ test("frontmatter Topics refiling replaces only the leading list run and keeps l
   const f = fixture(), file = join(f.notes, "old.md");
   writeFileSync(join(f.notes, "other.md"), "---\ntype: moc\ndescription: Another synthetic directory.\n---\n# Other\n");
   writeFileSync(join(f.notes, "foo.md"), note("Foo Finding"));
+  // A fence between the heading and the list (valid for V05) is kept and the list is still replaced in place.
+  const fenced = note("Old Finding").replace("- [[research]]", "```dataview\nLIST\n```\n\n- [[research]]");
+  writeFileSync(file, fenced);
+  expect(f.request({ op: "frontmatter", path: "old", set: { topics: ["[[other]]"] } }).ok).toBe(true);
+  expect(parseFrontmatter(readFileSync(file, "utf8")).body).toBe(parseFrontmatter(fenced).body.replace("- [[research]]", "- [[other]]"));
   for (const tail of ["\n### Related\n- [[foo]]\n- [[research]]\n", "\nSee also:\n[[foo]]\n"]) {
     const original = note("Old Finding").replace(/\n?$/, "\n") + tail;
     writeFileSync(file, original);
