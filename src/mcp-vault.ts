@@ -44,7 +44,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_mocs", "MOC notes with incoming link counts.", object({ vault })),
     tool("vmem_check", "Validate a prospective note text without writing.", object({ vault, path: string(200), text: string(262144, 0) }, ["text"])),
     tool("vmem_log_tail", "Read the newest vault log lines, optionally filtered.", object({ vault, n: integer(1, 200), type: { type: "string", enum: LOG_TYPES }, grep: string(256) })),
-    tool("vmem_create", "Create a validated note. Requires a vault with write=mcp.", object({ vault, stem: string(200), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), source: { type: ["string", "array"], minLength: 1, maxLength: 512, minItems: 1, maxItems: 32, items: string(512) }, confidence: string(32), status: string(32), extra: { type: "object", maxProperties: 32, additionalProperties: scalar }, log: logEvent }, ["stem", "type", "domain", "description"]), "write"),
+    tool("vmem_create", "Create a validated note. Requires a vault with write=mcp.", object({ vault, stem: string(200), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), source: { type: ["string", "array"], minLength: 1, maxLength: 512, minItems: 1, maxItems: 32, items: string(512) }, confidence: string(32), status: string(32), created: string(32, 0), extra: { type: "object", maxProperties: 32, additionalProperties: scalar }, log: logEvent }, ["stem", "type", "domain", "description"]), "write"),
     tool("vmem_patch", "Replace one exact string in a note.", object({ vault, path: note, oldString: string(8192), newString: string(8192, 0), expectedSha: sha }, ["path", "oldString", "newString"]), "write"),
     tool("vmem_append", "Append markdown to a section of a note.", object({ vault, path: note, section: string(120), markdown: string(16384), expectedSha: sha }, ["path", "section", "markdown"]), "write"),
     tool("vmem_set_frontmatter", "Set or unset frontmatter keys of a note.", object({ vault, path: note, set: { type: "object", maxProperties: 32, additionalProperties: scalar }, unset: { type: "array", maxItems: 32, items: string(64) }, expectedSha: sha }, ["path"]), "write"),
@@ -140,8 +140,12 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_check: args => write(args, { op: "check", path: notePath(str(args.path) ?? "checked-note"), text: str(args.text)! }),
     vmem_log_tail: args => readLog(home, { vault: pick(args).id, limit: (args.n as number | undefined) ?? 50, ...(str(args.type) ? { type: str(args.type) } : {}), ...(str(args.grep) ? { grep: str(args.grep) } : {}) }),
     vmem_create: args => {
+      if (args.created !== undefined) {
+        const created = str(args.created), time = typeof created === "string" && /^\d{4}-\d{2}-\d{2}$/.test(created) ? Date.parse(created + "T00:00:00Z") : NaN;
+        if (!Number.isFinite(time) || new Date(time).toISOString().slice(0, 10) !== created) return refusal("V01", "created: expected YYYY-MM-DD");
+      }
       const frontmatter: Record<string, unknown> = { ...(args.extra as Record<string, unknown> | undefined ?? {}) };
-      for (const key of ["type", "domain", "description", "title", "source", "confidence", "status"]) if (str(args[key]) !== undefined) frontmatter[key] = args[key];
+      for (const key of ["type", "domain", "description", "title", "source", "confidence", "status", "created"]) if (str(args[key]) !== undefined) frontmatter[key] = args[key];
       if (Array.isArray(args.source)) frontmatter.source = args.source as string[];
       if (Array.isArray(args.topics)) frontmatter.topics = (args.topics as string[]).map(v => v.startsWith("[[") ? v : `[[${v}]]`);
       return write(args, { op: "create", path: str(args.stem)!, frontmatter, ...(str(args.body) !== undefined ? { body: str(args.body) } : {}) });

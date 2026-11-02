@@ -8,7 +8,7 @@ export function runLogCommand(args: string[], home: string, env: NodeJS.ProcessE
   for (let i = 1; i < args.length; i++) {
     const word = args[i]!;
     if (!word.startsWith("--")) { positional.push(word); continue; }
-    if (Object.hasOwn(flags, word) || (word !== "--json" && !values.includes(word))) throw new Error("log: unknown or repeated option");
+    if (Object.hasOwn(flags, word) || (word !== "--json" && !values.includes(word))) throw new Error(`log ${command}: unknown or repeated option: ${word}`);
     if (word === "--json") flags[word] = true;
     else {
       const value = args[++i]; if (value === undefined || value.startsWith("--")) throw new Error("log: option value required");

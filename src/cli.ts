@@ -28,8 +28,17 @@ function parse(args: string[], allowed: string[], values: string[]) {
   }
   return { flags, positional };
 }
+function commandHelp(args: string[]): string | undefined {
+  if (!["--help", "-h"].includes(args.at(-1) ?? "")) return undefined;
+  const name = args.slice(0, -1).join(" ");
+  if (!name) return undefined;
+  const commands = COMMANDS.filter(command => command.name === name || command.name.startsWith(name + " "));
+  return commands.length ? commands.map(command => `Usage: vmem ${command.usage}`).join("\n") : undefined;
+}
 export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
   if (!args.length || (args.length === 1 && ["--help", "-h", "help"].includes(args[0]!))) return { text: help(), code: 0 };
+  const usage = commandHelp(args);
+  if (usage) return { text: usage, code: 0 };
   if (args.length === 1 && args[0] === "--version") return { text: version, code: 0 };
   if (args[0] === "manifest") {
     const { flags, positional } = parse(args.slice(1), ["--json"], []);
@@ -142,6 +151,8 @@ export async function runMcp(env: NodeJS.ProcessEnv = process.env): Promise<void
 }
 /** Async commands. Only `promote-from-amem` and `skills mine` load the agent-mem seam, and only when they run. */
 export async function runAsync(args: string[], env: NodeJS.ProcessEnv = process.env, io: { stdinIsTTY?: boolean } = {}): Promise<{ text: string; code: number }> {
+  const usage = commandHelp(args);
+  if (usage) return { text: usage, code: 0 };
   if (args[0] === "skills") {
     const { runSkillsCommand } = await import("./skills-mine.ts");
     return runSkillsCommand(args.slice(1), resolveHome(env).home, env);

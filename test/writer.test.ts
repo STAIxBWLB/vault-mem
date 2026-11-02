@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { addVault } from "../src/registry.ts";
 import { applyWrite, sha256, MUTATION_LOCK } from "../src/writer.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
-import { run } from "../src/cli.ts";
+import { run, runAsync } from "../src/cli.ts";
+import { COMMANDS } from "../src/commands-table.ts";
 import type { WriteOp, WriteRequest } from "../src/write-types.ts";
 const roots: string[] = [];
 function note(title: string, body = "A synthetic finding.", extra: Record<string, unknown> = {}): string {
@@ -449,4 +450,27 @@ test("frontmatter inserts a missing Topics list after its heading without deleti
   expect(result.ok).toBe(true);
   const after = parseFrontmatter(readFileSync(file, "utf8"));
   expect(after.body).toBe(parseFrontmatter(original).body.replace("## Topics\n", "## Topics\n- [[other]]\n"));
+});
+
+test("writer and log errors name rejected options and writer arity derives from usage", () => {
+  const f = fixture();
+  expect(() => run(["check", "test", "a", "--bogus"], f.env)).toThrow("check: unknown or repeated option: --bogus");
+  expect(() => run(["check", "test", "a", "--json", "--json"], f.env)).toThrow("check: unknown or repeated option: --json");
+  expect(() => run(["check", "test", "a", "b", "c", "d", "e", "f", "g"], f.env)).toThrow("check: takes <vault> and one <file|->; got 7 targets");
+  expect(() => run(["patch", "test"], f.env)).toThrow("patch: takes <vault> and one <note>; got 0 targets");
+  expect(() => run(["link", "test", "a"], f.env)).toThrow("link: takes <vault> and <from> and <to>; got 1 targets");
+  expect(() => run(["log", "tail", "test", "--bogus"], f.env)).toThrow("log tail: unknown or repeated option: --bogus");
+  expect(() => run(["log", "tail", "test", "--json", "--json"], f.env)).toThrow("log tail: unknown or repeated option: --json");
+});
+
+test("per-command help uses the usage table before parsing or loading a home", async () => {
+  for (const command of COMMANDS) for (const flag of ["--help", "-h"]) {
+    const result = await runAsync([...command.name.split(" "), flag], { VMEM_HOME: "invalid-relative-home" });
+    expect(result).toEqual({ code: 0, text: `Usage: vmem ${command.usage}` });
+  }
+  expect(run(["check", "--help"], { VMEM_HOME: "invalid-relative-home" })).toMatchObject({ code: 0, text: expect.stringContaining("check <vault> <file|->") });
+  const result = Bun.spawnSync([process.execPath, "bin/vmem.js", "check", "--help"], { env: { ...process.env, VMEM_HOME: "invalid-relative-home" }, stdout: "pipe", stderr: "pipe" });
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString()).toContain("check <vault> <file|->");
+  expect(result.stderr.toString()).toBe("");
 });
