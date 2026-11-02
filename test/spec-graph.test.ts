@@ -239,6 +239,23 @@ test("shared-cache searches exclude paths and replacements outside the instance 
   } finally { a.close(); b.close(); }
 });
 
+test("snapshot search fills pages after filtering shared-cache rows and applies continuation offsets", () => {
+  const f = fixture(), repo = f.repo("repo");
+  f.write(repo, "a.md", spec("a", {}, "Sharedpagingword."));
+  f.write(repo, "b.md", spec("b", {}, "Sharedpagingword."));
+  const source = f.source(repo), a = new SpecIndex(f.home, source), b = new SpecIndex(f.home, source);
+  try {
+    a.scan();
+    f.write(repo, "0.md", spec("zero", {}, "Sharedpagingword.")); b.scan();
+    const expected = a.search("Sharedpagingword").map(hit => hit.id);
+    expect(expected).toHaveLength(2);
+    expect(a.search("Sharedpagingword", { limit: 1 }).map(hit => hit.id)).toEqual(expected.slice(0, 1));
+    expect(a.search("Sharedpagingword", { limit: 1, offset: 1 }).map(hit => hit.id)).toEqual(expected.slice(1, 2));
+    expect(a.search("Sharedpagingword", { limit: 1, offset: 2 })).toEqual([]);
+    expect(() => a.search("Sharedpagingword", { offset: -1 })).toThrow("offset");
+  } finally { a.close(); b.close(); }
+});
+
 test("spec file failures name relative paths and keep spec wording during read drift", () => {
   const f = fixture(), repo = f.repo("repo"), path = "nested/changed-during.md";
   f.write(repo, path, spec("changed", {}, "Synthetic original."));

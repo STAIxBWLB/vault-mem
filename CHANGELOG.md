@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add read-only spec MCP tools and CLI get/graph/grep/validate commands from a shared bounded schema table, registry-free `spec validate --repo` CI mode, worktree-aware source selection, body/search pagination and metadata/path-scope filters. Spec snapshot filtering precedes FTS pagination; new read tools appear in the manifest. Spec content write tools remain deferred (#91 T5).
+
 - Add spec validation reports, complete-tree introduced-error comparison, computed path-scoped freshness, tracked-file coversPath matching and registry-free validation library (#91 T3/T6), with a portable synthetic schema fixture. Candidate, link-list/path-list and supersession rules follow the confirmed schema. Discovery ignores inherited Git pathspec modes, skips oversized/non-UTF8 non-candidates with diagnostics, and performs Git inspection outside cache writer transactions. CLI/MCP wiring remains T5 and spec content writes remain deferred.
 
 ## [0.3.2] - 2026-11-02

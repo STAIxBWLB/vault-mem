@@ -1,10 +1,11 @@
+import { specGit } from "../src/spec-git.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { addVault } from "../src/registry.ts";
+import { addSpec, addVault } from "../src/registry.ts";
 import { serveMcp, FRAME_BYTES, validArguments, argumentError } from "../src/mcp.ts";
 import { createVaultMcp, VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
 const roots: string[] = [];
@@ -46,7 +47,7 @@ test("tools/list: vault enum is the registered ids, default is first personal, e
   expect(tools.map(t => t.name)).toEqual([...VMEM_TOOL_NAMES]);
   for (const t of tools) {
     expect(t.inputSchema.additionalProperties).toBe(false);
-    if (!["vmem_status", "vmem_promote"].includes(t.name)) expect(t.inputSchema.properties.vault.enum).toEqual(["team", "mine"]);
+    if (!t.name.startsWith("vmem_spec_") && !["vmem_status", "vmem_promote"].includes(t.name)) expect(t.inputSchema.properties.vault.enum).toEqual(["team", "mine"]);
     for (const [key, schema] of Object.entries<any>(t.inputSchema.properties)) {
       if (schema.type === "string" && !schema.enum) expect(schema.maxLength, `${t.name}.${key}`).toBeLessThanOrEqual(262144);
       if (schema.type === "array") expect(schema.maxItems).toBeLessThanOrEqual(64);
@@ -54,7 +55,7 @@ test("tools/list: vault enum is the registered ids, default is first personal, e
   }
   expect(tools.filter(t => t.annotations.destructiveHint).map(t => t.name)).toEqual(["vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_promote"]);
   // Graph, agent-mem and org-promotion providers are implemented; the org target is an enum of registered org vaults.
-  expect(tools.filter(t => /graph/.test(t.name)).map(t => t.name)).toEqual(["vmem_graph_build", "vmem_graph_neighbors"]);
+  expect(tools.filter(t => /graph/.test(t.name)).map(t => t.name)).toEqual(["vmem_graph_build", "vmem_graph_neighbors", "vmem_spec_graph"]);
   expect(tools.find(t => t.name === "vmem_promote").inputSchema.properties.to.enum).toEqual(["team"]);
 });
 
@@ -217,4 +218,57 @@ test("vmem_create accepts a top-level created date and refuses invalid calendar 
   }
   const [extra] = await session(f.home, [call("vmem_create", { ...base, stem: "legacy-date", extra: { created: "legacy date" } })]);
   expect(payload(extra).ok).toBe(true); // No writer-level date rule was added.
+});
+
+
+test("spec MCP tools expose bounded reads, named argument failures and startup registry binding", async () => {
+  const f = fixture(), repo = join(f.root, "spec-repo"); mkdirSync(repo);
+  specGit(repo, ["-c", "init.templateDir=", "init", "--quiet"]);
+  writeFileSync(join(repo, "SPEC.md"), "---\nid: root\ntype: goal\ntitle: Synthetic root\n---\n# Root\n\nLantern body.\n");
+  addSpec(f.home, { id: "specs", path: repo });
+  const [get, grep, graph, validate, bad] = await session(f.home, [
+    call("vmem_spec_get", { id: "root", body: true }), call("vmem_spec_grep", { query: "Lantern" }),
+    call("vmem_spec_graph", { id: "root" }), call("vmem_spec_validate"), call("vmem_spec_get", { id: "root", unexpected: "never-echo-this" }),
+  ]);
+  expect(payload(get)).toMatchObject({ id: "root", path: "SPEC.md", sha256: expect.any(String) });
+  expect(payload(grep).hits.map((hit: any) => hit.id)).toEqual(["root"]);
+  expect(payload(graph).nodes.map((node: any) => node.id)).toEqual(["root"]);
+  expect(payload(validate)).toMatchObject({ ok: true, errors: 0 });
+  expect(bad.error).toMatchObject({ code: -32602, message: expect.stringContaining("unexpected") });
+  expect(JSON.stringify(bad)).not.toContain("never-echo-this");
+  const server = createVaultMcp(f.home);
+  writeFileSync(join(f.home, "config.json"), JSON.stringify({ specs: [] }));
+  expect(await server.handlers.vmem_spec_get!({ id: "root" })).toMatchObject({ refused: true, issues: [expect.objectContaining({ message: expect.stringContaining("registry changed") })] });
+});
+
+
+test("spec tools find nested designs, isolate linked worktrees, refuse foreign roots and match coversPath", async () => {
+  const f = fixture(), repo = join(f.root, "tool-repo"), linked = join(f.root, "tool-linked"), foreign = join(f.root, "foreign"); mkdirSync(repo); mkdirSync(foreign);
+  const git = (args: string[]) => specGit(repo, ["-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid", "-c", "commit.gpgsign=false", ...args]);
+  git(["-c", "init.templateDir=", "init", "--quiet"]);
+  specGit(foreign, ["-c", "init.templateDir=", "init", "--quiet"]);
+  mkdirSync(join(repo, "nested")); mkdirSync(join(repo, "src")); mkdirSync(join(repo, "ignored"));
+  writeFileSync(join(repo, ".gitignore"), "ignored/\n"); writeFileSync(join(repo, "src/a.ts"), "Synthetic source.\n");
+  const design = (id: string, extra = "") => `---\nid: ${id}\ntype: ${id === "root" ? "goal" : "module"}\ntitle: Synthetic ${id}\n${extra}---\n# Synthetic toolmarker\n`;
+  writeFileSync(join(repo, "design.md"), design("root"));
+  writeFileSync(join(repo, "nested/SPEC.md"), design("child", 'parent: "[[root|Goal]]"\npaths: [src/**]\ntags: [storage]\n'));
+  writeFileSync(join(repo, "ignored/SPEC.md"), design("ignored"));
+  symlinkSync(join(repo, "design.md"), join(repo, "alias.md"));
+  git(["add", "."]); git(["commit", "-qm", "Synthetic designs"]); git(["worktree", "add", "-qb", "synthetic-feature", linked]);
+  writeFileSync(join(linked, "design.md"), design("root") + "Featureonlymarker.\n");
+  addSpec(f.home, { id: "toolrepo", path: repo });
+  const [get, graph, grep, covered, feature, main, refused] = await session(f.home, [
+    call("vmem_spec_get", { id: "child" }), call("vmem_spec_graph", { id: "root", direction: "subtree" }),
+    call("vmem_spec_grep", { query: "toolmarker" }), call("vmem_spec_grep", { coversPath: "src/a.ts" }),
+    call("vmem_spec_grep", { query: "Featureonlymarker", worktree: linked }), call("vmem_spec_grep", { query: "Featureonlymarker" }),
+    call("vmem_spec_get", { id: "root", worktree: foreign }),
+  ]);
+  expect(payload(get).links).toContainEqual(expect.objectContaining({ source: "child", target: "root", kind: "parent" }));
+  expect(payload(graph).nodes.map((node: any) => node.id).sort()).toEqual(["child", "root"]);
+  expect(payload(grep).hits.map((hit: any) => hit.id).sort()).toEqual(["child", "root"]);
+  expect(payload(covered).hits.map((hit: any) => hit.id)).toEqual(["child"]);
+  expect(payload(feature).hits.map((hit: any) => hit.id)).toEqual(["root"]);
+  expect(payload(main).hits).toEqual([]);
+  expect(payload(refused)).toMatchObject({ refused: true });
+  expect(git(["status", "--porcelain=v1", "-z"]).stdout).toHaveLength(0);
 });

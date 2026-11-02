@@ -203,10 +203,11 @@ export class SpecIndex {
     } catch (error) { this.current = undefined; throw error; }
   }
   snapshot(): SpecSnapshot { if (!this.current) this.scan(); return this.current!; }
-  search(query: string, options: SearchOptions = {}): SpecSearchResult[] {
+  search(query: string, options: SearchOptions & { offset?: number } = {}): SpecSearchResult[] {
+    if (options.offset !== undefined && (!Number.isSafeInteger(options.offset) || options.offset < 0 || options.offset > 10000)) throw new Error("spec search offset: expected integer 0..10000; choose a bounded continuation offset");
     const snapshot = this.snapshot(), ids = new Map(snapshot.specs.map(spec => [spec.path, spec.id]));
     const hashes = new Map(snapshot.specs.map(spec => [spec.path, spec.hash]));
-    return this.index.search(query, options, hashes).flatMap(hit => {
+    return this.index.search(query, options, hashes, options.offset ?? 0).flatMap(hit => {
       const id = ids.get(hit.path);
       return id === undefined ? [] : [{ ...hit, id }];
     });
