@@ -152,6 +152,8 @@ test("spec adapter cache cannot collide with a vault cache at the same root and 
   f.write(repo, "notes/example.md", spec("example", {}, "Searchword."));
   const source = f.source(repo), vault = new VaultIndex(f.home, { id: "vault", path: repo, kind: "personal", write: "cli" }), specs = new SpecIndex(f.home, source);
   try {
+    const kind: "personal" | "org" = vault.vault.kind;
+    expect(kind).toBe("personal");
     vault.scan(); specs.scan();
     const digest = createHash("sha256").update(repo).digest("hex");
     expect(basename(vault.file)).toBe(`${digest}-links${LINK_RESOLUTION}.sqlite`);

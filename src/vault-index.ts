@@ -4,7 +4,7 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSy
 import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { AnalysisSnapshot } from "./analysis-types.ts";
-import type { VaultSpec } from "./config.ts";
+import type { VaultSpec, SpecSourceSpec } from "./config.ts";
 import { parseFrontmatter, type FrontmatterDocument } from "./frontmatter.ts";
 import { normalizeTarget, noteKey, proseLines, resolveLinks, type LinkNote, type ResolvedLink } from "./links.ts";
 
@@ -115,7 +115,7 @@ export interface IndexSourceAdapter {
 }
 export interface IndexOptions { memory?: boolean; adapter?: IndexSourceAdapter; reuseCache?: boolean }
 /** Derived cache only. No vault or application configuration files are written. */
-export class VaultIndex<Source extends { id: string; path: string } = VaultSpec> {
+export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
   private readonly db: Database;
   readonly file: string;
   private readonly root: string;
