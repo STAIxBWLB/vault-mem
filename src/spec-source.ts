@@ -1,31 +1,34 @@
-import { spawnSync } from "node:child_process";
 import { lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { absolute, type SpecSourceSpec } from "./config.ts";
-import { realPath, memoryGitArgv, memoryGitEnv } from "./platform.ts";
+import { realPath } from "./platform.ts";
+import { specGit } from "./spec-git.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
 import { VaultIndex, IndexCacheError, type IndexSourceAdapter, type SearchOptions, type SearchResult } from "./vault-index.ts";
 
 /** Private spec input snapshot; raw sources are for library transforms, never graph results. */
-export interface SpecDocument {
-  id: string;
+export interface SpecCandidate {
   path: string;
   hash: string;
   source: string;
   frontmatter: Record<string, unknown>;
   body: string;
 }
+export interface SpecDocument extends SpecCandidate { id: string }
 export interface SpecDiagnostic {
-  code: "duplicate_id" | "invalid_frontmatter" | "invalid_identity" | "skipped_path";
+  code: "duplicate_id" | "invalid_frontmatter" | "invalid_identity" | "skipped_path" | "wrong_shape";
   path: string;
   id?: string;
   firstPath?: string;
+  field?: string;
   message: string;
 }
 export interface SpecSnapshot {
   root: string;
   commonDir: string;
   specs: SpecDocument[];
+  candidates?: SpecCandidate[];
   diagnostics: SpecDiagnostic[];
 }
 
@@ -36,22 +39,7 @@ interface Binding { root: string; registeredRoot: string; commonDir: string; roo
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const pathOrder = (a: string, b: string) => compare(a.normalize("NFC"), b.normalize("NFC")) || compare(a, b);
 function git(root: string, args: string[], env: NodeJS.ProcessEnv, maxBuffer = 65536): Buffer {
-  const argv = memoryGitArgv(["-C", root, ...args]);
-  const result = spawnSync(argv[0]!, argv.slice(1), { env: memoryGitEnv({ ...env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }, { repositoryIsolation: true }), timeout: 10000, maxBuffer, stdio: ["ignore", "pipe", "pipe"] });
-  if (result.error) {
-    const code = (result.error as NodeJS.ErrnoException).code;
-    if (code === "ETIMEDOUT") throw new Error("spec source: git inspection timed out after 10000 ms; retry and check for a locked repository or slow mount", { cause: result.error });
-    if (code === "ENOBUFS") {
-      const advice = args[0] === "ls-files" ? "ignore large or vendored Markdown via .gitignore and untrack already-tracked excluded files with git rm --cached before retrying" : "inspect git -C <path> rev-parse --show-toplevel and repair unexpected output before retrying";
-      throw new Error(`spec source: git output exceeded ${maxBuffer} bytes; ${advice}`, { cause: result.error });
-    }
-    throw new Error(`spec source: git could not run (${code ?? "spawn failure"}); install git or fix PATH before retrying`, { cause: result.error });
-  }
-  if (result.status !== 0) {
-    const first = result.stderr.toString("utf8").split(/\r?\n/, 1)[0]?.split(root).join("<path>").slice(0, 240) || "no diagnostic";
-    throw new Error(`spec source: git refused inspection (exit ${result.status ?? "signal"}): ${first}; inspect git -C <path> rev-parse --show-toplevel and repair the repository or ownership configuration`);
-  }
-  return result.stdout;
+  return specGit(root, args, { env, maxBuffer, discovery: args[0] === "ls-files" }).stdout;
 }
 function rootInfo(path: string, env: NodeJS.ProcessEnv): { root: string; commonDir: string } {
   try { absolute(path, "spec worktree"); }
@@ -73,7 +61,7 @@ function directoryIdentity(root: string): string | undefined {
 }
 function bind(source: SpecSourceSpec, options: SpecSourceOptions): Binding {
   const env = options.env ?? process.env, registered = rootInfo(source.path, env);
-  if (registered.root !== source.path) throw new Error("spec source: registered root is no longer canonical; re-register it with vmem specs add");
+  if (registered.root !== source.path) throw new Error("spec source: registered root is no longer canonical; restore the canonical root or preview unregistering it with vmem specs remove <id>, then confirm removal before adding the new root");
   const selected = options.worktree === undefined ? registered : rootInfo(options.worktree, env);
   if (selected.commonDir !== registered.commonDir) throw new Error("spec source: worktree belongs to another repository; select a worktree sharing the registered repository's git common directory");
   const rootIdentity = directoryIdentity(selected.root);
@@ -116,13 +104,28 @@ function pathProblem(binding: Binding, path: string): string | undefined {
   if (physicalRelative === ".." || physicalRelative.startsWith(`..${sep}`) || isAbsolute(physicalRelative)) return `spec source ${path}: physical path leaves the registered root; restore the original root and plain in-repository file before retrying`;
   return undefined;
 }
+function namedSpec(path: string): boolean { return basename(path) === "SPEC.md"; }
+function candidateData(path: string, data: Record<string, unknown>): boolean { return namedSpec(path) || Object.hasOwn(data, "id") || Object.hasOwn(data, "type"); }
+function candidateProbe(path: string, reason: "oversized" | "invalid_utf8", bytes: Buffer): boolean {
+  if (namedSpec(path)) return true;
+  try {
+    const document = parseFrontmatter(bytes.toString("utf8"));
+    if (!document.frontmatter) return false;
+    // This is a conservative signal only: visible reserved keys keep the blocking encoding error.
+    // Accepted documents are still decoded strictly by the scanner.
+    return candidateData(path, document.data);
+  } catch (error) {
+    if (reason === "oversized" && error instanceof Error && error.message === "frontmatter: missing closing delimiter") throw new Error(`spec source ${path}: frontmatter exceeds the bounded candidate probe; shorten the header before validating`, { cause: error });
+    return false;
+  }
+}
 function adapter(binding: Binding) {
-  let specs: SpecDocument[] = [], diagnostics: SpecDiagnostic[] = [];
+  let specs: SpecDocument[] = [], candidates: SpecCandidate[] = [], diagnostics: SpecDiagnostic[] = [];
   const seen = new Map<string, string>();
   const source: IndexSourceAdapter = {
     validate: () => validate(binding),
     paths: () => {
-      specs = []; diagnostics = []; seen.clear();
+      specs = []; candidates = []; diagnostics = []; seen.clear();
       const bytes = git(binding.root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.md"], binding.env, 8 * 1024 * 1024);
       let output: string;
       try { output = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
@@ -141,9 +144,19 @@ function adapter(binding: Binding) {
       const problem = pathProblem(binding, path);
       if (problem !== undefined) throw new Error(problem);
     },
-    invalid: path => diagnostics.push({ code: "invalid_frontmatter", path, message: "spec source: invalid frontmatter; repair the Markdown YAML before rebuilding" }),
+    invalid: path => {
+      if (!namedSpec(path)) return false;
+      diagnostics.push({ code: "invalid_frontmatter", path, message: "spec source: invalid frontmatter; repair the SPEC.md YAML before validating" });
+      return true;
+    },
+    skipFile: (path, reason, bytes) => {
+      if (candidateProbe(path, reason, bytes)) return false;
+      diagnostics.push({ code: "skipped_path", path, message: `non-candidate Markdown ${path}: ${reason === "oversized" ? "file exceeds the bounded read size" : "file is not valid UTF-8"}; split/re-encode it or exclude it via .gitignore` });
+      return true;
+    },
     accept: (path, document, hash) => {
       const data = document.data;
+      if (candidateData(path, data)) candidates.push({ path, hash, source: document.source, frontmatter: data, body: document.body });
       if (!Object.hasOwn(data, "id") || !Object.hasOwn(data, "type")) return false;
       if (typeof data.id !== "string" || !data.id.trim() || typeof data.type !== "string" || !data.type.trim()) {
         diagnostics.push({ code: "invalid_identity", path, message: "spec source: id and type must be nonempty strings; repair the frontmatter before rebuilding" });
@@ -159,7 +172,7 @@ function adapter(binding: Binding) {
       return true;
     },
   };
-  return { source, snapshot: (): SpecSnapshot => ({ root: binding.root, commonDir: binding.commonDir, specs: [...specs], diagnostics: [...diagnostics] }) };
+  return { source, snapshot: (): SpecSnapshot => ({ root: binding.root, commonDir: binding.commonDir, specs: [...specs], candidates: [...candidates], diagnostics: [...diagnostics] }) };
 }
 /** Call scan() to refresh. Search and snapshots use the last completed scan, like VaultIndex. */
 export class SpecIndex {
@@ -183,9 +196,11 @@ export class SpecIndex {
   get file(): string { return this.index.file; }
   close(): void { this.index.close(); }
   scan(rebuild = false): ReturnType<VaultIndex["scan"]> {
-    const result = this.index.scan(rebuild);
-    this.current = this.adapter.snapshot();
-    return result;
+    try {
+      const result = this.index.scan(rebuild);
+      this.current = this.adapter.snapshot();
+      return result;
+    } catch (error) { this.current = undefined; throw error; }
   }
   snapshot(): SpecSnapshot { if (!this.current) this.scan(); return this.current!; }
   search(query: string, options: SearchOptions = {}): SpecSearchResult[] {

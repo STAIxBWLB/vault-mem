@@ -120,7 +120,8 @@ export interface IndexSourceAdapter {
   paths(): string[];
   validatePath(path: string): void;
   accept(path: string, document: FrontmatterDocument, hash: string): boolean;
-  invalid(path: string): void;
+  invalid(path: string): boolean | void;
+  skipFile?(path: string, reason: "oversized" | "invalid_utf8", bytes: Buffer): boolean;
 }
 export class IndexCacheError extends Error {}
 export interface IndexOptions { memory?: boolean; adapter?: IndexSourceAdapter; reuseCache?: boolean }
@@ -206,10 +207,12 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
   }
   /** Scan metadata each call; hash only new or metadata-changed files. Atomic cache update. */
   scan(rebuild = false, options: { skipInvalidFrontmatter?: boolean; captureInvalidFrontmatter?: boolean } = {}): { notes: number; changed: number; removed: number; skipped?: string[] } {
-    return this.db.transaction(() => {
+    // Discovery/binding Git calls must never hold a SQLite writer lock.
+    let preparedPaths: string[] | undefined;
+    if (this.adapter) { this.adapter.validate(); preparedPaths = this.adapter.paths(); }
+    const result = this.db.transaction(() => {
       const notesDir = join(this.root, "notes");
-      if (this.adapter) this.adapter.validate();
-      else if (realpathSync(this.root) !== this.root || realpathSync(notesDir) !== notesDir || !lstatSync(notesDir).isDirectory()) throw new Error(`vault ${this.vault.id}: path or notes directory changed`);
+      if (!this.adapter && (realpathSync(this.root) !== this.root || realpathSync(notesDir) !== notesDir || !lstatSync(notesDir).isDirectory())) throw new Error(`vault ${this.vault.id}: path or notes directory changed`);
       const indexed = this.adapter ? new Set(this.db.query<{path:string}, []>("SELECT path FROM notes").all().map(row => row.path)) : undefined;
       const previous = new Map(this.db.query<{ path: string; hash: string; metadata: string }, []>(this.adapter ? "SELECT path,hash,metadata FROM analysis_notes" : options.captureInvalidFrontmatter ? "SELECT path,hash,metadata FROM notes UNION SELECT path,hash,metadata FROM analysis_notes" : "SELECT path,hash,metadata FROM notes").all().map(note => [note.path, note]));
       if (rebuild) this.db.run("DELETE FROM fts");
@@ -218,21 +221,25 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
       const skipped: string[] = [], touched = new Set<string>(), keys = new Set<string>();
       // Links resolve by path only, so other notes re-resolve only when they target a touched path.
       const touch = (path: string) => { touched.add(path); keys.add(noteKey(path)); };
-      const paths = this.adapter ? this.adapter.paths() : readdirSync(notesDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).filter(entry => entry.name.endsWith(".md") && entry.isFile()).map(entry => entry.name);
+      const paths = preparedPaths ?? readdirSync(notesDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).filter(entry => entry.name.endsWith(".md") && entry.isFile()).map(entry => entry.name);
       for (const path of paths) {
         this.adapter?.validatePath(path);
         const file = join(this.adapter ? this.root : notesDir, path);
         const before = this.adapter ? specFileIO(path, "inspect", () => lstatSync(file)) : lstatSync(file);
         if (!before.isFile() || before.isSymbolicLink()) throw new Error(this.adapter ? `spec discovery ${path}: selected path changed; restore a plain file and retry` : `vault ${this.vault.id}: note path changed`);
-        if (before.size > MAX_NOTE_BYTES) throw new Error(this.adapter ? `spec discovery ${path}: Markdown exceeds ${MAX_NOTE_BYTES} bytes; split the file before rebuilding` : `vault ${this.vault.id}, ${path}: note exceeds ${MAX_NOTE_BYTES} bytes`);
+        if (!this.adapter && before.size > MAX_NOTE_BYTES) throw new Error(`vault ${this.vault.id}, ${path}: note exceeds ${MAX_NOTE_BYTES} bytes`);
         live.add(path); present.add(path);
-        if (options.captureInvalidFrontmatter || this.adapter) {
+        if (options.captureInvalidFrontmatter && !this.adapter) {
           analysisBytes += before.size;
           if (present.size > 10000 || analysisBytes > 64 * 1024 * 1024) throw new Error(this.adapter ? `spec discovery ${path}: more than 10000 Markdown files or 64 MiB of input; ignore large or vendored Markdown via .gitignore and untrack already-tracked excluded files with git rm --cached before rebuilding` : "analysis: snapshot exceeds bound");
         }
+        if (this.adapter) {
+          analysisBytes += Math.min(before.size, MAX_NOTE_BYTES + 1);
+          if (present.size > 10000 || analysisBytes > 64 * 1024 * 1024) throw new Error(`spec discovery ${path}: more than 10000 Markdown inputs or 64 MiB of bounded reads; ignore vendored Markdown via .gitignore and untrack excluded files with git rm --cached`);
+        }
         const old = previous.get(path), stamp = metadata(before);
         if (!this.adapter && !rebuild && old?.metadata === stamp && this.db.query("SELECT 1 FROM analysis_notes WHERE path=?").get(path)) continue;
-        const cached = this.adapter && !rebuild && old?.metadata === stamp ? this.db.query<{source:string}, [string]>("SELECT source FROM analysis_notes WHERE path=?").get(path) : null;
+        const cached = this.adapter && before.size <= MAX_NOTE_BYTES && !rebuild && old?.metadata === stamp ? this.db.query<{source:string}, [string]>("SELECT source FROM analysis_notes WHERE path=?").get(path) : null;
         let source: string, hash: string;
         if (cached && old) { source = cached.source; hash = old.hash; }
         else {
@@ -240,7 +247,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
           let buffer: Buffer;
           try {
             const stat = this.adapter ? specFileIO(path, "inspect", () => fstatSync(fd)) : fstatSync(fd);
-            if (!stat.isFile() || stat.size > MAX_NOTE_BYTES || metadata(stat) !== stamp) throw new Error(this.adapter ? `spec discovery ${path}: file changed during scan; retry on a stable worktree` : `vault ${this.vault.id}, ${path}: note changed during scan`);
+            if (!stat.isFile() || (!this.adapter && stat.size > MAX_NOTE_BYTES) || metadata(stat) !== stamp) throw new Error(this.adapter ? `spec discovery ${path}: file changed during scan; retry on a stable worktree` : `vault ${this.vault.id}, ${path}: note changed during scan`);
             // Fixed bound even if a concurrent writer grows the file.
             buffer = Buffer.alloc(MAX_NOTE_BYTES + 1);
             let size = 0;
@@ -250,15 +257,28 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
               if (!count || size === buffer.length) break;
             }
             buffer = buffer.subarray(0, size);
-            if (size > MAX_NOTE_BYTES || metadata(this.adapter ? specFileIO(path, "inspect", () => fstatSync(fd)) : fstatSync(fd)) !== stamp) throw new Error(this.adapter ? `spec discovery ${path}: file changed during scan; retry on a stable worktree` : `vault ${this.vault.id}, ${path}: note changed during scan`);
+            if ((!this.adapter && size > MAX_NOTE_BYTES) || metadata(this.adapter ? specFileIO(path, "inspect", () => fstatSync(fd)) : fstatSync(fd)) !== stamp) throw new Error(this.adapter ? `spec discovery ${path}: file changed during scan; retry on a stable worktree` : `vault ${this.vault.id}, ${path}: note changed during scan`);
           } finally { if (this.adapter) specFileIO(path, "close", () => closeSync(fd)); else closeSync(fd); }
-          if (this.adapter) {
-            try { source = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer); }
-            catch { throw new Error(`spec discovery ${path}: Markdown is not valid UTF-8; re-encode the file as UTF-8 before rebuilding`); }
-          } else source = buffer.toString("utf8");
-          hash = digest(buffer);
           this.adapter?.validatePath(path);
           if (this.adapter && metadata(specFileIO(path, "inspect", () => lstatSync(file))) !== stamp) throw new Error(`spec discovery ${path}: file changed during read; retry on a stable worktree`);
+          if (this.adapter) {
+            const skip = (reason: "oversized" | "invalid_utf8") => {
+              if (!this.adapter?.skipFile?.(path, reason, buffer.subarray(0, MAX_NOTE_BYTES))) return false;
+              live.delete(path); skipped.push(path);
+              this.db.query("DELETE FROM analysis_notes WHERE path=?").run(path);
+              return true;
+            };
+            if (before.size > MAX_NOTE_BYTES || buffer.length > MAX_NOTE_BYTES) {
+              if (skip("oversized")) continue;
+              throw new Error(`spec discovery ${path}: Markdown exceeds ${MAX_NOTE_BYTES} bytes; split the candidate before validating`);
+            }
+            try { source = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer); }
+            catch {
+              if (skip("invalid_utf8")) continue;
+              throw new Error(`spec discovery ${path}: Markdown is not valid UTF-8; re-encode the candidate as UTF-8 before validating`);
+            }
+          } else source = buffer.toString("utf8");
+          hash = digest(buffer);
           this.db.query("INSERT OR REPLACE INTO analysis_notes VALUES (?,?,?,?)").run(path, source, hash, stamp);
         }
         if (!this.adapter && !rebuild && old?.hash === hash) { this.db.query("UPDATE notes SET metadata=? WHERE path=?").run(stamp, path); continue; }
@@ -266,8 +286,8 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
         try { document = parseFrontmatter(source); }
         catch {
           if (!this.adapter && !options.skipInvalidFrontmatter && !options.captureInvalidFrontmatter) throw new Error(`vault ${this.vault.id}, ${path}: invalid frontmatter`);
-          this.adapter?.invalid(path);
-          live.delete(path); skipped.push(path); continue;
+          const report = this.adapter?.invalid(path);
+          live.delete(path); if (report !== false) skipped.push(path); continue;
         }
         if (this.adapter) {
           this.adapter.validatePath(path);
@@ -290,7 +310,6 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
       if (this.adapter) {
         // Spec links are resolved by frontmatter id in buildSpecGraph, never by vault paths.
         this.db.run("DELETE FROM links");
-        this.adapter.validate();
         return { notes: live.size, changed, removed, ...(skipped.length ? { skipped } : {}) };
       }
       const stale = this.db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version !== LINK_RESOLUTION;
@@ -313,6 +332,8 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
       if (stale) this.db.run(`PRAGMA user_version = ${LINK_RESOLUTION}`);
       return { notes: live.size, changed, removed, ...(skipped.length ? { skipped } : {}) };
     }).immediate();
+    this.adapter?.validate();
+    return result;
   }
   /** Consume cached note sources only. Auxiliary inputs are captured separately by analysisInput. */
   analysisSnapshot(inputs: Omit<AnalysisSnapshot, "notes">): AnalysisSnapshot {

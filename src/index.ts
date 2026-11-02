@@ -44,6 +44,11 @@ export { tidyVault, parseTidyMap, TIDY_RULES } from "./tidy.ts";
 export type { TidyRequest, TidyResult, TidyRule, TidyMap } from "./tidy.ts";
 
 export { resolveSpecWorktree, discoverSpecs, SpecIndex } from "./spec-source.ts";
-export type { SpecDocument, SpecDiagnostic, SpecSnapshot, SpecSourceOptions, SpecIndexOptions, SpecSearchResult } from "./spec-source.ts";
+export type { SpecCandidate, SpecDocument, SpecDiagnostic, SpecSnapshot, SpecSourceOptions, SpecIndexOptions, SpecSearchResult } from "./spec-source.ts";
 export { buildSpecGraph, specSlice, SPEC_EDGE_KINDS, MAX_SPEC_INPUTS, MAX_SPEC_EDGES } from "./spec-graph.ts";
 export type { SpecNode, SpecEdge, SpecEdgeKind, SpecGraph, SpecSliceOptions, SpecSlice } from "./spec-graph.ts";
+
+export { validateSpecs, introducedSpecErrors, validateSpecRepo } from "./spec-validate.ts";
+export type { SpecValidationIssue, SpecValidationOptions, SpecValidationReport, SpecRepoValidationOptions, SpecRepoValidation } from "./spec-validate.ts";
+export { specFreshness, specsCoveringPath } from "./spec-freshness.ts";
+export type { SpecFreshnessEntry, SpecFreshnessReport, SpecFreshnessOptions } from "./spec-freshness.ts";
