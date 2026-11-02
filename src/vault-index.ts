@@ -1,10 +1,11 @@
+import { realPath } from "./platform.ts";
 import { Database } from "bun:sqlite";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { AnalysisSnapshot } from "./analysis-types.ts";
 import type { VaultSpec } from "./config.ts";
-import { parseFrontmatter } from "./frontmatter.ts";
+import { parseFrontmatter, type FrontmatterDocument } from "./frontmatter.ts";
 import { normalizeTarget, noteKey, proseLines, resolveLinks, type LinkNote, type ResolvedLink } from "./links.ts";
 
 export const MAX_NOTE_BYTES = 2 * 1024 * 1024;
@@ -41,13 +42,13 @@ function within(root: string, target: string): boolean {
   const rel = relative(root, target);
   return rel === "" || (!rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && rel !== ".." && !isAbsolute(rel));
 }
-function canonicalLocation(location: string): string {
-  try { return realpathSync(location); }
+function canonicalLocation(location: string, canonicalize: (path: string) => string = realpathSync): string {
+  try { return canonicalize(location); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     const parent = dirname(location);
     if (parent === location) throw error;
-    return join(canonicalLocation(parent), relative(parent, location));
+    return join(canonicalLocation(parent, canonicalize), relative(parent, location));
   }
 }
 export function resultLimit(value = 50): number {
@@ -104,31 +105,46 @@ function headingMetadata(sections: { name: string }[]): Pick<NoteReadResult, "he
   }
   return { headings, ...(truncated ? { headingsTruncated: true } : {}) };
 }
+/** A source changes discovery and record selection, while sharing scan storage and BM25. */
+export interface IndexSourceAdapter {
+  validate(): void;
+  paths(): string[];
+  validatePath(path: string): void;
+  accept(path: string, document: FrontmatterDocument, hash: string): boolean;
+  invalid(path: string): void;
+}
+export interface IndexOptions { memory?: boolean; adapter?: IndexSourceAdapter; reuseCache?: boolean }
 /** Derived cache only. No vault or application configuration files are written. */
-export class VaultIndex {
+export class VaultIndex<Source extends { id: string; path: string } = VaultSpec> {
   private readonly db: Database;
   readonly file: string;
   private readonly root: string;
-  constructor(home: string, readonly vault: VaultSpec, vaultRoots: string[] = [vault.path], options: { memory?: boolean } = {}) {
-    this.root = realpathSync(vault.path);
-    if (this.root !== vault.path) throw new Error(`vault ${vault.id}: registered path changed`);
+  private readonly adapter?: IndexSourceAdapter;
+  constructor(home: string, readonly vault: Source, vaultRoots: string[] = [vault.path], options: IndexOptions = {}) {
+    this.adapter = options.adapter;
+    this.root = this.adapter ? realPath(vault.path) : realpathSync(vault.path);
+    if (this.root !== vault.path) throw new Error(this.adapter ? "spec index: worktree path changed; resolve the source again with resolveSpecWorktree" : `vault ${vault.id}: registered path changed`);
     const notes = join(this.root, "notes");
-    if (realpathSync(notes) !== notes || !lstatSync(notes).isDirectory()) throw new Error(`vault ${vault.id}: notes must be a plain directory`);
+    if (this.adapter) this.adapter.validate();
+    else if (realpathSync(notes) !== notes || !lstatSync(notes).isDirectory()) throw new Error(`vault ${vault.id}: notes must be a plain directory`);
+    const cacheName = this.adapter ? `spec-${indexName(this.root)}` : indexName(this.root);
     const cache = resolve(home, "indexes");
-    const canonical = canonicalLocation(cache);
-    for (const root of vaultRoots) {
-      if (within(canonicalLocation(resolve(root)), canonical)) throw new Error("index: VMEM_HOME cache must be outside every vault");
+    const noDisk = options.memory && options.reuseCache === false;
+    const canonicalize = this.adapter ? realPath : realpathSync;
+    const canonical = noDisk ? cache : canonicalLocation(cache, canonicalize);
+    for (const root of noDisk ? [] : vaultRoots) {
+      if (within(canonicalLocation(resolve(root), canonicalize), canonical)) throw new Error(this.adapter ? "spec index: cache is inside a protected source; choose VMEM_HOME outside every repository and vault" : "index: VMEM_HOME cache must be outside every vault");
     }
     // Canonical home resolution is allowed, but a linked cache directory/file is not.
     if (!options.memory) {
       mkdirSync(cache, { recursive: true, mode: 0o700 });
       if (lstatSync(cache).isSymbolicLink() || !lstatSync(cache).isDirectory()) throw new Error("index: expected plain cache directory");
-      this.file = join(cache, indexName(this.root));
+      this.file = join(cache, cacheName);
       try {
         const fd = openSync(this.file, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
         closeSync(fd);
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-      if (!lstatSync(this.file).isFile() || lstatSync(this.file).isSymbolicLink()) throw new Error("index: expected plain database file");
+      if (!lstatSync(this.file).isFile() || lstatSync(this.file).isSymbolicLink() || (this.adapter && lstatSync(this.file).nlink !== 1)) throw new Error("index: expected plain database file");
     } else this.file = ":memory:";
     this.db = new Database(this.file);
     this.db.run("PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE;");
@@ -140,13 +156,13 @@ export class VaultIndex {
       CREATE TABLE IF NOT EXISTS analysis_notes (path TEXT PRIMARY KEY, source TEXT NOT NULL, hash TEXT NOT NULL, metadata TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS links (source TEXT NOT NULL, ordinal INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source, ordinal));`);
     // Dry runs reuse the derived cache via a readonly connection, then refresh only changed notes in memory.
-    if (options.memory) {
-      const file = join(cache, indexName(this.root));
+    if (options.memory && options.reuseCache !== false) {
+      const file = join(cache, cacheName);
       let exists = false;
-      try { const stat = lstatSync(file); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("index: expected plain database file"); exists = true; }
+      try { const stat = lstatSync(file); if (!stat.isFile() || stat.isSymbolicLink() || (this.adapter && stat.nlink !== 1)) throw new Error("index: expected plain database file"); exists = true; }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       if (exists) {
-        if (realpathSync(cache) !== cache) throw new Error("index: linked cache directory");
+        if (canonicalize(cache) !== cache) throw new Error("index: linked cache directory");
         const disk = new Database(file, { readonly: true });
         try {
           disk.transaction(() => {
@@ -177,62 +193,90 @@ export class VaultIndex {
   scan(rebuild = false, options: { skipInvalidFrontmatter?: boolean; captureInvalidFrontmatter?: boolean } = {}): { notes: number; changed: number; removed: number; skipped?: string[] } {
     return this.db.transaction(() => {
       const notesDir = join(this.root, "notes");
-      if (realpathSync(this.root) !== this.root || realpathSync(notesDir) !== notesDir || !lstatSync(notesDir).isDirectory()) throw new Error(`vault ${this.vault.id}: path or notes directory changed`);
-      const previous = new Map(this.db.query<{ path: string; hash: string; metadata: string }, []>(options.captureInvalidFrontmatter ? "SELECT path,hash,metadata FROM notes UNION SELECT path,hash,metadata FROM analysis_notes" : "SELECT path,hash,metadata FROM notes").all().map(note => [note.path, note]));
+      if (this.adapter) this.adapter.validate();
+      else if (realpathSync(this.root) !== this.root || realpathSync(notesDir) !== notesDir || !lstatSync(notesDir).isDirectory()) throw new Error(`vault ${this.vault.id}: path or notes directory changed`);
+      const indexed = this.adapter ? new Set(this.db.query<{path:string}, []>("SELECT path FROM notes").all().map(row => row.path)) : undefined;
+      const previous = new Map(this.db.query<{ path: string; hash: string; metadata: string }, []>(this.adapter ? "SELECT path,hash,metadata FROM analysis_notes" : options.captureInvalidFrontmatter ? "SELECT path,hash,metadata FROM notes UNION SELECT path,hash,metadata FROM analysis_notes" : "SELECT path,hash,metadata FROM notes").all().map(note => [note.path, note]));
       if (rebuild) this.db.run("DELETE FROM fts");
       const live = new Set<string>(), present = new Set<string>();
       let changed = 0, analysisBytes = 0;
       const skipped: string[] = [], touched = new Set<string>(), keys = new Set<string>();
       // Links resolve by path only, so other notes re-resolve only when they target a touched path.
       const touch = (path: string) => { touched.add(path); keys.add(noteKey(path)); };
-      for (const entry of readdirSync(notesDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-        if (!entry.name.endsWith(".md") || !entry.isFile()) continue;
-        const path = entry.name, file = join(notesDir, path), before = lstatSync(file);
+      const paths = this.adapter ? this.adapter.paths() : readdirSync(notesDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)).filter(entry => entry.name.endsWith(".md") && entry.isFile()).map(entry => entry.name);
+      for (const path of paths) {
+        this.adapter?.validatePath(path);
+        const file = join(this.adapter ? this.root : notesDir, path), before = lstatSync(file);
         if (!before.isFile() || before.isSymbolicLink()) throw new Error(`vault ${this.vault.id}: note path changed`);
-        if (before.size > MAX_NOTE_BYTES) throw new Error(`vault ${this.vault.id}, ${path}: note exceeds ${MAX_NOTE_BYTES} bytes`);
+        if (before.size > MAX_NOTE_BYTES) throw new Error(this.adapter ? `spec discovery: Markdown file exceeds ${MAX_NOTE_BYTES} bytes; split the file before rebuilding` : `vault ${this.vault.id}, ${path}: note exceeds ${MAX_NOTE_BYTES} bytes`);
         live.add(path); present.add(path);
-        if (options.captureInvalidFrontmatter) {
+        if (options.captureInvalidFrontmatter || this.adapter) {
           analysisBytes += before.size;
-          if (present.size > 10000 || analysisBytes > 64 * 1024 * 1024) throw new Error("analysis: snapshot exceeds bound");
+          if (present.size > 10000 || analysisBytes > 64 * 1024 * 1024) throw new Error(this.adapter ? "spec discovery: more than 10000 Markdown files or 64 MiB of input; reduce the repository discovery scope before rebuilding" : "analysis: snapshot exceeds bound");
         }
         const old = previous.get(path), stamp = metadata(before);
-        if (!rebuild && old?.metadata === stamp && this.db.query("SELECT 1 FROM analysis_notes WHERE path=?").get(path)) continue;
-        const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-        let buffer: Buffer;
-        try {
-          const stat = fstatSync(fd);
-          if (!stat.isFile() || stat.size > MAX_NOTE_BYTES || metadata(stat) !== stamp) throw new Error(`vault ${this.vault.id}, ${path}: note changed during scan`);
-          // Fixed bound even if a concurrent writer grows the file.
-          buffer = Buffer.alloc(MAX_NOTE_BYTES + 1);
-          let size = 0;
-          for (;;) {
-            const count = readSync(fd, buffer, size, buffer.length - size, null);
-            size += count;
-            if (!count || size === buffer.length) break;
-          }
-          buffer = buffer.subarray(0, size);
-          if (size > MAX_NOTE_BYTES || metadata(fstatSync(fd)) !== stamp) throw new Error(`vault ${this.vault.id}, ${path}: note changed during scan`);
-        } finally { closeSync(fd); }
-        const hash = digest(buffer);
-        this.db.query("INSERT OR REPLACE INTO analysis_notes VALUES (?,?,?,?)").run(path, buffer.toString("utf8"), hash, stamp);
-        if (!rebuild && old?.hash === hash) { this.db.query("UPDATE notes SET metadata=? WHERE path=?").run(stamp, path); continue; }
+        if (!this.adapter && !rebuild && old?.metadata === stamp && this.db.query("SELECT 1 FROM analysis_notes WHERE path=?").get(path)) continue;
+        const cached = this.adapter && !rebuild && old?.metadata === stamp ? this.db.query<{source:string}, [string]>("SELECT source FROM analysis_notes WHERE path=?").get(path) : null;
+        let source: string, hash: string;
+        if (cached && old) { source = cached.source; hash = old.hash; }
+        else {
+          const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+          let buffer: Buffer;
+          try {
+            const stat = fstatSync(fd);
+            if (!stat.isFile() || stat.size > MAX_NOTE_BYTES || metadata(stat) !== stamp) throw new Error(`vault ${this.vault.id}, ${path}: note changed during scan`);
+            // Fixed bound even if a concurrent writer grows the file.
+            buffer = Buffer.alloc(MAX_NOTE_BYTES + 1);
+            let size = 0;
+            for (;;) {
+              const count = readSync(fd, buffer, size, buffer.length - size, null);
+              size += count;
+              if (!count || size === buffer.length) break;
+            }
+            buffer = buffer.subarray(0, size);
+            if (size > MAX_NOTE_BYTES || metadata(fstatSync(fd)) !== stamp) throw new Error(`vault ${this.vault.id}, ${path}: note changed during scan`);
+          } finally { closeSync(fd); }
+          if (this.adapter) {
+            try { source = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer); }
+            catch { throw new Error("spec discovery: Markdown is not valid UTF-8; re-encode the file as UTF-8 before rebuilding"); }
+          } else source = buffer.toString("utf8");
+          hash = digest(buffer);
+          this.adapter?.validatePath(path);
+          if (this.adapter && metadata(lstatSync(file)) !== stamp) throw new Error("spec discovery: file changed during read; retry on a stable worktree");
+          this.db.query("INSERT OR REPLACE INTO analysis_notes VALUES (?,?,?,?)").run(path, source, hash, stamp);
+        }
+        if (!this.adapter && !rebuild && old?.hash === hash) { this.db.query("UPDATE notes SET metadata=? WHERE path=?").run(stamp, path); continue; }
         let document: ReturnType<typeof parseFrontmatter>;
-        try { document = parseFrontmatter(buffer.toString("utf8")); }
+        try { document = parseFrontmatter(source); }
         catch {
-          if (!options.skipInvalidFrontmatter && !options.captureInvalidFrontmatter) throw new Error(`vault ${this.vault.id}, ${path}: invalid frontmatter`);
+          if (!this.adapter && !options.skipInvalidFrontmatter && !options.captureInvalidFrontmatter) throw new Error(`vault ${this.vault.id}, ${path}: invalid frontmatter`);
+          this.adapter?.invalid(path);
           live.delete(path); skipped.push(path); continue;
+        }
+        if (this.adapter) {
+          this.adapter.validatePath(path);
+          if (metadata(lstatSync(file)) !== stamp) throw new Error("spec discovery: file changed during scan; retry on a stable worktree");
+          if (!this.adapter.accept(path, document, hash)) { live.delete(path); continue; }
+          const row = this.db.query<{hash:string}, [string]>("SELECT hash FROM notes WHERE path=?").get(path);
+          if (!rebuild && row?.hash === hash) { this.db.query("UPDATE notes SET metadata=? WHERE path=?").run(stamp, path); continue; }
         }
         const { data, body } = document;
         touch(path);
         this.db.query("INSERT OR REPLACE INTO notes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(path, hash, stamp,
-          text(data.title) || path.slice(0, -3), text(data.description), body, text(data.type), text(data.domain), JSON.stringify(aliases(data.aliases ?? data.alias)), buffer.toString("utf8"));
+          text(data.title) || path.slice(0, -3), text(data.description), body, text(data.type), text(data.domain), JSON.stringify(aliases(data.aliases ?? data.alias)), source);
         this.db.query("DELETE FROM fts WHERE path=?").run(path);
         this.db.query("INSERT INTO fts(path,title,description,body) SELECT path,title,description,body FROM notes WHERE path=?").run(path);
         changed++;
       }
       for (const row of this.db.query<{path:string}, []>("SELECT path FROM analysis_notes").all()) if (!present.has(row.path)) this.db.query("DELETE FROM analysis_notes WHERE path=?").run(row.path);
       let removed = 0;
-      for (const path of previous.keys()) if (!live.has(path)) { touch(path); this.db.query("DELETE FROM notes WHERE path=?").run(path); this.db.query("DELETE FROM fts WHERE path=?").run(path); removed++; }
+      for (const path of indexed ?? previous.keys()) if (!live.has(path)) { touch(path); this.db.query("DELETE FROM notes WHERE path=?").run(path); this.db.query("DELETE FROM fts WHERE path=?").run(path); removed++; }
+      if (this.adapter) {
+        // Spec links are resolved by frontmatter id in buildSpecGraph, never by vault paths.
+        this.db.run("DELETE FROM links");
+        this.adapter.validate();
+        return { notes: live.size, changed, removed, ...(skipped.length ? { skipped } : {}) };
+      }
       const stale = this.db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version !== LINK_RESOLUTION;
       if (rebuild || stale) this.db.run("DELETE FROM links");
       else if (changed || removed) {

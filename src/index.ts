@@ -42,3 +42,8 @@ export { normalizeSource, sourceReferences } from "./source.ts";
 export type { SourceValue, SourceReference } from "./source.ts";
 export { tidyVault, parseTidyMap, TIDY_RULES } from "./tidy.ts";
 export type { TidyRequest, TidyResult, TidyRule, TidyMap } from "./tidy.ts";
+
+export { resolveSpecWorktree, discoverSpecs, SpecIndex } from "./spec-source.ts";
+export type { SpecDocument, SpecDiagnostic, SpecSnapshot, SpecSourceOptions, SpecIndexOptions, SpecSearchResult } from "./spec-source.ts";
+export { buildSpecGraph, specSlice, SPEC_EDGE_KINDS, MAX_SPEC_INPUTS, MAX_SPEC_EDGES } from "./spec-graph.ts";
+export type { SpecNode, SpecEdge, SpecEdgeKind, SpecGraph, SpecSliceOptions, SpecSlice } from "./spec-graph.ts";
