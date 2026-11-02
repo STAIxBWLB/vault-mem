@@ -354,3 +354,31 @@ test("rollback rereads a report above 2 MiB and restores its large original", ()
   expect(readFileSync(file, "utf8")).toBe(original);
   expect(existsSync(join(f.vault, MUTATION_LOCK))).toBe(false);
 });
+
+test("frontmatter refiles a clean note under another MOC in one validated write", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  writeFileSync(join(f.notes, "other.md"), "---\ntype: moc\ndescription: Another synthetic directory.\n---\n# Other\n");
+  const before = parseFrontmatter(readFileSync(file, "utf8"));
+  const result = run(["frontmatter", "test", "old", "--set", JSON.stringify({ topics: ["[[other]]"] }), "--json"], f.env);
+  const receipt = JSON.parse(result.text);
+  expect(result.code).toBe(0);
+  expect(receipt.applied).toBe(true);
+  expect(receipt.changes).toHaveLength(1);
+  expect(receipt.issues.some((issue: { code: string }) => issue.code === "V05")).toBe(false);
+  const after = parseFrontmatter(readFileSync(file, "utf8"));
+  expect(after.data.topics).toEqual(["[[other]]"]);
+  expect(after.body).toBe(before.body.replace("- [[research]]", "- [[other]]"));
+  expect(after.frontmatter).toContain("# preserved comment");
+});
+
+test("frontmatter refiling recognizes a clean lowercase Topics heading outside fences", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  writeFileSync(join(f.notes, "other.md"), "---\ntype: moc\ndescription: Another synthetic directory.\n---\n# Other\n");
+  writeFileSync(file, note("Old Finding", "```md\n## Topics\n- [[research]]\n```", {}).replace(/## Topics(?=\n\n- \[\[research\]\]\n$)/, "## topics ###"));
+  const result = f.request({ op: "frontmatter", path: "old", set: { topics: ["[[other]]"] } });
+  expect(result.ok).toBe(true);
+  expect(result.issues.some(issue => issue.code === "V05")).toBe(false);
+  const body = parseFrontmatter(readFileSync(file, "utf8")).body;
+  expect(body).toContain("```md\n## Topics\n- [[research]]\n```");
+  expect(body.endsWith("## Topics\n\n- [[other]]\n")).toBe(true);
+});

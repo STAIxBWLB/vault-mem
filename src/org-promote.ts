@@ -8,7 +8,7 @@ import { normalizeTarget, proseLines } from "./links.ts";
 import { loadRegistry } from "./registry.ts";
 import { VaultIndex } from "./vault-index.ts";
 import { applyWrite } from "./writer.ts";
-import { notePath } from "./write-operations.ts";
+import { notePath, replaceTopicsSection } from "./write-operations.ts";
 import { screenContent } from "./write-validation.ts";
 import { appendLog, logBinding } from "./vault-log.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
@@ -96,19 +96,6 @@ function screenDroppedLinks(home: string, source: VaultSpec, all: VaultSpec[], d
   } finally { index.close(); }
   // Counts and categories only: the linked names are exactly what must not be echoed.
   return [...found].map(([category, count]) => issue("SCREEN", `${category}: ${count} body link${count === 1 ? "" : "s"} point at notes that are never promoted; remove those links from the source note first`));
-}
-/** Replace the last prose `## Topics` section (never one inside a fence) with the given topics; append one if absent. */
-export function replaceTopicsSection(body: string, topics: string[]): string {
-  const prose = proseLines(body), raw = body.split("\n");
-  let start = -1;
-  for (let i = prose.length - 1; i >= 0; i--) if (/^ {0,3}##[ \t]+Topics[ \t]*#*[ \t]*$/.test(prose[i]!)) { start = i; break; }
-  const section = ["## Topics", "", ...topics.map(topic => `- ${topic}`), ""];
-  if (start < 0) return `${body.replace(/\n*$/, "")}\n\n${section.join("\n")}`;
-  // The section ends at the next prose heading of level 1 or 2.
-  let end = raw.length;
-  for (let i = start + 1; i < prose.length; i++) if (/^ {0,3}#{1,2}[ \t]/.test(prose[i]!)) { end = i; break; }
-  const tail = raw.slice(end);
-  return [...raw.slice(0, start), ...section, ...(tail.length ? tail : [])].join("\n").replace(/\n*$/, "\n");
 }
 /** Replace visible wiki links whose target does not resolve in the target vault with their plain text. */
 export function dropUnresolvedLinks(body: string, resolves: (target: string) => boolean): { body: string; dropped: string[] } {

@@ -293,10 +293,6 @@ test("writer refuses introduced V05 and preserves retained V05 warnings", () => 
   expect(refused.code).toBe(1);
   expect(JSON.parse(refused.text)).toMatchObject({ applied: false, issues: expect.arrayContaining([expect.objectContaining({ code: "V05", severity: "error" })]) });
   expect(migrationTree(f.dir)).toEqual(before);
-  const frontmatter = run(["frontmatter", "personal", "keep", "--set", JSON.stringify({ topics: ["[[research]]", "[[research]]"] }), "--json"], env);
-  expect(frontmatter.code).toBe(1);
-  expect(JSON.parse(frontmatter.text).issues).toContainEqual(expect.objectContaining({ code: "V05", severity: "error" }));
-  expect(migrationTree(f.dir)).toEqual(before);
   writeFileSync(file, migrationNote + "\n## Existing\n");
   const retained = patch();
   expect(retained.code).toBe(0);
@@ -313,7 +309,8 @@ test("doctor reports pending tidy counts and unparsable paths without writing", 
   const before = migrationTree(f.dir);
   const result = run(["doctor", "--json"], { VMEM_HOME: f.home });
   expect(result.code).toBe(0);
-  expect(JSON.parse(result.text).vaults[0].tidy).toMatchObject({ pending: { connections: 1, enums: 1, topics: 1 }, notes: 1, skipped: [], unparsable: ["notes/broken.md"], hint: expect.stringContaining("vmem tidy personal --all") });
+  expect(JSON.parse(result.text).vaults[0].tidy).toMatchObject({ pending: { connections: 1, enums: 1, topics: 1 }, notes: 1, unparsable: ["notes/broken.md"], hint: expect.stringContaining("vmem tidy personal --all") });
+  expect(JSON.parse(result.text).vaults[0].tidy).not.toHaveProperty("skipped");
   expect(migrationTree(f.dir)).toEqual(before);
   writeFileSync(join(f.vault, "notes/keep.md"), migrationNote);
   rmSync(join(f.vault, "notes/broken.md"));
@@ -358,5 +355,22 @@ test("doctor isolates a second vault's symlinked log and preserves every file", 
   expect(report.vaults[1].checks.tidy.issue.length).toBeGreaterThan(0);
   expect(report.vaults[1]).toMatchObject({ id: "second", checks: { tidy: { ok: false } } });
   expect(report.vaults[1]).not.toHaveProperty("tidy");
+  expect(migrationTree(f.dir)).toEqual(before);
+});
+
+test("doctor reports returned tidy refusals for a denied log path without writing", () => {
+  const f = fixture();
+  writeFileSync(join(f.vault, "notes/keep.md"), migrationMoc);
+  writeFileSync(join(f.vault, "log"), "Synthetic denied log.\n");
+  addVault(f.home, f.spec);
+  const configFile = join(f.home, CONFIG_FILE), config = JSON.parse(readFileSync(configFile, "utf8"));
+  config.denyPaths = ["vault/log"];
+  writeFileSync(configFile, JSON.stringify(config));
+  const before = migrationTree(f.dir), result = run(["doctor", "--json"], { VMEM_HOME: f.home });
+  expect(result.code).toBe(1);
+  const report = JSON.parse(result.text);
+  expect(report.healthy).toBe(false);
+  expect(report.vaults[0].checks.tidy).toMatchObject({ ok: false, issue: expect.stringContaining("V06:") });
+  expect(report.vaults[0]).not.toHaveProperty("tidy");
   expect(migrationTree(f.dir)).toEqual(before);
 });

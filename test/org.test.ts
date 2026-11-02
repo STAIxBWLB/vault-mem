@@ -1,9 +1,10 @@
+import { replaceTopicsSection } from "../src/write-operations.ts";
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addVault } from "../src/registry.ts";
-import { promoteToOrg, screenForOrg, dropUnresolvedLinks, replaceTopicsSection } from "../src/org-promote.ts";
+import { promoteToOrg, screenForOrg, dropUnresolvedLinks } from "../src/org-promote.ts";
 import { syncVault, sameRemote } from "../src/sync.ts";
 import { readLog } from "../src/vault-log.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";

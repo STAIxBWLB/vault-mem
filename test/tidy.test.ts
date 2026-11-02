@@ -386,3 +386,42 @@ test("tidy migrates missing Topics and writes retained misplaced Topics with a w
   expect(f.read("migration-missing")).toContain("## Topics");
   expect(parseFrontmatter(f.read("migration-misplaced")).data.confidence).toBe("proven");
 });
+
+test("planning-only preview counts unvalidated notes and cannot bypass confirmation validation", () => {
+  const f = fixture();
+  writeFileSync(join(f.notes, "bad-key.md"), fm([...base(), `api_note: "${TOKEN}"`]) + "# Bad Key\n\n## Topics\n- [[research]]\n");
+  const before = f.disk();
+  const validated = f.tidy(["secrets"]);
+  expect(validated.skipped).toContain("notes/bad-key.md");
+  const planning = tidyVault(f.home, { vault: "mine", rules: ["secrets"] }, { validate: false });
+  expect(planning.ok).toBe(true);
+  expect(planning.notes.map(note => note.path)).toContain("notes/bad-key.md");
+  expect(planning.counts.secrets).toBe(validated.counts.secrets! + 1);
+  expect(planning.skipped).toBeUndefined();
+  expect(planning.fingerprint).toBeUndefined();
+  const confirmed = tidyVault(f.home, { vault: "mine", rules: ["secrets"], confirm: true }, { validate: false });
+  expect(confirmed.ok).toBe(false);
+  expect(confirmed.skipped).toContain("notes/bad-key.md");
+  expect(f.disk()).toEqual(before);
+});
+
+test("doctor migration planning never calls the per-note writer dry-run", () => {
+  const f = fixture(), before = f.disk(), log = readFileSync(join(f.vault, "log"), "utf8");
+  const child = Bun.spawnSync([process.execPath, "-e", `
+    import { mock } from "bun:test";
+    const writer = await import("./src/writer.ts");
+    mock.module("./src/writer.ts", () => ({ ...writer, applyWrite: () => { throw new Error("unexpected per-note writer validation"); } }));
+    const { run } = await import("./src/cli.ts");
+    process.stdout.write(JSON.stringify(run(["doctor", "--json"], { VMEM_HOME: ${JSON.stringify(f.home)} })));
+  `], { stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode).toBe(0);
+  const result = JSON.parse(child.stdout.toString());
+  expect(result.code).toBe(0);
+  const vault = JSON.parse(result.text).vaults[0];
+  expect(vault.tidy.pending.topics).toBe(1);
+  expect(vault.tidy.notes).toBeGreaterThan(0);
+  expect(vault.tidy).not.toHaveProperty("skipped");
+  expect(vault.checks?.tidy).toBeUndefined();
+  expect(f.disk()).toEqual(before);
+  expect(readFileSync(join(f.vault, "log"), "utf8")).toBe(log);
+});

@@ -78,11 +78,15 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
         }
         let preview: ReturnType<typeof tidyVault> | undefined;
         try {
-          if (vault.write !== "none") preview = tidyVault(home.home, { vault: vault.id, rules: [...TIDY_RULES] }, { env });
+          if (vault.write !== "none") preview = tidyVault(home.home, { vault: vault.id, rules: [...TIDY_RULES] }, { env, validate: false });
         } catch (error) { checks.tidy = { ok: false, issue: error instanceof Error ? error.message : "cannot preview migration tidy" }; }
+        if (preview && !preview.ok) {
+          const failures = preview.issues.filter(issue => issue.code !== "POLICY" && issue.code !== "PII_POLICY");
+          if (failures.length) checks.tidy = { ok: false, issue: failures.map(issue => `${issue.code}: ${issue.message}`).join("; ") };
+        }
         const unparsable = preview?.reported.filter(item => item.message.startsWith("unparsable note skipped")).map(item => item.path) ?? [];
-        const tidy = preview?.ok && (preview.notes.length || preview.skipped?.length || unparsable.length || Object.values(preview.counts).some(count => count > 0))
-          ? { pending: preview.counts, notes: preview.notes.length, skipped: preview.skipped ?? [], unparsable, hint: `Run vmem tidy ${vault.id} --all, then confirm its preview fingerprint to apply the migration.` }
+        const tidy = preview?.ok && (preview.notes.length || unparsable.length || Object.values(preview.counts).some(count => count > 0))
+          ? { pending: preview.counts, notes: preview.notes.length, unparsable, hint: `Run vmem tidy ${vault.id} --all, then confirm its preview fingerprint to apply the migration.` }
           : undefined;
         return { ...vault, checks: Object.keys(checks).length ? checks : undefined, ...(tidy ? { tidy } : {}) };
       });

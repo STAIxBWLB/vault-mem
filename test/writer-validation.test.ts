@@ -189,3 +189,10 @@ test("space-separated telephone numbers are screened one by one", () => {
   }
   expect(screenContent("2026-10-29 09:32 2026-10-30 10:00", privateVault, config)).toEqual([]);
 });
+
+test("validator refuses a prospective frontmatter/body Topics mismatch on a clean note", () => {
+  const before = note(), after = note({ topics: ["[[other]]"] });
+  const notes = new Map([["notes/research.md", moc], ["notes/other.md", moc.replace("# Research", "# Other")], ["notes/claim.md", before]]);
+  const findings = validateWrite([{ path: "notes/claim.md", before, after }], context(notes, { op: "frontmatter", path: "claim", set: { topics: ["[[other]]"] } }));
+  expect(findings).toContainEqual(expect.objectContaining({ code: "V05", severity: "error" }));
+});
