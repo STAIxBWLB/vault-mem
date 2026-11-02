@@ -157,12 +157,13 @@ test("Git operational failures propagate without invented freshness or ownership
 
 test("malformed Git pathspec syntax is a metadata issue and does not suppress other freshness or ownership", () => {
   const f = fixture(), valid = document("valid", { paths: ["src/**", ":(exclude)src/private.ts"], "verified-against": f.stamp });
-  for (const paths of [[":(unknown)src/**"], [":(glob,literal)src/**"]]) {
+  for (const paths of [[":(unknown)src/**"], [":(glob,literal)src/**"], [":(attr:)src/**"], [":(attr:foo==)src/**"]]) {
     const invalid = document("invalid", { paths, "verified-against": f.stamp }), snapshot = f.snapshot([invalid, valid]);
     const report = specFreshness(snapshot);
     expect(report.items).toEqual([{ path: valid.path, id: valid.id, state: "fresh", commits: 0, dirty: false }]);
     expect(report.issues).toEqual([expect.objectContaining({ code: "invalid_paths", field: "paths", path: invalid.path, message: expect.stringContaining("invalid Git pathspec syntax") })]);
-    expect(JSON.stringify(report.issues)).not.toContain(paths[0]!);
+    if (paths[0] === ":(attr:)src/**") expect(report.issues[0]!.message).toContain("attr spec must not be empty");
+    if (paths[0] === ":(attr:foo==)src/**") expect(report.issues[0]!.message).toContain("cannot use '=' for value matching");
     expect(specsCoveringPath(snapshot, "src/a.ts").map(spec => spec.id)).toEqual(["valid"]);
   }
 });

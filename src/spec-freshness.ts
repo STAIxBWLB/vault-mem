@@ -42,18 +42,7 @@ function pathRecords(bytes: Buffer): Buffer[] {
   }
   return paths;
 }
-type ScopeMatch = { files: Buffer } | { invalid: "syntax" | "unmatched" };
-function pathspecSyntaxFailure(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  // Git has no separate exit code for pathspec syntax; inspect only the helper's first Git diagnostic.
-  const prefix = /^spec source: git refused inspection \(exit \d+\): /.exec(error.message);
-  if (!prefix) return false;
-  const diagnostic = error.message.slice(prefix[0].length).split("; inspect git -C <path>", 1)[0]!;
-  return /^fatal: (?:Invalid|Unimplemented) pathspec magic\b/.test(diagnostic)
-    || /^fatal: Missing '\)' at the end of pathspec magic\b/.test(diagnostic)
-    || /^fatal: pathspec magic not supported by this command\b/.test(diagnostic)
-    || /^fatal: (?:Only one prefix magic is allowed|Invalid prefix value|invalid attribute name|each element of 'attr:'|multiple values? for a single attribute)\b/i.test(diagnostic);
-}
+type ScopeMatch = { files: Buffer } | { invalid: "syntax" | "unmatched"; diagnostic?: string };
 function trackedScope(root: string, paths: string[], options: SpecFreshnessOptions): ScopeMatch {
   // This conflict is known before Git quotes a possibly long pattern into a truncated diagnostic.
   if (paths.some(path => {
@@ -61,14 +50,15 @@ function trackedScope(root: string, paths: string[], options: SpecFreshnessOptio
     const magic = path.slice(2, path.indexOf(")")).split(",");
     return magic.includes("literal") && magic.includes("glob");
   })) return { invalid: "syntax" };
-  try {
-    const result = specGit(root, ["ls-files", "--cached", "-z", "--error-unmatch", "--", ...paths], { env: options.env, maxBuffer: PATH_OUTPUT_BYTES, allowedExitCodes: [0, 1] });
-    if (result.status !== 0 || !hasPaths(result.stdout)) return { invalid: "unmatched" };
-    return { files: result.stdout };
-  } catch (error) {
-    if (pathspecSyntaxFailure(error)) return { invalid: "syntax" };
-    throw error;
+  const result = specGit(root, ["ls-files", "--cached", "-z", "--error-unmatch", "--", ...paths], { env: options.env, maxBuffer: PATH_OUTPUT_BYTES, allowedExitCodes: [0, 1, 128] });
+  if (result.status === 128) {
+    // A library caller may have a stale snapshot: distinguish a broken index from bad scope syntax.
+    specGit(root, ["ls-files", "--cached", "-z"], { env: options.env, maxBuffer: PATH_OUTPUT_BYTES });
+    const diagnostic = result.stderr.toString("utf8").split(/\r?\n/, 1)[0]?.split(root).join("<path>").slice(0, 240) || "no diagnostic";
+    return { invalid: "syntax", diagnostic };
   }
+  if (result.status !== 0 || !hasPaths(result.stdout)) return { invalid: "unmatched" };
+  return { files: result.stdout };
 }
 function fullHash(bytes: Buffer): string {
   const value = bytes.toString("utf8").replace(/\n$/, "");
@@ -128,7 +118,7 @@ export function specFreshness(snapshot: SpecSnapshot, options: SpecFreshnessOpti
     if (paths !== undefined) {
       const scope = trackedScope(snapshot.root, paths, options);
       if ("invalid" in scope) issues.push(issue(candidate, "invalid_paths", "paths", scope.invalid === "syntax"
-        ? "paths contain invalid Git pathspec syntax; correct the pathspec magic or use a repository-relative tracked path from git ls-files"
+        ? `paths contain invalid Git pathspec syntax${scope.diagnostic ? ` (${scope.diagnostic})` : ""}; correct the pathspec magic or use a repository-relative tracked path from git ls-files`
         : "one or more paths match no tracked files, or exclusions leave the scope empty; choose matching pathspecs from git ls-files and correct the paths list"));
       else validPaths = paths;
     }

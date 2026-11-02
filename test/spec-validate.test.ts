@@ -207,6 +207,9 @@ test("duplicate id identity survives moving either duplicate but detects a newly
   const foreign = { ...current, commonDir: "/foreign/.git" };
   expect(introducedSpecErrors(current, foreign, { git: false })).toContainEqual(expect.objectContaining({ code: "duplicate_id", id: "shared" }));
   const third = { ...a, path: "c.md" };
+  expect(introducedSpecErrors(current, snapshot([root, a, b, third]), { git: false })).toEqual([
+    expect.objectContaining({ code: "duplicate_id", path: "c.md" }),
+  ]);
   expect(validateSpecs(snapshot([root, a, b, third]), { git: false }).items.filter(item => item.code === "duplicate_id")).toHaveLength(2);
 });
 

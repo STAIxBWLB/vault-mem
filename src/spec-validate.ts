@@ -215,8 +215,18 @@ export function introducedSpecErrors(current: SpecSnapshot, prospective: SpecSna
     record.issue.code === "duplicate_id" && record.issue.id !== undefined
       ? JSON.stringify([createHash("sha256").update(input.commonDir).digest("hex"), "duplicate_id", createHash("sha256").update(record.issue.id).digest("hex")])
       : record.key;
-  const old = new Set(collect(current, options).records.filter(record => record.issue.severity === "error").map(record => comparisonKey(current, record)));
-  const next = collect(prospective, options, owners).records.filter(record => record.issue.severity === "error" && !old.has(comparisonKey(prospective, record)));
+  const old = new Map<string, number>();
+  for (const record of collect(current, options).records) if (record.issue.severity === "error") {
+    const key = comparisonKey(current, record); old.set(key, (old.get(key) ?? 0) + 1);
+  }
+  const prospectiveErrors = collect(prospective, options, owners).records.filter(record => record.issue.severity === "error");
+  // Retained owners consume existing debt before new or moved files do.
+  prospectiveErrors.sort((a, b) => Number(owners.get(b.issue.path)?.kind === "old") - Number(owners.get(a.issue.path)?.kind === "old"));
+  const next = prospectiveErrors.filter(record => {
+    const key = comparisonKey(prospective, record), count = old.get(key) ?? 0;
+    if (count === 0) return true;
+    old.set(key, count - 1); return false;
+  });
   const result = display(next.map(record => record.issue), limit, { bytes: 1024, truncated: false });
   if (next.length && !result.length) throw new Error("spec validation: introduced error metadata exceeds the report budget; reduce metadata before writing");
   return result;
