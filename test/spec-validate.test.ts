@@ -244,10 +244,16 @@ test("candidate keys keep an encoding error when another frontmatter value is in
   expect(() => validateSpecRepo(f.repo)).toThrow("not valid UTF-8");
 });
 
-test("covers token claims warn across scalar/list forms without adding unspecified optional-metadata errors", () => {
-  const result = validateSpecs(snapshot([document("root", { covers: "REQ-1", tags: "legacy-tag" }), document("child", { covers: ["REQ-1"] })]), { git: false });
-  expect(result.errors).toBe(0);
-  expect(result.items.filter(item => item.code === "duplicate_covers")).toHaveLength(2);
+test("covers and tags require lists of nonempty strings and only valid covers lists claim tokens", () => {
+  for (const field of ["covers", "tags"]) for (const value of ["REQ-1", ["REQ-1", 1], ["REQ-1", ""], ["REQ-1", "  "], null]) {
+    const result = validateSpecs(snapshot([document("root", { [field]: value }), document("child", { covers: ["REQ-1"] })]), { git: false });
+    expect(result.items.filter(item => item.code === "wrong_shape")).toEqual([expect.objectContaining({ field, path: "root/SPEC.md" })]);
+    expect(result.items.filter(item => item.code === "duplicate_covers")).toHaveLength(0);
+  }
+  const valid = validateSpecs(snapshot([document("root", { covers: ["REQ-1"], tags: [] }), document("child", { covers: ["REQ-1"], tags: ["synthetic"] })]), { git: false });
+  expect(valid.errors).toBe(0);
+  expect(valid.items.filter(item => item.code === "duplicate_covers")).toHaveLength(2);
+  expect(validateSpecs(snapshot([document("root", { covers: [], tags: [] })]), { git: false }).errors).toBe(0);
 });
 
 test("errors in a different repository namespace cannot excuse prospective errors", () => {

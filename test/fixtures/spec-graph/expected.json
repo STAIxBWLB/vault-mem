@@ -181,5 +181,17 @@
       "invalid_frontmatter"
     ],
     "warnings": []
+  },
+  "covers-shape": {
+    "errors": [
+      "wrong_shape"
+    ],
+    "warnings": []
+  },
+  "tags-shape": {
+    "errors": [
+      "wrong_shape"
+    ],
+    "warnings": []
   }
 }

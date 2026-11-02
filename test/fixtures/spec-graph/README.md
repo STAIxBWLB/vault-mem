@@ -23,6 +23,8 @@ The `valid` case uses skipped rank levels, native relative pathspec lists, and p
 | `superseded-dangling` | dangling_link | - |
 | `link-list-shape` | wrong_shape | - |
 | `single-link-shape` | wrong_shape | - |
+| `covers-shape` | wrong_shape | - |
+| `tags-shape` | wrong_shape | - |
 | `paths-shape` | wrong_shape | - |
 | `paths-empty` | wrong_shape | - |
 | `paths-absolute` | invalid_paths | - |
@@ -39,6 +41,6 @@ The `valid` case uses skipped rank levels, native relative pathspec lists, and p
 | `active-without-paths` | - | active_without_paths |
 | `invalid-frontmatter` | invalid_frontmatter | - |
 
-Required fields are nonempty strings: `id`, `type`, `title`. Types are `goal`, `architecture`, `module`, `submodule`; ranks are 0, 1, 2, 3 and child rank must exceed parent rank. Status is optional and, when present, is `draft`, `active` or `deprecated`. `parent` and `superseded-by` are single links; `depends-on`, `references` and `implements` are lists, including an empty list. `paths` is a nonempty list of relative Git pathspecs with no parent traversal and must match tracked files. Supersession is valid only on a deprecated spec and cannot point to itself or a missing node.
+Required fields are nonempty strings: `id`, `type`, `title`. Types are `goal`, `architecture`, `module`, `submodule`; ranks are 0, 1, 2, 3 and child rank must exceed parent rank. Status is optional and, when present, is `draft`, `active` or `deprecated`. `parent` and `superseded-by` are single links; `depends-on`, `references` and `implements` are lists, including an empty list. `covers` and `tags` are lists of nonempty strings (empty lists are allowed); only valid `covers` lists contribute claims. `paths` is a nonempty list of relative Git pathspecs with no parent traversal and must match tracked files. Supersession is valid only on a deprecated spec and cannot point to itself or a missing node.
 
 A validation candidate is named `SPEC.md` or has parsed frontmatter containing `id` or `type`. A plain/horizontal-rule README is not a candidate. With unparseable YAML, only the `SPEC.md` filename asserts candidacy. Only candidates with a usable id and type become graph nodes. Body links resolve by id and may use aliases/headings; unresolved body links warn. No fixture contains real note text, credentials or repository paths.

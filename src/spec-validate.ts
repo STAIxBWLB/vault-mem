@@ -110,13 +110,20 @@ function collect(snapshot: SpecSnapshot, options: SpecValidationOptions, owners?
       const parentType = nodes.get(parent)?.frontmatter.type;
       if (typeof data.type === "string" && typeof parentType === "string" && Object.hasOwn(RANK, data.type) && Object.hasOwn(RANK, parentType) && RANK[data.type]! <= RANK[parentType]!) add(candidate, "type_rank", "error", "parent", "child rank must exceed parent rank; choose a higher-level parent (levels may be skipped)", parent);
     }
-    const tokens = typeof data.covers === "string" ? [data.covers] : Array.isArray(data.covers) ? data.covers : [];
-    for (const value of tokens) {
-      tick();
-      if (!nonempty(value)) continue;
-      const token = value.trim();
-      let owners = covers.get(token); if (!owners) covers.set(token, owners = new Map());
-      owners.set(candidate.path, candidate);
+    for (const field of ["covers", "tags"] as const) {
+      const values = data[field];
+      if (values === undefined) continue;
+      let valid = Array.isArray(values);
+      if (Array.isArray(values)) for (const value of values) { tick(); if (!nonempty(value)) valid = false; }
+      if (!valid) {
+        add(candidate, "wrong_shape", "error", field, `${field} must be a list of nonempty strings; correct the frontmatter field`);
+        continue;
+      }
+      if (field === "covers") for (const value of values as string[]) {
+        const token = value.trim();
+        let owners = covers.get(token); if (!owners) covers.set(token, owners = new Map());
+        owners.set(candidate.path, candidate);
+      }
     }
     for (const link of extractLinks(candidate.body)) {
       tick();
