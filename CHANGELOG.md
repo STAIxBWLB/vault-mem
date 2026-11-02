@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-02
+
 - Polish the spec read surface: scope fish parent completions to the first subcommand, preserve positional help tokens after `--`, document spec MCP tools and startup source registration, clarify shared field/error guidance, reuse body section helpers, and keep literal snippets on code-point boundaries (#103).
 
 - Add read-only spec MCP tools and CLI get/graph/grep/validate commands from a shared bounded schema table, registry-free `spec validate --repo` CI mode, worktree-aware source selection, body/search pagination and metadata/path-scope filters. Spec snapshot filtering precedes FTS pagination; new read tools appear in the manifest. Spec content write tools remain deferred (#91 T5).
