@@ -195,6 +195,21 @@ test("duplicate and missing id repairs do not turn retained field errors into in
   expect(introducedSpecErrors(snapshot([root, a]), snapshot([root, moved]), { git: false })).toEqual([]);
 });
 
+test("duplicate id identity survives moving either duplicate but detects a newly duplicated id", () => {
+  const root = document("root"), a = { ...document("shared"), path: "a.md" }, b = { ...document("shared"), path: "b.md" };
+  const current = snapshot([root, a, b]);
+  for (const specs of [[root, b, { ...a, path: "z.md" }], [root, a, { ...b, path: "z.md" }]]) {
+    expect(introducedSpecErrors(current, snapshot(specs), { git: false })).toEqual([]);
+  }
+  expect(introducedSpecErrors(snapshot([root, a]), current, { git: false })).toEqual([
+    expect.objectContaining({ code: "duplicate_id", id: "shared", path: "b.md" }),
+  ]);
+  const foreign = { ...current, commonDir: "/foreign/.git" };
+  expect(introducedSpecErrors(current, foreign, { git: false })).toContainEqual(expect.objectContaining({ code: "duplicate_id", id: "shared" }));
+  const third = { ...a, path: "c.md" };
+  expect(validateSpecs(snapshot([root, a, b, third]), { git: false }).items.filter(item => item.code === "duplicate_id")).toHaveLength(2);
+});
+
 test("oversized frontmatter is not silently mistaken for non-candidate Markdown", () => {
   const f = fixture();
   f.write("candidate.md", '---\nid: large\ntype: module\ntitle: Synthetic large header\nextra: "' + "x".repeat(MAX_NOTE_BYTES) + '"\n---\n# Synthetic body\n');

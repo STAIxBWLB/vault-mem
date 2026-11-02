@@ -209,8 +209,14 @@ export function introducedSpecErrors(current: SpecSnapshot, prospective: SpecSna
     owners.set(path, { kind: retained ? "old" : "new", path });
     if (retained) reserved.add(path);
   }
-  const old = new Set(collect(current, options).records.filter(record => record.issue.severity === "error").map(record => record.key));
-  const next = collect(prospective, options, owners).records.filter(record => record.issue.severity === "error" && !old.has(record.key));
+  // Duplicate identity belongs to the id, even when a move changes the first file in path order.
+  // Keep collection keys unchanged so validation still reports each duplicate file.
+  const comparisonKey = (input: SpecSnapshot, record: Collected["records"][number]): string =>
+    record.issue.code === "duplicate_id" && record.issue.id !== undefined
+      ? JSON.stringify([createHash("sha256").update(input.commonDir).digest("hex"), "duplicate_id", createHash("sha256").update(record.issue.id).digest("hex")])
+      : record.key;
+  const old = new Set(collect(current, options).records.filter(record => record.issue.severity === "error").map(record => comparisonKey(current, record)));
+  const next = collect(prospective, options, owners).records.filter(record => record.issue.severity === "error" && !old.has(comparisonKey(prospective, record)));
   const result = display(next.map(record => record.issue), limit, { bytes: 1024, truncated: false });
   if (next.length && !result.length) throw new Error("spec validation: introduced error metadata exceeds the report budget; reduce metadata before writing");
   return result;
