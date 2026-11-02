@@ -14,6 +14,9 @@ export const COMMANDS = [
   { name: "vaults add", usage: "vaults add <id> <absolute-path> --kind personal|org --write mcp|cli|none [--pii allow|deny] [--remote URL] [--registry PATH] [--json]", mutates: true },
   { name: "vaults remove", usage: "vaults remove <id> [--confirm] [--json]", mutates: "confirm" },
   { name: "vaults pii", usage: "vaults pii <id> [--set allow|deny|JSON] [--confirm] [--json]", mutates: "confirm" },
+  { name: "specs list", usage: "specs list [--json]", mutates: false },
+  { name: "specs add", usage: "specs add <id> <absolute-path> [--write mcp|cli|none] [--pii allow|deny] [--json]", mutates: true },
+  { name: "specs remove", usage: "specs remove <id> [--confirm] [--json]", mutates: "confirm" },
   { name: "new", usage: "new <vault> <stem> --type TYPE --domain DOMAIN --topics a,b --description TEXT [--title TEXT] [--source TEXT|JSON] [--confidence TEXT] [--status TEXT] [--body file|-] [--extra JSON] [--dry-run] [--json]", mutates: true },
   { name: "patch", usage: "patch <vault> <note> --old TEXT --new TEXT [--expected-sha SHA] [--dry-run] [--json]", mutates: true },
   { name: "append", usage: "append <vault> <note> --section SECTION --markdown TEXT [--expected-sha SHA] [--dry-run] [--json]", mutates: true },
@@ -69,7 +72,7 @@ export function completionScript(shell: string): string {
       const cond = d.path.length === 1 ? `__fish_seen_subcommand_from ${d.path[0]}` : `__fish_seen_subcommand_from ${d.path[1]}`;
       for (const flag of Object.keys(d.options)) lines.push(`complete -c vmem -n ${quote(cond)} -l ${flag.slice(2)}`);
     }
-    for (const parent of ["vaults", "log", "graph", "skills"]) lines.push(`complete -c vmem -n '__fish_seen_subcommand_from ${parent}' -a ${quote(defs.filter(d => d.path[0] === parent).map(d => d.path[1]).join(" "))}`);
+    for (const parent of ["vaults", "specs", "log", "graph", "skills"]) lines.push(`complete -c vmem -n '__fish_seen_subcommand_from ${parent}' -a ${quote(defs.filter(d => d.path[0] === parent).map(d => d.path[1]).join(" "))}`);
     return lines.join("\n") + "\n";
   }
   const cases = defs.map(d => `    ${quote(d.path.join(" "))}) words=${quote(Object.keys(d.options).join(" "))} ;;`);
@@ -78,7 +81,7 @@ export function completionScript(shell: string): string {
   cur="\${COMP_WORDS[COMP_CWORD]}"
   if [ "$COMP_CWORD" -eq 1 ]; then COMPREPLY=($(compgen -W ${quote(top.join(" "))} -- "$cur")); return; fi
   key="\${COMP_WORDS[1]}"
-  case "$key" in graph) if [ "$COMP_CWORD" -eq 2 ]; then COMPREPLY=($(compgen -W 'build neighbors' -- "$cur")); return; fi; key="$key \${COMP_WORDS[2]}" ;; skills) if [ "$COMP_CWORD" -eq 2 ]; then COMPREPLY=($(compgen -W 'mine' -- "$cur")); return; fi; key="$key \${COMP_WORDS[2]}" ;; vaults|log) if [ "$COMP_CWORD" -eq 2 ]; then COMPREPLY=($(compgen -W "$( [ "$key" = vaults ] && echo 'list add remove' || echo 'tail grep append')" -- "$cur")); return; fi; key="$key \${COMP_WORDS[2]}" ;; esac
+  case "$key" in graph) if [ "$COMP_CWORD" -eq 2 ]; then COMPREPLY=($(compgen -W 'build neighbors' -- "$cur")); return; fi; key="$key \${COMP_WORDS[2]}" ;; skills) if [ "$COMP_CWORD" -eq 2 ]; then COMPREPLY=($(compgen -W 'mine' -- "$cur")); return; fi; key="$key \${COMP_WORDS[2]}" ;; specs) if [ "$COMP_CWORD" -eq 2 ]; then COMPREPLY=($(compgen -W 'list add remove' -- "$cur")); return; fi; key="$key \${COMP_WORDS[2]}" ;; vaults|log) if [ "$COMP_CWORD" -eq 2 ]; then COMPREPLY=($(compgen -W "$( [ "$key" = vaults ] && echo 'list add remove' || echo 'tail grep append')" -- "$cur")); return; fi; key="$key \${COMP_WORDS[2]}" ;; esac
   case "$key" in
 ${cases.join("\n")}
     *) words='' ;;

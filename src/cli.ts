@@ -12,7 +12,7 @@ import { VMEM_TOOL_NAMES } from "./mcp-vault.ts";
 import { CONFIG_VERSION } from "./config.ts";
 import { runSetup, type SetupMode } from "./setup.ts";
 import { resolveHome } from "./home.ts";
-import { addVault, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault, setVaultPii } from "./registry.ts";
+import { addVault, addSpec, removeSpec, specStatus, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault, setVaultPii } from "./registry.ts";
 import { piiPolicy } from "./pii.ts";
 function parse(args: string[], allowed: string[], values: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
@@ -62,16 +62,17 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
   if (args[0] === "log") return runLogCommand(args.slice(1), resolveHome(env).home, env);
   if (isWriteCommand(args[0]!)) return runWriteCommand(args[0]!, args.slice(1), resolveHome(env).home, env);
   if (isReadCommand(args[0]!)) return runReadCommand(args[0]!, args.slice(1), resolveHome(env).home);
-  const command = args[0] === "vaults" ? `vaults ${args[1] ?? ""}` : args[0];
-  const tail = args.slice(args[0] === "vaults" ? 2 : 1);
-  const options = command === "vaults add" ? ["--kind", "--write", "--pii", "--remote", "--registry"] : command === "vaults pii" ? ["--set"] : [];
-  const { flags, positional } = parse(tail, ["--json", ...options, ...(command === "vaults remove" || command === "vaults pii" || command === "recover" ? ["--confirm"] : [])], options);
+  const group = args[0] === "vaults" || args[0] === "specs";
+  const command = group ? `${args[0]} ${args[1] ?? ""}` : args[0];
+  const tail = args.slice(group ? 2 : 1);
+  const options = command === "vaults add" ? ["--kind", "--write", "--pii", "--remote", "--registry"] : command === "vaults pii" ? ["--set"] : command === "specs add" ? ["--write", "--pii"] : [];
+  const { flags, positional } = parse(tail, ["--json", ...options, ...(command === "vaults remove" || command === "specs remove" || command === "vaults pii" || command === "recover" ? ["--confirm"] : [])], options);
   const home = resolveHome(env);
   let result: unknown, code = 0;
   switch (command) {
     case "status": case "doctor": {
       if (positional.length) throw new Error(`${command}: unexpected arguments`);
-      const config = command === "doctor" ? loadRegistry(home.home) : undefined;
+      const config = loadRegistry(home.home);
       const vaults = registryStatus(home.home).map(vault => {
         if (command !== "doctor" || !vault.healthy) return { ...vault, checks: undefined };
         const checks: Record<string, { ok: boolean; issue?: string }> = {};
@@ -82,7 +83,7 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
           } catch (error) { checks.remote = { ok: false, issue: error instanceof Error ? error.message : "git failed" }; }
         }
         if (vault.registry) {
-          try { registryIds(vault.registry, config!.denyPaths); checks.registry = { ok: true }; }
+          try { registryIds(vault.registry, config.denyPaths); checks.registry = { ok: true }; }
           catch (error) { checks.registry = { ok: false, issue: error instanceof Error ? error.message : "cannot read project registry" }; }
         }
         let preview: ReturnType<typeof tidyVault> | undefined;
@@ -99,8 +100,9 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
           : undefined;
         return { ...vault, checks: Object.keys(checks).length ? checks : undefined, ...(tidy ? { tidy } : {}) };
       });
-      const healthy = vaults.every(v => v.healthy && (!v.checks || Object.values(v.checks).every(check => check.ok)));
-      result = { ...home, version, stage: "foundation", healthy, vaults };
+      const sources = command === "doctor" && config.specs !== undefined ? specStatus(home.home, env) : undefined;
+      const healthy = vaults.every(v => v.healthy && (!v.checks || Object.values(v.checks).every(check => check.ok))) && (!sources || sources.every(source => source.healthy));
+      result = { ...home, version, stage: "foundation", healthy, vaults, ...(config.specs !== undefined ? { specs: sources ?? config.specs } : {}) };
       if (command === "doctor" && !healthy) code = 1;
       break;
     }
@@ -108,6 +110,21 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
       if (positional.length) throw new Error("recover: unexpected arguments");
       result = recoverRegistry(home.home, flags["--confirm"] === true);
       if ((result as { blocked?: string }).blocked) code = 1;
+      break;
+    case "specs list":
+      if (positional.length) throw new Error("specs list: unexpected targets; use vmem specs list [--json]");
+      result = loadRegistry(home.home).specs ?? [];
+      break;
+    case "specs add": {
+      if (positional.length !== 2) throw new Error("specs add: requires id and absolute repository root; use vmem specs add <id> <absolute-path> [--write mcp|cli|none] [--pii allow|deny]");
+      const value: Record<string, unknown> = { id: positional[0], path: positional[1] };
+      for (const option of options) if (flags[option] !== undefined) value[option.slice(2)] = flags[option];
+      result = { applied: true, spec: addSpec(home.home, value, env) };
+      break;
+    }
+    case "specs remove":
+      if (positional.length !== 1) throw new Error("specs remove: requires one id; use vmem specs list, then vmem specs remove <id> [--confirm]");
+      result = removeSpec(home.home, positional[0]!, flags["--confirm"] === true);
       break;
     case "vaults list":
       if (positional.length) throw new Error("vaults list: unexpected arguments");

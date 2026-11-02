@@ -25,7 +25,7 @@ Home precedence: `VMEM_HOME` (the pointer is not consulted), else a `home` point
 {"vaults":[{"id":"personal","path":"/absolute/vault","kind":"personal","write":"mcp"}],"denyPaths":[],"piiPatterns":[]}
 ```
 
-Configuration is limited to 64 KiB both on read and after serialization (a change whose pretty-printed result exceeds the limit is refused and the file is unchanged), rejects unknown keys, and is updated under an exclusive lock using a flushed temporary file and atomic rename. An optional top-level `version` (positive integer, absent means 1) names the config format; this build writes format 1 and never adds `version` itself, so 0.2.4 and older keep reading what it writes. A config whose `version` is newer than this build's format is read tolerantly: unknown keys at the top level, in vaults and in PII policies are kept and written back unchanged by registry commands, while the keys this build knows are still validated. A PII policy with members this build does not know cannot be enforced, so it fails closed: every write on that vault (note writes and `check`, two-step previews and confirms, tidy, `promote-from-amem`, `promote` and log appends) is refused with `PII_POLICY`, naming the members, until the newer vmem that wrote the policy does the write. Reads and `vaults pii` show are unaffected. `vaults pii --set` refuses to replace a policy that carries such members, since the replacement would drop them; change it with the newer vmem. Versions that add a key bump the format. Errors name the config file or vault id and path but never echo config or note contents.
+Configuration is limited to 64 KiB both on read and after serialization (a change whose pretty-printed result exceeds the limit is refused and the file is unchanged), rejects unknown keys, and is updated under an exclusive lock using a flushed temporary file and atomic rename. An optional top-level `version` (positive integer, absent means 1) names the config format; this build supports format 2 and adds `version: 2` when `specs` is present. Vault-only configurations retain their existing version field (or its absence), so 0.2.4 and older keep reading those configurations. A config whose `version` is newer than this build's format is read tolerantly: unknown keys at the top level, in vaults and in PII policies are kept and written back unchanged by registry commands, while the keys this build knows are still validated. A PII policy with members this build does not know cannot be enforced, so it fails closed: every write on that vault (note writes and `check`, two-step previews and confirms, tidy, `promote-from-amem`, `promote` and log appends) is refused with `PII_POLICY`, naming the members, until the newer vmem that wrote the policy does the write. Reads and `vaults pii` show are unaffected. `vaults pii --set` refuses to replace a policy that carries such members, since the replacement would drop them; change it with the newer vmem. Versions that add a key bump the format. Errors name the config file or vault id and path but never echo config or note contents.
 
 Durability: the temporary file is fsynced before the rename and the home directory is fsynced after it. On Linux this makes the new config durable once the command returns. On macOS directory fsync succeeds but does not flush the drive cache (no `F_FULLFSYNC`), so a power loss right after a change can revert to the previous complete config, never to a partial one. Windows is not a supported platform for durability claims; the rename stays atomic.
 
@@ -326,3 +326,21 @@ Runtime changes intentionally make `release:verify` report stale historical rele
 | `--log` | replace secret-looking substrings in existing log lines with `[redacted]`, and PII values that the vault policy denies on the `log` surface (allow-list entries excepted), under the log lock (refused with V06 when `denyPaths` covers the log). A line that fails the lint L09 structure check loses a trailing seconds field when that makes it valid, and is otherwise kept verbatim behind `# legacy: ` (readers skip `#` lines); no time, zone or TYPE is guessed. Other lines are kept byte for byte. Git history is not rewritten: rotate exposed credentials |
 
 `--map <file>` overrides defaults with strict JSON `{"enums": {"confidence|status|type": {"from": "to"}}, "keys": {"key": "drop" | "keep" | {"rename": "key"}}}` (at most 64 KiB and 1000 entries). For `tidy`, `--log` selects the log rule; tidy always writes its own `LINT` event.
+
+# Spec source registry
+
+Register a local repository as a separate spec source:
+
+```sh
+vmem specs add project-specs /absolute/repository --write none --pii deny
+vmem specs list --json
+vmem doctor --json
+vmem specs remove project-specs
+vmem specs remove project-specs --confirm
+```
+
+The config `specs` array holds `id`, canonical git working-tree root `path`, `write` (`mcp|cli|none`, default `none`) and `pii` (`allow|deny`, default `deny`). IDs are unique across vaults and spec sources. A spec source does not need a `notes/` directory. Registration and removal reuse the vault registry lock and atomic config write. Removal previews first, then `--confirm` unregisters only; repository files remain in place.
+
+Config writes containing `specs` use format 2; a config without `specs` keeps its existing serialization and version field. `status` lists spec entries under a separate `specs` key, and `doctor` checks that every registered path is still its canonical git working-tree root. An unavailable or changed root makes doctor exit 1 with a per-source issue. Existing vault entries and `vaults list` keep their output shape.
+
+This increment implements registration and root diagnostics only. Spec discovery, indexing, graph/search, validation and MCP spec tools are not yet implemented. Spec create/update/delete tools remain deferred; `write` stores a policy for later capabilities. Commands do not edit repository content or run git commit, branch or push.

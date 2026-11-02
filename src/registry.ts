@@ -1,8 +1,10 @@
 import { closeSync, constants, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { realPath, memoryGitArgv, memoryGitEnv } from "./platform.ts";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { CONFIG_FILE, MAX_CONFIG_BYTES, parseConfig, parsePii, parseVault, piiExtensions, readConfig, type VaultSpec, type VmemConfig } from "./config.ts";
+import { CONFIG_FILE, MAX_CONFIG_BYTES, parseConfig, parsePii, parseVault, parseSpec, piiExtensions, readConfig, type VaultSpec, type SpecSourceSpec, type VmemConfig } from "./config.ts";
 import { loosenedCells, piiPolicy, piiShorthand } from "./pii.ts";
 export const LOCK_FILE = "config.lock";
 const TEMP = /^\.config-[0-9a-f-]{36}\.tmp$/;
@@ -41,6 +43,7 @@ function mutate<T>(home: string, update: (config: VmemConfig) => T): T {
     const owner: LockOwner = { pid: process.pid, host: hostname(), created: new Date().toISOString() };
     writeFileSync(lockFd, JSON.stringify(owner) + "\n");
     const config = loadRegistry(home), result = update(config);
+    if (config.specs !== undefined) config.version = Math.max(config.version ?? 1, 2);
     parseConfig(config);
     const text = JSON.stringify(config, null, 2) + "\n";
     if (Buffer.byteLength(text) > MAX_CONFIG_BYTES) throw new Error(`${join(home, CONFIG_FILE)}: serialized config exceeds 64 KiB`);
@@ -148,7 +151,7 @@ export function addVault(home: string, value: unknown): VaultSpec {
   if (!isDir) throw new Error(`vault ${vault.id}: ${vault.path} must contain notes directory`);
   if (realpathSync(notes) !== notes) throw new Error(`vault ${vault.id}: ${notes} must not be a symlink`);
   return mutate(home, config => {
-    if (config.vaults.some(v => v.id === vault.id)) throw new Error(`vault ${vault.id}: id already registered`);
+    if ([...config.vaults, ...(config.specs ?? [])].some(v => v.id === vault.id)) throw new Error(`vault ${vault.id}: id already registered; use vmem vaults list and vmem specs list, then choose a unique id`);
     if (config.vaults.some(v => {
       if (v.path === vault.path) return true;
       try { return realpathSync(v.path) === vault.path; }
@@ -197,5 +200,63 @@ export function registryStatus(home: string) {
       if (root !== vault.path || realpathSync(notes) !== notes || !statSync(notes).isDirectory()) throw new Error("changed");
       return { ...base, healthy: true };
     } catch { return { ...base, healthy: false, issue: "vault path or notes directory unavailable or changed" }; }
+  });
+}
+
+/** Inspect only local git metadata, with inherited repository overrides removed and bounded output/time. */
+function requireSpecRoot(path: string, env: NodeJS.ProcessEnv): void {
+  const argv = memoryGitArgv(["-C", path, "rev-parse", "--show-toplevel"]);
+  const result = spawnSync(argv[0]!, argv.slice(1), { env: memoryGitEnv({ ...env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }, { repositoryIsolation: true }), encoding: "utf8", timeout: 5000, maxBuffer: 65536, stdio: ["ignore", "pipe", "pipe"] });
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    if (code === "ETIMEDOUT") throw new Error("spec source: git root check timed out after 5000 ms; retry and check for a locked repository or slow mount");
+    if (code === "ENOBUFS") throw new Error("spec source: git root check output exceeded 64 KiB; inspect git -C <path> rev-parse --show-toplevel and repair unexpected output before retrying");
+    throw new Error(`spec source: git could not run (${code ?? "spawn failure"}); install git or fix PATH, then retry the root check`);
+  }
+  if (result.status !== 0) {
+    const firstLine = result.stderr.split(/\r?\n/, 1)[0]?.split(path).join("<path>").slice(0, 240) || "no diagnostic";
+    throw new Error(`spec source: git refused the root check (exit ${result.status ?? "signal"}): ${firstLine}; inspect git -C <path> rev-parse --show-toplevel and repair the repository or ownership configuration`);
+  }
+  const root = result.stdout.replace(/\r?\n$/, "");
+  if (root !== path) throw new Error(`spec source: selected path is inside a work tree but not its root; register the reported root ${root} with vmem specs add <id> <absolute-path>`);
+}
+export function addSpec(home: string, value: unknown, env: NodeJS.ProcessEnv = process.env): SpecSourceSpec {
+  const spec = parseSpec(value);
+  try { spec.path = realPath(spec.path); }
+  catch { throw new Error(`spec source ${spec.id}: path is unavailable; restore the repository or pass its existing absolute root to vmem specs add`); }
+  requireSpecRoot(spec.path, env);
+  return mutate(home, config => {
+    if ([...config.vaults, ...(config.specs ?? [])].some(source => source.id === spec.id)) throw new Error(`spec source ${spec.id}: id already registered; use vmem specs list and vmem vaults list, then choose a unique id`);
+    if ((config.specs ?? []).some(source => {
+      if (source.path === spec.path) return true;
+      try { return realPath(source.path) === spec.path; }
+      catch (error) {
+        if (["ENOENT", "ENOTDIR", "EACCES", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+        throw error;
+      }
+    })) throw new Error(`spec source ${spec.id}: path already registered; use vmem specs list to select its existing id`);
+    (config.specs ??= []).push(spec);
+    return spec;
+  });
+}
+export function removeSpec(home: string, id: string, confirm = false): { applied: boolean; spec: SpecSourceSpec } {
+  const remove = (config: VmemConfig) => {
+    const spec = config.specs?.find(source => source.id === id);
+    if (!spec) throw new Error(`unknown spec source id ${id}; use vmem specs list to select a registered id`);
+    if (confirm) config.specs = config.specs!.filter(source => source.id !== id);
+    return { applied: confirm, spec };
+  };
+  return confirm ? mutate(home, remove) : remove(loadRegistry(home));
+}
+export function specStatus(home: string, env: NodeJS.ProcessEnv = process.env) {
+  return (loadRegistry(home).specs ?? []).map(spec => {
+    try {
+      if (realPath(spec.path) !== spec.path) throw new Error("spec source path changed; restore the canonical repository root or unregister it with vmem specs remove <id>");
+      requireSpecRoot(spec.path, env);
+      return { ...spec, healthy: true };
+    } catch (error) {
+      const cause = error instanceof Error ? error.message : "spec source path inspection failed";
+      return { ...spec, healthy: false, issue: `${cause}; restore a readable canonical root, or unregister it with vmem specs remove <id>` };
+    }
   });
 }
