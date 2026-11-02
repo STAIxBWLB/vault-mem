@@ -9,31 +9,54 @@ export interface McpServerOptions { tools: readonly McpTool[]; handlers: Record<
 const protocols = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const plain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v) && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
 
-/** Runtime validation for the small schema vocabulary the tools use. Unknown keywords never widen acceptance. */
-export function validArguments(value: unknown, raw: unknown): boolean {
+/** First schema failure only; paths and schema limits are reported, never argument values. */
+export function argumentError(value: unknown, raw: unknown, path = ""): string | undefined {
+  const at = path || "arguments", fail = (reason: string) => `${at}: ${reason}`;
+  if (!plain(raw)) return fail("invalid schema");
   const s = raw as Record<string, any>, type = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
   const types: unknown[] = Array.isArray(s.type) ? s.type : [s.type];
-  if (!types.includes(type) && !(type === "number" && Number.isSafeInteger(value) && types.includes("integer"))) return false;
-  if (type === "number" && !types.includes("number") && !Number.isSafeInteger(value)) return false;
-  if (s.enum && !s.enum.includes(value)) return false;
-  if (typeof value === "string" && (value.length < (s.minLength ?? 0) || value.length > (s.maxLength ?? FRAME_BYTES) || value.includes("\0"))) return false;
-  if (typeof value === "number" && (!Number.isFinite(value) || value < (s.minimum ?? -Infinity) || value > (s.maximum ?? Infinity))) return false;
-  if (Array.isArray(value)) {
-    if (value.length < (s.minItems ?? 0) || value.length > (s.maxItems ?? 64) || !plain(s.items)) return false;
-    return value.every(item => validArguments(item, s.items));
+  if (!types.includes(type) && !(type === "number" && Number.isSafeInteger(value) && types.includes("integer"))) return fail(`expected ${types.join(" or ")}`);
+  if (type === "number" && !types.includes("number") && !Number.isSafeInteger(value)) return fail("expected safe integer");
+  if (s.enum && !s.enum.includes(value)) return fail("not an allowed value");
+  if (typeof value === "string") {
+    if (value.length < (s.minLength ?? 0)) return fail(`shorter than ${s.minLength}`);
+    if (value.length > (s.maxLength ?? FRAME_BYTES)) return fail(`longer than ${s.maxLength ?? FRAME_BYTES}`);
+    if (value.includes("\0")) return fail("NUL is not allowed");
   }
-  if (plain(value)) {
-    const keys = Object.keys(value);
-    if (keys.length < (s.minProperties ?? 0) || keys.length > (s.maxProperties ?? 64)) return false;
-    if ((s.required ?? []).some((key: string) => !Object.hasOwn(value, key))) return false;
-    for (const key of keys) {
-      if (["__proto__", "prototype", "constructor"].includes(key) || key.length > 200) return false;
-      if (Object.hasOwn(s.properties ?? {}, key)) { if (!validArguments(value[key], s.properties[key])) return false; }
-      else if (s.additionalProperties === false || !plain(s.additionalProperties) || !validArguments(value[key], s.additionalProperties)) return false;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return fail("expected finite number");
+    if (value < (s.minimum ?? -Infinity)) return fail(`less than ${s.minimum}`);
+    if (value > (s.maximum ?? Infinity)) return fail(`greater than ${s.maximum}`);
+  }
+  if (Array.isArray(value)) {
+    if (value.length < (s.minItems ?? 0)) return fail(`fewer than ${s.minItems} items`);
+    if (value.length > (s.maxItems ?? 64)) return fail(`more than ${s.maxItems ?? 64} items`);
+    if (!plain(s.items)) return fail("invalid item schema");
+    for (let i = 0; i < value.length; i++) {
+      const error = argumentError(value[i], s.items, `${path}[${i}]`);
+      if (error) return error;
     }
-  } else if (type === "object") return false;
-  return true;
+  } else if (plain(value)) {
+    const keys = Object.keys(value);
+    if (keys.length < (s.minProperties ?? 0)) return fail(`fewer than ${s.minProperties} properties`);
+    if (keys.length > (s.maxProperties ?? 64)) return fail(`more than ${s.maxProperties ?? 64} properties`);
+    for (const key of s.required ?? []) if (!Object.hasOwn(value, key)) return `${path ? path + "." : ""}${key}: required`;
+    for (const key of keys) {
+      if (key.length > 200) return fail("property name longer than 200");
+      const child = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? (path ? `${path}.${key}` : key) : `${path || "$"}[${JSON.stringify(key)}]`;
+      if (["__proto__", "prototype", "constructor"].includes(key)) return `${child}: forbidden property name`;
+      let schema;
+      if (Object.hasOwn(s.properties ?? {}, key)) schema = s.properties[key];
+      else if (s.additionalProperties === false || !plain(s.additionalProperties)) return `${path ? path + ": " : ""}unknown argument: ${key}`;
+      else schema = s.additionalProperties;
+      const error = argumentError(value[key], schema, child);
+      if (error) return error;
+    }
+  } else if (type === "object") return fail("expected plain object");
+  return undefined;
 }
+/** Boolean compatibility API for the same closed, bounded schema vocabulary. */
+export function validArguments(value: unknown, raw: unknown): boolean { return argumentError(value, raw) === undefined; }
 
 /** Serve until input ends. stdout carries protocol messages only; nothing else is written to `output`. */
 export async function serveMcp(options: McpServerOptions): Promise<void> {
@@ -70,7 +93,9 @@ export async function serveMcp(options: McpServerOptions): Promise<void> {
     if (!plain(params) || Object.keys(params).some(k => !["name", "arguments", "_meta"].includes(k)) || typeof params.name !== "string") { await error(id, -32602, "Invalid tool call"); return; }
     const definition = options.tools.find(t => t.name === params.name), args = params.arguments ?? {};
     const handler = definition && options.handlers[definition.name];
-    if (!definition || !handler || !validArguments(args, definition.inputSchema)) { await error(id, -32602, "Invalid tool name or arguments"); return; }
+    if (!definition || !handler) { await error(id, -32602, `unknown tool: ${params.name.slice(0, 200)}`); return; }
+    const invalid = argumentError(args, definition.inputSchema);
+    if (invalid) { await error(id, -32602, invalid); return; }
     let result: unknown;
     try {
       const text = JSON.stringify(await handler(args as Record<string, unknown>));

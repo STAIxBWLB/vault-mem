@@ -1,3 +1,4 @@
+import { COMMANDS as COMMAND_USAGE } from "./commands-table.ts";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry } from "./registry.ts";
@@ -44,7 +45,7 @@ export function runWriteCommand(command: string, args: string[], home: string, e
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (!arg.startsWith("--")) { positional.push(arg); continue; }
-    if (Object.hasOwn(flags, arg) || (!values.includes(arg) && !booleans.includes(arg))) throw new Error(`${command}: unknown or repeated option`);
+    if (Object.hasOwn(flags, arg) || (!values.includes(arg) && !booleans.includes(arg))) throw new Error(`${command}: unknown or repeated option: ${arg}`);
     if (booleans.includes(arg)) flags[arg] = true;
     else {
       const value = args[++i];
@@ -54,8 +55,12 @@ export function runWriteCommand(command: string, args: string[], home: string, e
   }
   const required = (name: string): string => { if (typeof flags[name] !== "string") throw new Error(`${name}: required`); return flags[name] as string; };
   const optional = (name: string): string | undefined => typeof flags[name] === "string" ? flags[name] as string : undefined;
-  const count = ["move", "link", "supersede"].includes(command) ? 3 : command === "tidy" ? 1 : 2;
-  if (positional.length !== count) throw new Error(`${command}: requires vault id${count > 1 ? " and target(s)" : ""}`);
+  const usage = COMMAND_USAGE.find(item => item.name === command)!.usage;
+  const targets = usage.slice(command.length).split(/\s+(?:--|\[)/, 1)[0]!.match(/<[^>]+>/g) ?? [];
+  if (positional.length !== targets.length) {
+    const expected = targets.length === 2 ? `${targets[0]} and one ${targets[1]}` : targets.join(" and ");
+    throw new Error(`${command}: takes ${expected}; got ${Math.max(0, positional.length - 1)} targets`);
+  }
   const vault = positional[0]!, target = positional[1]!;
   if (command === "tidy") {
     const all = flags["--all"] === true, rules = TIDY_RULES.filter(rule => all || flags[`--${rule}`] === true);

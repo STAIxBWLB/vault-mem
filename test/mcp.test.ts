@@ -1,10 +1,11 @@
+import { parseFrontmatter } from "../src/frontmatter.ts";
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { addVault } from "../src/registry.ts";
-import { serveMcp, FRAME_BYTES, validArguments } from "../src/mcp.ts";
+import { serveMcp, FRAME_BYTES, validArguments, argumentError } from "../src/mcp.ts";
 import { createVaultMcp, VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -162,4 +163,58 @@ test("vmem_set_frontmatter synchronizes Topics with an existing different MOC", 
   expect(result.applied).toBe(true);
   expect(result.issues.some((issue: { code: string }) => issue.code === "V05")).toBe(false);
   expect(readFileSync(file, "utf8")).toContain("## Topics\n\n- [[other]]");
+});
+
+test("MCP names the first rejected argument or tool without echoing argument values", async () => {
+  const f = fixture(), secret = "sk-" + "Z".repeat(25);
+  const base = { vault: "mine", stem: "named-errors", type: "insight", domain: "research", topics: ["research"], description: "Evidence supporting a synthetic test." };
+  const responses = await session(f.home, [
+    call("vmem_create", { ...base, bogus: secret, alsoBogus: "second failure" }),
+    call("vmem_create", { type: "insight", domain: "research", description: "Synthetic detail." }),
+    call("vmem_read_many", { vault: "mine", paths: ["alpha", 42] }),
+    call("vmem_create", { ...base, extra: { field: { hidden: secret } } }),
+    call("vmem_unknown", { body: secret }),
+    call("vmem_create", { ...base, body: "x".repeat(65537) }),
+  ]);
+  // The final body exceeds the transport frame too; its frame refusal remains independent.
+  expect(responses[0].error).toEqual({ code: -32602, message: "unknown argument: bogus" });
+  expect(responses[1].error.message).toBe("stem: required");
+  expect(responses[2].error.message).toBe("paths[1]: expected string");
+  expect(responses[3].error.message).toContain("extra.field: expected");
+  expect(responses[4].error).toEqual({ code: -32602, message: "unknown tool: vmem_unknown" });
+  expect(responses[5].error.code).toBe(-32600);
+  expect(JSON.stringify(responses)).not.toContain(secret);
+  expect(JSON.stringify(responses)).not.toContain("second failure");
+  expect(argumentError({ body: "sensitive".repeat(10000) }, { type: "object", properties: { body: { type: "string", maxLength: 65536 } }, additionalProperties: false })).toBe("body: longer than 65536");
+});
+
+test("argument diagnostics retain object, property, string, array and numeric bounds", () => {
+  const schema = { type: "object", properties: {}, additionalProperties: { type: "string" }, maxProperties: 2 };
+  for (const key of ["__proto__", "constructor", "prototype"]) {
+    const args = JSON.parse(`{"${key}":"private-value"}`);
+    expect(argumentError(args, schema)).toBe(`${key}: forbidden property name`);
+    expect(validArguments(args, schema)).toBe(false);
+  }
+  expect(argumentError({ ["x".repeat(201)]: "private-value" }, schema)).toBe("arguments: property name longer than 200");
+  expect(argumentError({ a: "one", b: "two", c: "three" }, schema)).toBe("arguments: more than 2 properties");
+  expect(argumentError({ q: "a\0b" }, { type: "object", properties: { q: { type: "string" } } })).toBe("q: NUL is not allowed");
+  expect(argumentError([1, 2], { type: "array", maxItems: 1, items: { type: "integer" } })).toBe("arguments: more than 1 items");
+  expect(argumentError({ extra: { "a.b": {} } }, { type: "object", properties: { extra: { type: "object", additionalProperties: { type: "string" } } } })).toBe('extra["a.b"]: expected string');
+  expect(argumentError(1.5, { type: "integer" })).toBe("arguments: expected integer");
+  expect(argumentError(0, { type: "integer", minimum: 1 })).toBe("arguments: less than 1");
+});
+
+test("vmem_create accepts a top-level created date and refuses invalid calendar dates without writing", async () => {
+  const f = fixture(), base = { vault: "mine", type: "insight", domain: "research", topics: ["research"], description: "A dated synthetic observation." };
+  const [created] = await session(f.home, [call("vmem_create", { ...base, stem: "dated", created: "2024-02-29", extra: { created: "legacy" } })]);
+  expect(payload(created)).toMatchObject({ ok: true, applied: true });
+  expect(parseFrontmatter(readFileSync(join(f.mine, "notes/dated.md"), "utf8")).data.created).toBe("2024-02-29");
+  for (const date of ["2023-02-29", "2026-04-31", "2026-13-01", "2026-00-01", "2026-01-00", "26-01-01", "", "private-date-value"]) {
+    const [response] = await session(f.home, [call("vmem_create", { ...base, stem: "bad-date", created: date })]);
+    expect(payload(response)).toMatchObject({ refused: true, issues: [{ message: "created: expected YYYY-MM-DD" }] });
+    expect(existsSync(join(f.mine, "notes/bad-date.md"))).toBe(false);
+    expect(JSON.stringify(response)).not.toContain("private-date-value");
+  }
+  const [extra] = await session(f.home, [call("vmem_create", { ...base, stem: "legacy-date", extra: { created: "legacy date" } })]);
+  expect(payload(extra).ok).toBe(true); // No writer-level date rule was added.
 });
