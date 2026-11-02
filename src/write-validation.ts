@@ -181,26 +181,34 @@ function topicIssues(note: ParsedNote, index: Map<string, Set<ParsedNote>>, seve
   }
   return [];
 }
-function validTopicPlacement(note: ParsedNote): boolean {
-  if (note.data.type === "moc" && note.data.topics === undefined) return true;
+/** V05 has two independent problems: placement (one Topics H2, and it is the last H2) and content (the last Topics section lists exactly the frontmatter topics). */
+function topicProblems(note: ParsedNote): Set<"placement" | "content"> {
+  const problems = new Set<"placement" | "content">();
+  if (note.data.type === "moc" && note.data.topics === undefined) return problems;
   const lines = proseLines(note.body), h2s = lines.flatMap((line, index) => /^ {0,3}##[ \t]+/.test(line) ? [index] : []);
   const topics = h2s.filter(index => /^ {0,3}##[ \t]+Topics(?:[ \t]+#+)?[ \t]*$/i.test(lines[index]!));
-  let valid = topics.length === 1 && h2s[h2s.length - 1] === topics[0];
+  if (topics.length !== 1 || h2s[h2s.length - 1] !== topics[0]) problems.add("placement");
+  const last = topics[topics.length - 1], end = h2s.find(index => last !== undefined && index > last) ?? lines.length;
   const actual: string[] = [];
-  if (valid) for (const line of lines.slice(topics[0]! + 1)) {
+  let content = last !== undefined;
+  if (last !== undefined) for (const line of lines.slice(last + 1, end)) {
     if (!line.trim()) continue;
     const wiki = /^[ \t]*(?:[-*+][ \t]+)?(\[\[[^\]|#]+\]\])[ \t]*$/.exec(line);
-    if (!wiki) { valid = false; break; }
+    if (!wiki) { content = false; break; }
     actual.push(noteKey(wiki[1]!.slice(2, -2)));
   }
   const expected = Array.isArray(note.data.topics) ? note.data.topics.map(value => typeof value === "string" ? noteKey(value.slice(2, -2)) : "") : [];
   const sortedExpected = [...expected].sort();
-  if (actual.length !== expected.length || [...actual].sort().some((value, index) => value !== sortedExpected[index])) valid = false;
-  return valid;
+  if (!content || actual.length !== expected.length || [...actual].sort().some((value, index) => value !== sortedExpected[index])) problems.add("content");
+  return problems;
 }
+/** An error unless every V05 problem of the new note was already present in the prior note (as V01 retains only unchanged findings). */
 function topicPlacement(note: ParsedNote, old: ParsedNote | undefined, context: ValidationContext): WriteIssue[] {
-  const retained = context.operation.op !== "create" && old !== undefined && !validTopicPlacement(old);
-  return validTopicPlacement(note) ? [] : [issue("V05", "Topics must be the final H2 and list exactly the frontmatter topics", retained ? "warning" : "error", note.path)];
+  const problems = topicProblems(note);
+  if (!problems.size) return [];
+  const before = context.operation.op !== "create" && old !== undefined ? topicProblems(old) : new Set<string>();
+  const retained = [...problems].every(problem => before.has(problem));
+  return [issue("V05", "Topics must be the final H2 and list exactly the frontmatter topics", retained ? "warning" : "error", note.path)];
 }
 
 /** Validate a complete mutation plan against the final overlaid snapshot, without filesystem writes. */

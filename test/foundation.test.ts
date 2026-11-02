@@ -298,6 +298,13 @@ test("writer refuses introduced V05 and preserves retained V05 warnings", () => 
   expect(retained.code).toBe(0);
   expect(JSON.parse(retained.text)).toMatchObject({ applied: true, issues: expect.arrayContaining([expect.objectContaining({ code: "V05", severity: "warning" })]) });
   expect(readFileSync(file, "utf8")).toContain("## X");
+  // A retained placement problem does not excuse a new content mismatch.
+  writeFileSync(join(f.vault, "notes/other.md"), migrationMoc.replace("# Research", "# Other"));
+  writeFileSync(file, migrationNote + "\n## Existing\n");
+  const mismatch = run(["patch", "personal", "keep", "--old", "- [[research]]", "--new", "- [[other]]", "--json"], env);
+  expect(mismatch.code).toBe(1);
+  expect(JSON.parse(mismatch.text).issues).toContainEqual(expect.objectContaining({ code: "V05", severity: "error" }));
+  expect(readFileSync(file, "utf8")).toBe(migrationNote + "\n## Existing\n");
 });
 
 test("doctor reports pending tidy counts and unparsable paths without writing", () => {
