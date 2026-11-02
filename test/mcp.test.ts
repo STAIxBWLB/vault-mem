@@ -1,3 +1,4 @@
+import { CONFIG_FILE } from "../src/config.ts";
 import { specGit } from "../src/spec-git.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { afterEach, expect, test } from "bun:test";
@@ -237,7 +238,7 @@ test("spec MCP tools expose bounded reads, named argument failures and startup r
   expect(bad.error).toMatchObject({ code: -32602, message: expect.stringContaining("unexpected") });
   expect(JSON.stringify(bad)).not.toContain("never-echo-this");
   const server = createVaultMcp(f.home);
-  writeFileSync(join(f.home, "config.json"), JSON.stringify({ specs: [] }));
+  writeFileSync(join(f.home, CONFIG_FILE), JSON.stringify({ specs: [] }));
   expect(await server.handlers.vmem_spec_get!({ id: "root" })).toMatchObject({ refused: true, issues: [expect.objectContaining({ message: expect.stringContaining("registry changed") })] });
 });
 

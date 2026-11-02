@@ -1,3 +1,4 @@
+import { CONFIG_FILE } from "../src/config.ts";
 import { afterEach, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,13 +23,13 @@ for (const [name, expected] of Object.entries(cases)) test(`registry-free CLI: $
     const f = fixture(); cpSync(join(fixtures, name), f.repo, { recursive: true });
     f.git(["add", "--", "."]); f.git(["commit", "-qm", "Synthetic schema"]);
     // A bad explicit home proves --repo never even consults its config.
-    mkdirSync(f.home); writeFileSync(join(f.home, "config.json"), "not JSON");
+    mkdirSync(f.home); writeFileSync(join(f.home, CONFIG_FILE), "not JSON");
     const before = f.git(["status", "--porcelain=v1", "-z"]).stdout;
     const result = run(["spec", "validate", "--repo", f.repo, "--json"], f.env);
     expect(result.code, name).toBe(expected.errors.length ? 1 : 0);
     const report = JSON.parse(result.text);
     expect([...new Set(report.items.filter((item: any) => item.severity === "error").map((item: any) => item.code))].sort(), name).toEqual([...expected.errors].sort());
-    expect(readFileSync(join(f.home, "config.json"), "utf8")).toBe("not JSON");
+    expect(readFileSync(join(f.home, CONFIG_FILE), "utf8")).toBe("not JSON");
     expect(existsSync(join(f.root, "unread-home"))).toBe(false);
     expect(f.git(["status", "--porcelain=v1", "-z"]).stdout).toEqual(before);
 });
