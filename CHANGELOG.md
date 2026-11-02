@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add spec validation reports, complete-tree introduced-error comparison, computed path-scoped freshness, tracked-file coversPath matching and registry-free validation library (#91 T3/T6), with a portable synthetic schema fixture. Candidate, link-list/path-list and supersession rules follow the confirmed schema. Discovery ignores inherited Git pathspec modes, skips oversized/non-UTF8 non-candidates with diagnostics, and performs Git inspection outside cache writer transactions. CLI/MCP wiring remains T5 and spec content writes remain deferred.
+
 ## [0.3.2] - 2026-11-02
 
 - Add library-only spec discovery, repository/worktree identity checks, typed id-based graphs and bounded directional slices (#91 T2). `SpecIndex` reuses the vault scan/metadata/hash/BM25 engine with a separate `spec-` cache per canonical worktree; vault cache names remain unchanged. Spec searches exclude shared-cache rows absent from the instance snapshot or replaced since its scan, and discovery errors name the relative file. Filesystem normalization/case aliases are accepted with root-identity and physical-containment checks, skipped listed paths have diagnostics, and error advice preserves the original cause and names `.gitignore` for discovery bounds. No CLI/MCP read surface or spec content write tools are added.

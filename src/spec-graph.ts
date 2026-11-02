@@ -24,10 +24,15 @@ export interface SpecSlice { nodes: SpecNode[]; edges: SpecEdge[]; truncated: bo
 const compare = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
 const pathOrder = (a: SpecDocument, b: SpecDocument): number => compare(a.path.normalize("NFC"), b.path.normalize("NFC")) || compare(a.path, b.path) || compare(a.id, b.id);
 const edgeOrder = (a: SpecEdge, b: SpecEdge): number => compare(a.source, b.source) || SPEC_EDGE_KINDS.indexOf(a.kind) - SPEC_EDGE_KINDS.indexOf(b.kind) || compare(a.target, b.target);
-function reference(value: unknown): string | undefined {
+/** Metadata wiki addresses use the same id/label/heading split as body links. */
+export function specReference(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) return undefined;
-  const text = value.trim(), wiki = /^\[\[([^\]|#]+)\]\]$/.exec(text);
-  return wiki ? wiki[1]!.trim() : text;
+  const text = value.trim();
+  if (!text.startsWith("[[") && !text.endsWith("]]")) return text;
+  const wiki = /^\[\[([^\]\n]+)\]\]$/.exec(text);
+  if (!wiki) return undefined;
+  const address = wiki[1]!.split("|")[0]!, hash = address.indexOf("#");
+  return (hash < 0 ? address : address.slice(0, hash)).trim() || undefined;
 }
 
 /** Build only the read graph: unknown types/statuses remain visible for the later validation pass. */
@@ -54,23 +59,29 @@ export function buildSpecGraph(snapshot: SpecSnapshot): SpecGraph {
   const edges: SpecEdge[] = [], unresolved: SpecEdge[] = [];
   const seenEdges = new Map<string, Map<SpecEdgeKind, Set<string>>>();
   const add = (source: string, value: unknown, kind: SpecEdgeKind) => {
-    const target = reference(value);
-    if (!target) return;
+    const target = specReference(value);
+    if (!target) return false;
     let kinds = seenEdges.get(source);
     if (!kinds) seenEdges.set(source, kinds = new Map());
     let targets = kinds.get(kind);
     if (!targets) kinds.set(kind, targets = new Set());
-    if (targets.has(target)) return;
+    if (targets.has(target)) return true;
     if (edges.length + unresolved.length >= MAX_SPEC_EDGES) throw new Error(`spec graph: more than ${MAX_SPEC_EDGES} unique edges; reduce link lists or pass a smaller SpecSnapshot before rebuilding`);
     targets.add(target);
     const collection = documents.has(target) ? edges : unresolved;
     collection.push({ source, target, kind });
+    return true;
   };
   for (const document of documents.values()) {
-    for (const kind of ["parent", "superseded-by"] as const) add(document.id, document.frontmatter[kind], kind);
+    const wrongShape = (field: string) => diagnostics.push({ code: "wrong_shape", path: document.path, id: document.id, field, message: "frontmatter link has the wrong shape; use one link for parent/superseded-by and a list for dependency/reference/implementation links" });
+    for (const kind of ["parent", "superseded-by"] as const) if (document.frontmatter[kind] !== undefined && !add(document.id, document.frontmatter[kind], kind)) wrongShape(kind);
     for (const kind of ["depends-on", "references", "implements"] as const) {
       const values = document.frontmatter[kind];
-      if (Array.isArray(values)) for (const value of values) add(document.id, value, kind);
+      if (values === undefined) continue;
+      if (!Array.isArray(values)) { wrongShape(kind); continue; }
+      let invalid = false;
+      for (const value of values) if (!add(document.id, value, kind)) invalid = true;
+      if (invalid) wrongShape(kind);
     }
     for (const link of extractLinks(document.body)) add(document.id, link.target, "body_link");
   }

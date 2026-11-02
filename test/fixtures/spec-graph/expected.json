@@ -1,0 +1,197 @@
+{
+  "valid": {
+    "errors": [],
+    "warnings": []
+  },
+  "missing-id": {
+    "errors": [
+      "missing_id"
+    ],
+    "warnings": []
+  },
+  "missing-type": {
+    "errors": [
+      "missing_type"
+    ],
+    "warnings": [
+      "orphan"
+    ]
+  },
+  "missing-title": {
+    "errors": [
+      "missing_title"
+    ],
+    "warnings": []
+  },
+  "duplicate-id": {
+    "errors": [
+      "duplicate_id"
+    ],
+    "warnings": []
+  },
+  "dangling-link": {
+    "errors": [
+      "dangling_link"
+    ],
+    "warnings": []
+  },
+  "parent-cycle": {
+    "errors": [
+      "parent_cycle",
+      "type_rank"
+    ],
+    "warnings": []
+  },
+  "type-rank": {
+    "errors": [
+      "type_rank"
+    ],
+    "warnings": []
+  },
+  "unknown-type": {
+    "errors": [
+      "unknown_type"
+    ],
+    "warnings": [
+      "orphan"
+    ]
+  },
+  "unknown-status": {
+    "errors": [
+      "unknown_status"
+    ],
+    "warnings": []
+  },
+  "superseded-self": {
+    "errors": [
+      "superseded_self"
+    ],
+    "warnings": []
+  },
+  "superseded-status": {
+    "errors": [
+      "superseded_status"
+    ],
+    "warnings": []
+  },
+  "superseded-dangling": {
+    "errors": [
+      "dangling_link"
+    ],
+    "warnings": []
+  },
+  "link-list-shape": {
+    "errors": [
+      "wrong_shape"
+    ],
+    "warnings": []
+  },
+  "single-link-shape": {
+    "errors": [
+      "wrong_shape"
+    ],
+    "warnings": []
+  },
+  "paths-shape": {
+    "errors": [
+      "wrong_shape"
+    ],
+    "warnings": []
+  },
+  "paths-empty": {
+    "errors": [
+      "wrong_shape"
+    ],
+    "warnings": []
+  },
+  "paths-absolute": {
+    "errors": [
+      "invalid_paths"
+    ],
+    "warnings": []
+  },
+  "paths-parent": {
+    "errors": [
+      "invalid_paths"
+    ],
+    "warnings": []
+  },
+  "paths-unmatched": {
+    "errors": [
+      "invalid_paths"
+    ],
+    "warnings": []
+  },
+  "invalid-verified-against": {
+    "errors": [
+      "invalid_verified_against"
+    ],
+    "warnings": []
+  },
+  "unknown-verified-commit": {
+    "errors": [
+      "invalid_verified_against"
+    ],
+    "warnings": []
+  },
+  "orphan": {
+    "errors": [],
+    "warnings": [
+      "orphan"
+    ]
+  },
+  "deprecated-without-replacement": {
+    "errors": [],
+    "warnings": [
+      "deprecated_without_replacement"
+    ]
+  },
+  "deprecated-replacement": {
+    "errors": [],
+    "warnings": [
+      "deprecated_replacement"
+    ]
+  },
+  "multiple-goals": {
+    "errors": [],
+    "warnings": [
+      "multiple_goals"
+    ]
+  },
+  "duplicate-covers": {
+    "errors": [],
+    "warnings": [
+      "duplicate_covers"
+    ]
+  },
+  "unknown-body-link": {
+    "errors": [],
+    "warnings": [
+      "unknown_body_link"
+    ]
+  },
+  "active-without-paths": {
+    "errors": [],
+    "warnings": [
+      "active_without_paths"
+    ]
+  },
+  "invalid-frontmatter": {
+    "errors": [
+      "invalid_frontmatter"
+    ],
+    "warnings": []
+  },
+  "covers-shape": {
+    "errors": [
+      "wrong_shape"
+    ],
+    "warnings": []
+  },
+  "tags-shape": {
+    "errors": [
+      "wrong_shape"
+    ],
+    "warnings": []
+  }
+}

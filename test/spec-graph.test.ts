@@ -79,7 +79,7 @@ test("duplicates select the first NFC-ordered path in discovery, graph and FTS, 
   const f = fixture(), repo = f.repo("repo");
   f.write(repo, "z.md", spec("same", {}, "Winnerquasar."));
   f.write(repo, "é.md", spec("same", {}, "Shadowzircon."));
-  f.write(repo, "broken.md", "---\nid: broken\ntype: [\n---\n");
+  f.write(repo, "broken/SPEC.md", "---\nid: broken\ntype: [\n---\n");
   const source = f.source(repo), index = new SpecIndex(f.home, source);
   try {
     expect(index.scan()).toMatchObject({ notes: 1, changed: 1 });
@@ -87,7 +87,7 @@ test("duplicates select the first NFC-ordered path in discovery, graph and FTS, 
     expect(snapshot.specs[0]?.path).toBe("z.md");
     expect(snapshot.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: "duplicate_id", id: "same", path: "é.md", firstPath: "z.md" }),
-      expect.objectContaining({ code: "invalid_frontmatter", path: "broken.md" }),
+      expect.objectContaining({ code: "invalid_frontmatter", path: "broken/SPEC.md" }),
     ]));
     expect(buildSpecGraph(snapshot).nodes).toHaveLength(1);
     expect(index.search("Winnerquasar").map(hit => hit.id)).toEqual(["same"]);
@@ -174,12 +174,13 @@ test("spec discovery rejects oversized and invalid-UTF8 Markdown and stale workt
   const source = f.source(repo), index = new SpecIndex(f.home, source);
   try {
     index.scan();
-    writeFileSync(join(repo, "large.md"), "x".repeat(MAX_NOTE_BYTES + 1));
+    writeFileSync(join(repo, "large.md"), spec("large", {}, "x".repeat(MAX_NOTE_BYTES + 1)));
     expect(() => discoverSpecs(source)).toThrow("large.md: Markdown exceeds");
     rmSync(join(repo, "large.md"));
-    writeFileSync(join(repo, "invalid.md"), Buffer.from([255]));
-    expect(() => discoverSpecs(source)).toThrow("invalid.md: Markdown is not valid UTF-8");
-    rmSync(join(repo, "invalid.md"));
+    mkdirSync(join(repo, "invalid"));
+    writeFileSync(join(repo, "invalid/SPEC.md"), Buffer.from([255]));
+    expect(() => discoverSpecs(source)).toThrow("invalid/SPEC.md: Markdown is not valid UTF-8");
+    rmSync(join(repo, "invalid"), { recursive: true });
     renameSync(join(repo, ".git"), join(repo, "old-git"));
     expect(() => index.scan()).toThrow("git refused inspection");
   } finally { index.close(); }
