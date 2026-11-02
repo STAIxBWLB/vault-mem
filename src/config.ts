@@ -23,10 +23,11 @@ export interface PiiSpec { email?: PiiCell; phone?: PiiCell; custom?: PiiCell; p
  * The config format this build writes. A build that adds a key bumps it. A config whose `version` is newer
  * than this build is read tolerantly: unknown keys are kept as they are and written back unchanged, so an
  * older vmem can share a config with a newer one. At or below this version unknown keys stay errors (typos).
- * An absent `version` means 1, and this build never adds one, so 0.2.4 and older keep reading what it writes.
+ * An absent `version` means 1. Registry writes add format 2 only when `specs` is present; vault-only configs keep their existing version field.
  */
-export const CONFIG_VERSION = 1;
-export interface VmemConfig { version?: number; home?: string; vaults: VaultSpec[]; denyPaths?: string[]; piiPatterns?: string[] }
+export const CONFIG_VERSION = 2;
+export interface SpecSourceSpec { id: string; path: string; write: "mcp" | "cli" | "none"; pii: "allow" | "deny" }
+export interface VmemConfig { version?: number; home?: string; vaults: VaultSpec[]; specs?: SpecSourceSpec[]; denyPaths?: string[]; piiPatterns?: string[] }
 const controls = /[\x00-\x1f\x7f]/;
 function object(value: unknown, keys: string[], label: string, tolerant = false): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label}: expected object`);
@@ -125,25 +126,44 @@ export function parseVault(value: unknown, tolerant = false): VaultSpec {
   if (v.registry !== undefined) result.registry = absolute(v.registry, "vault.registry");
   return result;
 }
+/** Spec sources have their own registry shape; they are not vaults. */
+export function parseSpec(value: unknown, tolerant = false): SpecSourceSpec {
+  try {
+    const keys = ["id", "path", "write", "pii"], raw = object(value, keys, "spec source", tolerant);
+    const id = string(raw.id, "spec source.id");
+    if (!/^[a-z][a-z0-9-]{0,31}$/.test(id)) throw new Error("spec source.id: expected a lowercase letter followed by at most 31 lowercase letters, digits or hyphens");
+    const write = raw.write === undefined ? "none" : raw.write, pii = raw.pii === undefined ? "deny" : raw.pii;
+    if (write !== "mcp" && write !== "cli" && write !== "none") throw new Error("spec source.write: expected mcp, cli or none");
+    if (pii !== "allow" && pii !== "deny") throw new Error("spec source.pii: expected allow or deny");
+    return { ...unknown(raw, keys, tolerant), id, path: absolute(raw.path, "spec source.path"), write, pii };
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : "invalid spec source"}; use vmem specs add <id> <absolute-path> with --write mcp|cli|none and --pii allow|deny`);
+  }
+}
 export function parseConfig(value: unknown): VmemConfig {
-  const keys = ["version", "home", "vaults", "denyPaths", "piiPatterns"];
+  const keys = ["version", "home", "vaults", "specs", "denyPaths", "piiPatterns"];
   const version = (value as Record<string, unknown> | null)?.version;
   if (version !== undefined && (!Number.isSafeInteger(version) || (version as number) < 1)) throw new Error("config.version: expected a positive integer");
   const tolerant = newerFormat(value), raw = object(value, keys, "config", tolerant);
   const stamp = version === undefined ? {} : { version: version as number };
   if (raw.home !== undefined) {
-    if (["vaults", "denyPaths", "piiPatterns"].some(key => raw[key] !== undefined)) throw new Error("config: home pointer must not contain vaults or policy");
+    if (["vaults", "specs", "denyPaths", "piiPatterns"].some(key => raw[key] !== undefined)) throw new Error("config: home pointer must not contain vaults, specs or policy; put source entries in the pointed-to home config");
     return { ...unknown(raw, keys, tolerant), ...stamp, home: absolute(raw.home, "config.home"), vaults: [] };
   }
-  if (!Array.isArray(raw.vaults)) throw new Error("config.vaults: expected array");
-  const vaults = raw.vaults.map(item => parseVault(item, tolerant));
+  const vaultInput = raw.vaults === undefined && raw.specs !== undefined ? [] : raw.vaults;
+  if (!Array.isArray(vaultInput)) throw new Error("config.vaults: expected array");
+  const vaults = vaultInput.map(item => parseVault(item, tolerant));
+  if (raw.specs !== undefined && !Array.isArray(raw.specs)) throw new Error("config.specs: expected an array; list spec source entries in specs");
+  const specs = (raw.specs as unknown[] | undefined)?.map(item => parseSpec(item, tolerant));
+  if (specs && new Set([...vaults, ...specs].map(source => source.id)).size !== vaults.length + specs.length) throw new Error("config: duplicate source id across vaults/specs; give each registered source a unique id");
+  if (specs && new Set(specs.map(source => source.path)).size !== specs.length) throw new Error("config: duplicate spec source path; keep only one entry for each repository root");
   if (new Set(vaults.map(v => v.id)).size !== vaults.length) throw new Error("config: duplicate vault id");
   if (new Set(vaults.map(v => v.path)).size !== vaults.length) throw new Error("config: duplicate vault path");
   const denyPaths = strings(raw.denyPaths, "denyPaths"), piiPatterns = strings(raw.piiPatterns, "piiPatterns");
   for (const pattern of piiPatterns ?? []) {
     try { new RegExp(pattern); } catch { throw new Error("piiPatterns: invalid regular expression"); }
   }
-  return { ...unknown(raw, keys, tolerant), ...stamp, vaults, ...(denyPaths ? { denyPaths } : {}), ...(piiPatterns ? { piiPatterns } : {}) };
+  return { ...unknown(raw, keys, tolerant), ...stamp, vaults, ...(specs !== undefined ? { specs } : {}), ...(denyPaths ? { denyPaths } : {}), ...(piiPatterns ? { piiPatterns } : {}) };
 }
 /** Bounded descriptor read: reject links, devices and oversized/growing files. */
 export function readConfig(home: string): VmemConfig {

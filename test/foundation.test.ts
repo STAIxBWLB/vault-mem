@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, readdirSync, readlinkSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONFIG_FILE, MAX_CONFIG_BYTES, parseConfig, readConfig } from "../src/config.ts";
+import { CONFIG_FILE, CONFIG_VERSION, MAX_CONFIG_BYTES, parseConfig, readConfig } from "../src/config.ts";
 import { resolveHome } from "../src/home.ts";
 import { addVault, loadRegistry, recoverRegistry, removeVault, syncDirectory } from "../src/registry.ts";
 import { run } from "../src/cli.ts";
@@ -332,7 +332,7 @@ test("doctor omits tidy for read-only vaults and unenforceable PII policies", ()
     addVault(f.home, { ...f.spec, write });
     if (write === "mcp") {
       const file = join(f.home, CONFIG_FILE), config = JSON.parse(readFileSync(file, "utf8"));
-      config.version = 2; config.vaults[0].pii = { default: "deny", future: true };
+      config.version = CONFIG_VERSION + 1; config.vaults[0].pii = { default: "deny", future: true };
       writeFileSync(file, JSON.stringify(config));
     }
     const before = migrationTree(f.dir), result = run(["doctor", "--json"], { VMEM_HOME: f.home });
