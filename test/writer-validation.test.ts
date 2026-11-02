@@ -45,7 +45,7 @@ describe("writer validation schema and topics", () => {
     expect(errors([create(note({ topics: ["[[research alias]]"] }))], context(aliases)).some(value => value.code === "V02")).toBe(true);
   });
   test("the final snapshot resolves new MOCs and refuses removing an existing topic target", () => {
-    expect(errors([create(note({ topics: ["[[new-moc]]"] })), create(moc.replace("# Research", "# New synthetic MOC"), "notes/new-moc.md")])).toEqual([]);
+    expect(errors([create(note({ topics: ["[[new-moc]]"] }).replace("- [[research]]", "- [[new-moc]]")), create(moc.replace("# Research", "# New synthetic MOC"), "notes/new-moc.md")])).toEqual([]);
     const existing = note();
     const ctx = context(new Map([["notes/research.md", moc], ["notes/claim.md", existing]]), { op: "delete", path: "notes/research.md" });
     expect(errors([{ path: "notes/research.md", before: moc, after: null }], ctx).some(value => value.code === "V02")).toBe(true);
@@ -55,7 +55,7 @@ describe("writer validation schema and topics", () => {
     expect(validateWrite([create(after)], context()).filter(value => value.code === "V05")).toEqual([]);
     for (const body of ["# Claim\n", "# Claim\n## Topics\n- [[research]]\n## Extra\n", "# Claim\n## Topics\n- [[research]]\nextra text", "# Claim\n## Topics\n- [[research]]\n- [[research]]\n"]) {
       const found = validateWrite([create(note({}, body))], context()).filter(value => value.code === "V05");
-      expect(found).toHaveLength(1); expect(found[0]!.severity).toBe("warning");
+      expect(found).toHaveLength(1); expect(found[0]!.severity).toBe("error");
     }
   });
 });
@@ -188,4 +188,11 @@ test("space-separated telephone numbers are screened one by one", () => {
     expect(screenContent(text, privateVault, config).some(issue => issue.code === "V07")).toBe(true);
   }
   expect(screenContent("2026-10-29 09:32 2026-10-30 10:00", privateVault, config)).toEqual([]);
+});
+
+test("validator refuses a prospective frontmatter/body Topics mismatch on a clean note", () => {
+  const before = note(), after = note({ topics: ["[[other]]"] });
+  const notes = new Map([["notes/research.md", moc], ["notes/other.md", moc.replace("# Research", "# Other")], ["notes/claim.md", before]]);
+  const findings = validateWrite([{ path: "notes/claim.md", before, after }], context(notes, { op: "frontmatter", path: "claim", set: { topics: ["[[other]]"] } }));
+  expect(findings).toContainEqual(expect.objectContaining({ code: "V05", severity: "error" }));
 });

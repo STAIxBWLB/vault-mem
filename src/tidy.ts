@@ -329,7 +329,7 @@ function rewriteLog(root: string, expected: string, next: string, state: { commi
  * is then written through applyWrite (atomic per note, under the vault lock), the log is rewritten only for
  * `--log`, and one LINT event summarises the run. A rerun after an interruption completes the rest.
  */
-export function tidyVault(home: string, request: TidyRequest, options: { env?: NodeJS.ProcessEnv } = {}): TidyResult {
+export function tidyVault(home: string, request: TidyRequest, options: { env?: NodeJS.ProcessEnv; validate?: boolean } = {}): TidyResult {
   const rules = [...new Set(request.rules)].filter((rule): rule is TidyRule => (TIDY_RULES as readonly string[]).includes(rule)).sort((a, b) => TIDY_RULES.indexOf(a) - TIDY_RULES.indexOf(b));
   const result: TidyResult = { ok: false, applied: false, rules, counts: {}, notes: [], reported: [], written: [], issues: [] };
   if (!rules.length) return { ...result, issues: [issue("V01", "select at least one rule or --all")] };
@@ -373,6 +373,12 @@ export function tidyVault(home: string, request: TidyRequest, options: { env?: N
       result.log = { lines: sanitized.lines, redactions: sanitized.redactions, formats: sanitized.formats, changes: sanitized.changes };
       if (sanitized.text !== before) { logPlan = { before, ...sanitized }; result.counts.log = sanitized.redactions + sanitized.formats; }
     }
+  }
+  // Doctor needs planning counts only: do not resnapshot the vault once per planned note.
+  // A confirmation always keeps writer validation, even if this internal option is supplied.
+  if (options.validate === false && request.confirm !== true) {
+    for (const change of planned) for (const [rule, n] of Object.entries(change.counts)) if (n > 0) ruleCount(result.counts, rule, n);
+    return { ...result, ok: true, preview: true };
   }
   // Validate every planned note with the writer (dry-run). A note the writer would refuse is reported and skipped
   // (left fully unchanged for manual repair) instead of blocking the rest of the migration.

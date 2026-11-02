@@ -151,3 +151,15 @@ test("bin `vmem mcp` speaks only protocol on stdout without a TTY; importing the
   const probe = Bun.spawnSync([process.execPath, "-e", `await import("./src/mcp-vault.ts"); await import("./src/mcp.ts"); console.log(Object.keys(require.cache).filter(k => k.includes("agent-mem") && !k.includes("platform")).length)`], { stdout: "pipe", stderr: "pipe" });
   expect(probe.stdout.toString().trim()).toBe("0");
 });
+
+test("vmem_set_frontmatter synchronizes Topics with an existing different MOC", async () => {
+  const f = fixture();
+  const file = join(f.mine, "notes/alpha.md");
+  writeFileSync(join(f.mine, "notes/other.md"), "---\ntype: moc\ndescription: Another synthetic directory.\n---\n# Other\n");
+  const [response] = await session(f.home, [call("vmem_set_frontmatter", { vault: "mine", path: "alpha", set: { topics: ["[[other]]"] } })]);
+  const result = payload(response);
+  expect(result.ok).toBe(true);
+  expect(result.applied).toBe(true);
+  expect(result.issues.some((issue: { code: string }) => issue.code === "V05")).toBe(false);
+  expect(readFileSync(file, "utf8")).toContain("## Topics\n\n- [[other]]");
+});

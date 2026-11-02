@@ -354,3 +354,99 @@ test("rollback rereads a report above 2 MiB and restores its large original", ()
   expect(readFileSync(file, "utf8")).toBe(original);
   expect(existsSync(join(f.vault, MUTATION_LOCK))).toBe(false);
 });
+
+test("frontmatter refiles a clean note under another MOC in one validated write", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  writeFileSync(join(f.notes, "other.md"), "---\ntype: moc\ndescription: Another synthetic directory.\n---\n# Other\n");
+  const before = parseFrontmatter(readFileSync(file, "utf8"));
+  const result = run(["frontmatter", "test", "old", "--set", JSON.stringify({ topics: ["[[other]]"] }), "--json"], f.env);
+  const receipt = JSON.parse(result.text);
+  expect(result.code).toBe(0);
+  expect(receipt.applied).toBe(true);
+  expect(receipt.changes).toHaveLength(1);
+  expect(receipt.issues.some((issue: { code: string }) => issue.code === "V05")).toBe(false);
+  const after = parseFrontmatter(readFileSync(file, "utf8"));
+  expect(after.data.topics).toEqual(["[[other]]"]);
+  expect(after.body).toBe(before.body.replace("- [[research]]", "- [[other]]"));
+  expect(after.frontmatter).toContain("# preserved comment");
+});
+
+test("frontmatter refiling recognizes a clean lowercase Topics heading outside fences", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  writeFileSync(join(f.notes, "other.md"), "---\ntype: moc\ndescription: Another synthetic directory.\n---\n# Other\n");
+  writeFileSync(file, note("Old Finding", "```md\n## Topics\n- [[research]]\n```", {}).replace(/## Topics(?=\n\n- \[\[research\]\]\n$)/, "## topics ###"));
+  const result = f.request({ op: "frontmatter", path: "old", set: { topics: ["[[other]]"] } });
+  expect(result.ok).toBe(true);
+  expect(result.issues.some(issue => issue.code === "V05")).toBe(false);
+  const body = parseFrontmatter(readFileSync(file, "utf8")).body;
+  expect(body).toContain("```md\n## Topics\n- [[research]]\n```");
+  expect(body.endsWith("## topics ###\n\n- [[other]]\n")).toBe(true);
+});
+
+test("frontmatter refiling preserves fenced blocks and legacy H3/prose inside Topics byte for byte", () => {
+  for (const suffix of [
+    "\n```dataview\nLIST FROM \"synthetic\"\n- [[research]]\n```\n",
+    "\n### Detail\nLegacy prose, keep its spacing.  \n\n~~~md\n- [[research]]\n~~~\n",
+  ]) {
+    const f = fixture(), file = join(f.notes, "old.md");
+    writeFileSync(join(f.notes, "other.md"), "---\ntype: moc\ndescription: Another synthetic directory.\n---\n# Other\n");
+    const original = note("Old Finding") + suffix;
+    writeFileSync(file, original);
+    const result = f.request({ op: "frontmatter", path: "old", set: { topics: ["[[other]]"] } });
+    expect(result.ok).toBe(true);
+    expect(result.applied).toBe(true);
+    const before = parseFrontmatter(original), after = parseFrontmatter(readFileSync(file, "utf8"));
+    expect(after.data.topics).toEqual(["[[other]]"]);
+    expect(after.body).toBe(before.body.replace("- [[research]]", "- [[other]]"));
+    expect(after.body.endsWith(suffix)).toBe(true);
+    expect(result.issues.some(issue => issue.code === "V05" && issue.severity === "error")).toBe(false);
+  }
+});
+
+test("frontmatter Topics refiling keeps CRLF and setting unchanged topics keeps the whole note unchanged", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  writeFileSync(join(f.notes, "other.md"), "---\ntype: moc\ndescription: Another synthetic directory.\n---\n# Other\n");
+  const original = (note("Old Finding").replace("- [[research]]", "* [[research]]   ") + "\n```dataview\nLIST\n```\n").replaceAll("\n", "\r\n");
+  writeFileSync(file, original);
+  const unchanged = f.request({ op: "frontmatter", path: "old", set: { topics: ["[[research]]"] } });
+  expect(unchanged.ok).toBe(true);
+  expect(unchanged.changes).toHaveLength(0);
+  expect(readFileSync(file, "utf8")).toBe(original);
+  const changed = f.request({ op: "frontmatter", path: "old", set: { topics: ["[[other]]"] } });
+  expect(changed.ok).toBe(true);
+  expect(changed.issues.some(issue => issue.code === "V05")).toBe(false);
+  const after = readFileSync(file, "utf8");
+  expect(after.replaceAll("\r\n", "")).not.toContain("\n");
+  expect(parseFrontmatter(after).body).toBe(parseFrontmatter(original).body.replace("* [[research]]   ", "- [[other]]"));
+});
+
+test("frontmatter Topics refiling replaces only the leading list run and keeps later links byte for byte", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  writeFileSync(join(f.notes, "other.md"), "---\ntype: moc\ndescription: Another synthetic directory.\n---\n# Other\n");
+  writeFileSync(join(f.notes, "foo.md"), note("Foo Finding"));
+  // A fence between the heading and the list (valid for V05) is kept and the list is still replaced in place.
+  const fenced = note("Old Finding").replace("- [[research]]", "```dataview\nLIST\n```\n\n- [[research]]");
+  writeFileSync(file, fenced);
+  expect(f.request({ op: "frontmatter", path: "old", set: { topics: ["[[other]]"] } }).ok).toBe(true);
+  expect(parseFrontmatter(readFileSync(file, "utf8")).body).toBe(parseFrontmatter(fenced).body.replace("- [[research]]", "- [[other]]"));
+  for (const tail of ["\n### Related\n- [[foo]]\n- [[research]]\n", "\nSee also:\n[[foo]]\n"]) {
+    const original = note("Old Finding").replace(/\n?$/, "\n") + tail;
+    writeFileSync(file, original);
+    const result = f.request({ op: "frontmatter", path: "old", set: { topics: ["[[other]]"] } });
+    expect(result.ok).toBe(true);
+    const body = parseFrontmatter(readFileSync(file, "utf8")).body;
+    expect(body).toBe(parseFrontmatter(original).body.replace("- [[research]]\n", "- [[other]]\n"));
+    expect(body.endsWith(tail)).toBe(true);
+  }
+});
+
+test("frontmatter inserts a missing Topics list after its heading without deleting legacy content", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  const original = note("Old Finding").replace("- [[research]]\n", "### Detail\nLegacy prose.\n");
+  writeFileSync(file, original);
+  writeFileSync(join(f.notes, "other.md"), "---\ntype: moc\ndescription: Another synthetic directory.\n---\n# Other\n");
+  const result = f.request({ op: "frontmatter", path: "old", set: { topics: ["[[other]]"] } });
+  expect(result.ok).toBe(true);
+  const after = parseFrontmatter(readFileSync(file, "utf8"));
+  expect(after.body).toBe(parseFrontmatter(original).body.replace("## Topics\n", "## Topics\n- [[other]]\n"));
+});
