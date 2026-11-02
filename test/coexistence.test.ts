@@ -87,7 +87,7 @@ test("AC1: a running server keeps its own code and tool list after its install i
 
 test("AC2: a config written by a newer version is read without error, and its unknown keys survive this version's write", () => {
   const f = fixture(), file = join(f.home, CONFIG_FILE);
-  // This version never adds `version`, so 0.2.4 and older keep reading its config.
+  // Vault-only writes leave `version` absent, so 0.2.4 and older keep reading this config.
   expect(JSON.parse(readFileSync(file, "utf8"))).not.toHaveProperty("version");
   const raw = JSON.parse(readFileSync(file, "utf8"));
   const future = { ...raw, version: CONFIG_VERSION + 1, futureTop: { nested: [1, 2] },
