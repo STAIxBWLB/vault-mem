@@ -148,10 +148,14 @@ Readers never create a home, log or lock, and work with `write: none`. They skip
 
 `vmem mcp` serves newline-delimited JSON-RPC 2.0 (MCP tools, protocol 2025-06-18 and earlier) on stdio. stdout carries protocol messages only; it needs no TTY and runs in agent sessions. Requests are limited to 64 KiB per frame and results to 256 KiB (a larger result becomes a structured `LIMIT` refusal). Arguments are validated against each tool's bounded schema (`additionalProperties: false`, string/array/integer caps); invalid arguments or unknown tools return JSON-RPC `-32602`, unknown methods `-32601`, malformed frames `-32700`/`-32600`. At startup it loads every module a tool can run, the `@staix/agent-mem` root included, so a server keeps its own code and tool list when its install is replaced or a newer release is installed beside it; restart the host session to pick up the new release.
 
-The vault set is read once at startup: every tool's `vault` property is an enum of the registered ids and defaults to the first `personal` vault. Restart the host session after `vaults add/remove`. Reads go through the same index as the CLI; writes go through `applyWrite`/`appendLog` with channel `mcp`, so they require `write: mcp` and pass the same V01-V10 gates. Every tool returns a JSON result: a receipt, or `{refused: true, issues}` for policy, validation or lookup failures.
+The vault set is read once at startup: every tool's `vault` property is an enum of the registered ids and defaults to the first `personal` vault. Restart the host session after `vaults add/remove`. Registered spec sources are also read once when `vmem mcp` starts; restart the MCP server after `specs add` or `specs remove`. Reads go through the same index as the CLI; writes go through `applyWrite`/`appendLog` with channel `mcp`, so they require `write: mcp` and pass the same V01-V10 gates. Every tool returns a JSON result: a receipt, or `{refused: true, issues}` for policy, validation or lookup failures.
 
 | tool | arguments (caps) |
 |---|---|
+| `vmem_spec_get` | `id`, optional `source`, absolute `worktree`, `body`, `maxBytes`<=65536, `section`, `offset`<=2097152; metadata, relations, hash, freshness and optional body pages |
+| `vmem_spec_graph` | `id`, optional `source`, `worktree`, `direction` subtree/ancestors/neighbors, `edge`, `depth`<=3, `limit`<=500 |
+| `vmem_spec_grep` | optional `source`, `worktree`, `query`<=1024 UTF-8 bytes, `literal`, `type`, `status`, `tag`, `parent`, `dependsOn`, `coversPath`, `offset`<=10000, `limit`<=500; continuation after filters |
+| `vmem_spec_validate` | optional `source`, `worktree`, `requireFresh`, `limit`<=500; bounded report; stale is fatal only with `requireFresh` |
 | `vmem_status` | none; vaults with health, write policy, effective pii and `piiPolicy` (read-only) |
 | `vmem_search` | `query`<=1000, `vault`, `limit`<=50, `type`, `domain` |
 | `vmem_read` | `path` (stem, alias or `notes/` path), `vault`, `maxBytes`<=65536; returns `{path, frontmatter, body, sha256, truncated}` |

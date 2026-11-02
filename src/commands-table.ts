@@ -74,7 +74,7 @@ export function completionScript(shell: string): string {
       const cond = d.path.length === 1 ? `__fish_seen_subcommand_from ${d.path[0]}` : `__fish_seen_subcommand_from ${d.path[0]}; and __fish_seen_subcommand_from ${d.path[1]}`;
       for (const flag of Object.keys(d.options)) lines.push(`complete -c vmem -n ${quote(cond)} -l ${flag.slice(2)}`);
     }
-    for (const parent of ["vaults", "specs", "spec", "log", "graph", "skills"]) lines.push(`complete -c vmem -n '__fish_seen_subcommand_from ${parent}' -a ${quote(defs.filter(d => d.path[0] === parent).map(d => d.path[1]).join(" "))}`);
+    for (const parent of ["vaults", "specs", "spec", "log", "graph", "skills"]) lines.push(`complete -c vmem -n '__fish_seen_subcommand_from ${parent}; and test (commandline -opc)[2] = ${parent}' -a ${quote(defs.filter(d => d.path[0] === parent).map(d => d.path[1]).join(" "))}`);
     return lines.join("\n") + "\n";
   }
   const cases = defs.map(d => `    ${quote(d.path.join(" "))}) words=${quote(Object.keys(d.options).join(" "))} ;;`);

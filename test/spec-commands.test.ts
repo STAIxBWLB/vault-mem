@@ -63,7 +63,7 @@ test("body pages preserve UTF-8 boundaries and exact visible H2 section bounds",
   expect(f.run("get", { id: "engine", section: "Detail", maxBytes: 65536 }).body).toBe("## Detail\n가나다\n### Nested\nKeep detail.\n\n");
   expect(() => f.run("get", { id: "engine", section: "Hidden" })).toThrow("exact H2");
   expect(() => f.run("get", { id: "engine", offset: offset + 1 })).toThrow("UTF-8 boundary");
-  expect(() => f.run("get", { id: "engine", offset, maxBytes: 1 })).toThrow("increase --max-bytes");
+  expect(() => f.run("get", { id: "engine", offset, maxBytes: 1 })).toThrow("increase maxBytes (--max-bytes)");
   expect(() => f.run("get", { id: "engine", offset: 2000000 })).toThrow("offset exceeds");
   expect(() => f.run("get", { id: "engine", section: "   " })).toThrow("exact H2");
 });
@@ -141,7 +141,7 @@ test("get/graph/results remain bounded and oversized required metadata refuses w
   f.write("src/engine/SPEC.md", markdown({ ...f.engineData, large: "x".repeat(250000) }, f.engineBody));
   expect(() => f.run("get", { id: "engine" })).toThrow("shorten oversized frontmatter");
   f.write("src/engine/SPEC.md", markdown(f.engineData, "\0".repeat(70000)));
-  expect(() => f.run("get", { id: "engine", maxBytes: 65536 })).toThrow("reduce --max-bytes");
+  expect(() => f.run("get", { id: "engine", maxBytes: 65536 })).toThrow("reduce maxBytes (--max-bytes)");
   const small = f.run("get", { id: "engine", maxBytes: 1000 });
   expect(small.body).toHaveLength(1000); expect(small.bodyTruncated).toBe(true);
   expect(Buffer.byteLength(JSON.stringify(small))).toBeLessThanOrEqual(240 * 1024);
@@ -178,7 +178,7 @@ test("direct provider schema errors happen before registry access and unknown so
   expect(() => f.run("get", { id: "engine", maxBytes: 0 })).toThrow("maxBytes");
   expect(() => f.run("graph", { id: "root", depth: 4 })).toThrow("depth");
   expect(() => f.run("grep", { offset: -1 })).toThrow("offset");
-  expect(() => f.run("get", { id: "engine", source: "absent" })).toThrow("vmem specs list");
+  expect(() => f.run("get", { id: "engine", source: "absent" })).toThrow("source (--source)");
   expect(() => f.run("get", { id: "absent" })).toThrow("vmem spec grep");
 });
 
@@ -201,4 +201,34 @@ test("registry rebinding during a read refuses the result instead of returning t
   `], { stdout: "pipe", stderr: "pipe" });
   expect(child.exitCode).toBe(0);
   expect(JSON.parse(child.stdout.toString()).message).toContain("spec registry changed during the request");
+});
+
+test("literal grep snippets keep an emoji intact at the context-window boundary", () => {
+  const f = fixture(), tail = "😀" + "x".repeat(79) + "boundaryneedle\n";
+  f.write("src/engine/SPEC.md", markdown(f.engineData, "# Engine\n\n" + tail));
+  const result = f.run("grep", { query: "boundaryneedle", literal: true });
+  expect(result.hits).toHaveLength(1);
+  expect(result.hits[0].id).toBe("engine");
+  expect(result.hits[0].snippet).toBe(tail);
+  expect(result.hits[0].snippet).not.toContain("�");
+});
+
+
+test("registry read failure during a request names vmem doctor as the diagnostic step", () => {
+  const f = fixture();
+  const child = Bun.spawnSync([process.execPath, "-e", `
+    import { writeFileSync } from "node:fs";
+    const { SpecIndex } = await import("./src/spec-source.ts");
+    const scan = SpecIndex.prototype.scan;
+    SpecIndex.prototype.scan = function (...args) {
+      const result = scan.apply(this, args);
+      writeFileSync(${JSON.stringify(join(f.home, CONFIG_FILE))}, "not JSON");
+      return result;
+    };
+    const { executeSpecCommand } = await import("./src/spec-commands.ts");
+    try { executeSpecCommand(${JSON.stringify(f.home)}, "get", { id: "engine" }); process.exit(2); }
+    catch (error) { console.log(JSON.stringify({ message: error.message })); }
+  `], { stdout: "pipe", stderr: "pipe", timeout: 10000 });
+  expect(child.exitCode).toBe(0);
+  expect(JSON.parse(child.stdout.toString()).message).toContain("run vmem doctor");
 });

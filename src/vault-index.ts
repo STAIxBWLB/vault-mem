@@ -87,7 +87,7 @@ function readPage(prefix: Buffer, maxBytes: number, offset: number, totalBytes: 
   const truncated = offset + end < totalBytes;
   return { content: prefix.subarray(0, end).toString("utf8"), truncated, ...(truncated ? { nextOffset: offset + end } : {}) };
 }
-function h2Sections(body: string): { name: string; start: number; end: number }[] {
+export function h2Sections(body: string): { name: string; start: number; end: number }[] {
   const visible = proseLines(body), lines = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
   const sections: { name: string; start: number; end: number }[] = [];
   let offset = 0, active: number | undefined;
@@ -104,7 +104,7 @@ function h2Sections(body: string): { name: string; start: number; end: number }[
   }
   return sections;
 }
-function headingMetadata(sections: { name: string }[]): Pick<NoteReadResult, "headings" | "headingsTruncated"> {
+export function headingMetadata(sections: { name: string }[]): Pick<NoteReadResult, "headings" | "headingsTruncated"> {
   const headings: string[] = [];
   let bytes = 2, truncated = false;
   for (const { name } of sections) {
