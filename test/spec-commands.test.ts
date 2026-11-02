@@ -94,6 +94,28 @@ test("FTS metadata filtering fills pages after more than 500 earlier nonmatching
   const root = f.run("get", { id: "root" });
   expect(root.children.length).toBeLessThanOrEqual(500); expect(root.totals.children).toBe(507); expect(root.truncated).toBe(true);
   expect(Buffer.byteLength(JSON.stringify(root))).toBeLessThanOrEqual(240 * 1024);
+  const child = Bun.spawnSync([process.execPath, "-e", `
+    import { rmSync } from "node:fs";
+    import { join } from "node:path";
+    const { SpecIndex } = await import("./src/spec-source.ts");
+    let shifted = false, pruned = 0;
+    const shiftCache = () => {
+      if (shifted) return;
+      shifted = true;
+      for (let i = 0; i < 500; i++) { rmSync(join(${JSON.stringify(f.repo)}, "bulk", String(i).padStart(3, "0") + ".md")); pruned++; }
+      const peer = new SpecIndex(${JSON.stringify(f.home)}, { id: "main", path: ${JSON.stringify(f.repo)}, write: "none", pii: "deny" });
+      try { peer.scan(); } finally { peer.close(); }
+    };
+    for (const method of ["search", "searchAll"]) {
+      const original = SpecIndex.prototype[method];
+      if (original) SpecIndex.prototype[method] = function (...args) { const result = original.apply(this, args); shiftCache(); return result; };
+    }
+    const { executeSpecCommand } = await import("./src/spec-commands.ts");
+    const result = executeSpecCommand(${JSON.stringify(f.home)}, "grep", { query: "Commonquasar", status: "active", limit: 2 });
+    console.log(JSON.stringify({ shifted, pruned, ids: result.hits.map(hit => hit.id), nextOffset: result.nextOffset }));
+  `], { stdout: "pipe", stderr: "pipe", timeout: 10000 });
+  expect(child.exitCode).toBe(0);
+  expect(JSON.parse(child.stdout.toString())).toEqual({ shifted: true, pruned: 500, ids: ["bulk-502", "bulk-503"], nextOffset: 2 });
 }, 15000);
 
 test("get/graph/results remain bounded and oversized required metadata refuses with repair guidance", () => {

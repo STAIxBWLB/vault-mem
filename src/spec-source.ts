@@ -205,9 +205,14 @@ export class SpecIndex {
   snapshot(): SpecSnapshot { if (!this.current) this.scan(); return this.current!; }
   search(query: string, options: SearchOptions & { offset?: number } = {}): SpecSearchResult[] {
     if (options.offset !== undefined && (!Number.isSafeInteger(options.offset) || options.offset < 0 || options.offset > 10000)) throw new Error("spec search offset: expected integer 0..10000; choose a bounded continuation offset");
+    return this.searchRows(query, options, false);
+  }
+  /** One bounded query materializes the matching snapshot before callers filter or page it. */
+  searchAll(query: string): SpecSearchResult[] { return this.searchRows(query, {}, true); }
+  private searchRows(query: string, options: SearchOptions & { offset?: number }, all: boolean): SpecSearchResult[] {
     const snapshot = this.snapshot(), ids = new Map(snapshot.specs.map(spec => [spec.path, spec.id]));
     const hashes = new Map(snapshot.specs.map(spec => [spec.path, spec.hash]));
-    return this.index.search(query, options, hashes, options.offset ?? 0).flatMap(hit => {
+    return this.index.search(query, options, hashes, options.offset ?? 0, all).flatMap(hit => {
       const id = ids.get(hit.path);
       return id === undefined ? [] : [{ ...hit, id }];
     });

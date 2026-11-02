@@ -107,14 +107,12 @@ function grep(index: SpecIndex, snapshot: SpecSnapshot, args: Record<string, unk
       selected.push(hit(document)); if (selected.length > limit) break;
     }
   } else {
-    for (let cursor = 0; cursor < 10000 && selected.length <= limit;) {
-      const page = index.search(query, { limit: 500, offset: cursor });
-      for (const item of page) {
-        const document = byPath.get(item.path); if (!document) continue;
-        if (matched++ < offset) continue;
-        selected.push(hit(document, item)); if (selected.length > limit) break;
-      }
-      cursor += page.length; if (page.length < 500) break;
+    // A peer may rescan the cache while this request runs. Materialize one bounded
+    // statement result so metadata filtering and continuation use a stable hit set.
+    for (const item of index.searchAll(query)) {
+      const document = byPath.get(item.path); if (!document) continue;
+      if (matched++ < offset) continue;
+      selected.push(hit(document, item)); if (selected.length > limit) break;
     }
   }
   const result: Record<string, unknown> = { source, worktree: snapshot.root, hits: [], offset, truncated: false };

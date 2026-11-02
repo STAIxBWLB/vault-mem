@@ -37,7 +37,7 @@ test("CLI freshness exit codes, command help, closed flags and manifest match th
   const f = fixture(); mkdirSync(join(f.repo, "src")); writeFileSync(join(f.repo, "src/a.ts"), "Synthetic source.\n");
   f.git(["add", "."]); f.git(["commit", "-qm", "Synthetic source"]);
   const stamp = f.git(["rev-parse", "HEAD"]).stdout.toString().trim();
-  writeFileSync(join(f.repo, "SPEC.md"), `---\nid: root\ntype: goal\ntitle: Synthetic root\npaths: [src/a.ts]\nverified-against: ${stamp}\n---\n# Synthetic root\n`);
+  writeFileSync(join(f.repo, "SPEC.md"), `---\nid: root\ntype: goal\ntitle: Synthetic root\npaths: [src/a.ts]\nverified-against: ${stamp}\n---\n# Synthetic root\n- [ ] Synthetic task\n`);
   f.git(["add", "."]); f.git(["commit", "-qm", "Synthetic spec"]);
   const args = ["spec", "validate", "--repo", f.repo, "--json"];
   expect(run([...args, "--require-fresh"], f.env).code).toBe(0);
@@ -47,8 +47,10 @@ test("CLI freshness exit codes, command help, closed flags and manifest match th
   expect(existsSync(f.home)).toBe(false);
   addSpec(f.home, { id: "repo", path: f.repo });
   expect(run(["spec", "validate", "--json"], f.env).code).toBe(0);
+  expect(JSON.parse(run(["spec", "grep", "--literal", "--json", "--", "- [ ]"], f.env).text).hits.map((hit: any) => hit.id)).toEqual(["root"]);
   expect(() => run([...args, "--source", "repo"], f.env)).toThrow("cannot be combined");
   expect(() => run(["spec", "get", "root", "--max-bytes", "65537"], f.env)).toThrow("maxBytes");
+  expect(() => run(["spec", "get", "root", "--max-bytes", "0"], f.env)).toThrow("vmem spec get --help");
   expect(() => run(["spec", "grep", "--typo", "x"], f.env)).toThrow("--typo");
   expect(() => run(["spec", "validate", "--require-fresh", "--require-fresh"], f.env)).toThrow("repeated option");
   for (const item of SPEC_COMMANDS) expect(run(["spec", item.command, "--help"], f.env)).toMatchObject({ code: 0, text: expect.stringContaining(item.usage) });

@@ -29,10 +29,11 @@ export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.
   const values: Record<string, unknown> = {}, positional: string[] = [];
   const properties = item.inputSchema.properties as Record<string, { type: string }>;
   const flags = new Map(Object.keys(properties).filter(key => key !== "id" && key !== "query").map(key => ["--" + key.replace(/[A-Z]/g, value => "-" + value.toLowerCase()), key]));
-  const seen = new Set<string>(); let json = false, repo: string | undefined;
+  const seen = new Set<string>(); let json = false, repo: string | undefined, positionalOnly = false;
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]!;
-    if (!flag.startsWith("-")) { positional.push(flag); continue; }
+    if (positionalOnly || !flag.startsWith("-")) { positional.push(flag); continue; }
+    if (flag === "--") { positionalOnly = true; continue; }
     if (seen.has(flag)) throw new Error(`spec ${item.command}: repeated option ${flag}; supply it once (vmem spec ${item.command} --help)`);
     seen.add(flag);
     if (flag === "--json") { json = true; continue; }
@@ -43,7 +44,7 @@ export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.
     if (value === undefined || value.startsWith("--")) throw new Error(`${flag}: value required; see vmem spec ${item.command} --help`);
     if (flag === "--repo") {
       const invalidPath = argumentError(value, { type: "string", minLength: 1, maxLength: 4096 }, "repo");
-      if (invalidPath) throw new Error(invalidPath);
+      if (invalidPath) throw new Error(`${invalidPath}; supply a checkout path with vmem spec validate --repo PATH`);
       repo = value; continue;
     }
     if (properties[key!]!.type === "integer") {
@@ -55,7 +56,7 @@ export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.
   if (positional.length > (item.command === "validate" ? 0 : 1) || (takesId && positional.length !== 1)) throw new Error(`spec ${item.command}: unexpected targets; use vmem ${item.usage}`);
   if (positional[0] !== undefined) values[takesId ? "id" : "query"] = positional[0];
   const invalid = argumentError(values, item.inputSchema);
-  if (invalid) throw new Error(invalid);
+  if (invalid) throw new Error(`${invalid}; see vmem spec ${item.command} --help to correct the arguments`);
   if (repo !== undefined && (values.source !== undefined || values.worktree !== undefined)) throw new Error("--repo cannot be combined with --source or --worktree; choose registry-free or registered validation");
   const result = repo !== undefined
     ? validateSpecRepo(repo, { requireFresh: values.requireFresh as boolean | undefined, limit: values.limit as number | undefined, env }).report
