@@ -67,6 +67,16 @@ function context(home: string, id: string, channel: "cli" | "mcp" | undefined, w
   if (isDenied(join(vault.path, "log"), config.denyPaths)) refuse("V06", "log path is denied");
   return { vault, config, channel, ...(write && vault.registry ? { projectIds: registryIds(vault.registry, config.denyPaths) } : {}) };
 }
+/** Validate and screen an event exactly as `appendLog` would, writing nothing. Returns the blocking issues (empty when valid). */
+export function checkLogEvent(home: string, request: LogRequest, env: NodeJS.ProcessEnv = process.env): WriteIssue[] {
+  try {
+    const ctx = context(home, request.vault, request.channel, true);
+    return formatLogEvent(request.event, { ...ctx, env }).issues.filter(issue => issue.severity === "error");
+  } catch (caught) {
+    if (caught instanceof LogRefused) return caught.issues;
+    throw caught;
+  }
+}
 /** One O_APPEND write per event. A separate cooperative lock permits safe short-write rollback. */
 /** Bind a later append to the vault spec, path policy and root identity resolved now (refused with LOG_DRIFT if they change). */
 export function logBinding(vault: VaultSpec, config: VmemConfig): LogBinding {

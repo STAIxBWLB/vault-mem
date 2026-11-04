@@ -115,7 +115,8 @@ test("writer receipt separates committed note success from missing/unflushed log
   const child = Bun.spawnSync([process.execPath, "test/fixtures/log-fault.ts", flushed.home, flushed.vault, "writer-flush"], { stdout: "pipe", stderr: "pipe" }); expect(child.exitCode).toBe(0);
   const output = JSON.parse(child.stdout.toString()); expect(output.result).toMatchObject({ ok: true, applied: true, logged: false, log: { ok: false, appended: true, synced: false } }); expect(readFileSync(flushed.file, "utf8").trimEnd().split("\n")).toHaveLength(2);
   const override = fixture();
-  const screened = applyWrite(override.home, { vault: "test", operation, log: { ...event, note: `sk-${"x".repeat(24)}` } }, { env: {} }); expect(screened.ok).toBe(true); expect(screened.logged).toBe(false); expect(screened.log?.issues.some(issue => issue.code === "V06")).toBe(true); expect(existsSync(override.file)).toBe(false);
+  // A screened override refuses the whole write before the note changes (#60).
+  const screened = applyWrite(override.home, { vault: "test", operation, log: { ...event, note: `sk-${"x".repeat(24)}` } }, { env: {} }); expect(screened).toMatchObject({ ok: false, applied: false }); expect(screened.issues.some(issue => issue.code === "V06")).toBe(true); expect(existsSync(override.file)).toBe(false); expect(readFileSync(join(override.notes, "old.md"), "utf8")).toContain("Original text.");
   const cliFailure = fixture(); mkdirSync(cliFailure.file); const cli = run(["patch", "test", "old", "--old", "Original text.", "--new", "Persisted text."], cliFailure.env); expect(cli.code).toBe(1); expect(JSON.parse(cli.text)).toMatchObject({ ok: true, applied: true, logged: false });
 });
 

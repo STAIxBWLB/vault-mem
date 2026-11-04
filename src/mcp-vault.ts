@@ -13,6 +13,7 @@ import { appendLog, readLog } from "./vault-log.ts";
 import { applyWrite } from "./writer.ts";
 import { notePath } from "./write-operations.ts";
 import type { LogEvent } from "./log-types.ts";
+import { LOG_EVENT_SCHEMA } from "./log-format.ts";
 import type { WriteOp, WriteReceipt, WriteRequest } from "./write-types.ts";
 import type { McpHandler, McpTool } from "./mcp.ts";
 
@@ -25,7 +26,7 @@ const tool = (name: string, description: string, inputSchema: Record<string, unk
 const RELATIONS = ["supports", "contradicts", "extends", "applies-to", "context-for"];
 const LOG_TYPES = ["INGEST", "ROUTE", "EXTRACT", "CONNECT", "DIGEST", "LEARN", "LINT", "TASK", "GRAPH", "SYNC", "RETHINK", "SOURCE"];
 const note = string(1024), sha = { type: "string", minLength: 64, maxLength: 64 };
-const logEvent = object({ type: { type: "string", enum: LOG_TYPES }, project: string(64), source: string(512), dest: string(512), note: string(500) }, ["type", "project", "source", "note"]);
+const logEvent = LOG_EVENT_SCHEMA;
 const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLength: 4096, maxItems: 64, items: { type: ["string", "number", "boolean"], maxLength: 1024 } };
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
@@ -48,14 +49,14 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_check", "Validate a prospective note text without writing.", object({ vault, path: string(200), text: string(262144, 0) }, ["text"])),
     tool("vmem_log_tail", "Read the newest vault log lines, optionally filtered.", object({ vault, n: integer(1, 200), type: { type: "string", enum: LOG_TYPES }, grep: string(256) })),
     tool("vmem_create", "Create a validated note. Requires a vault with write=mcp.", object({ vault, stem: string(200), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), source: { type: ["string", "array"], minLength: 1, maxLength: 512, minItems: 1, maxItems: 32, items: string(512) }, confidence: string(32), status: string(32), created: string(32, 0), extra: { type: "object", maxProperties: 32, additionalProperties: scalar }, log: logEvent }, ["stem", "type", "domain", "description"]), "write"),
-    tool("vmem_patch", "Replace one exact string in a note.", object({ vault, path: note, oldString: string(8192), newString: string(8192, 0), expectedSha: sha }, ["path", "oldString", "newString"]), "write"),
-    tool("vmem_append", "Append markdown to a section of a note.", object({ vault, path: note, section: string(120), markdown: string(16384), expectedSha: sha }, ["path", "section", "markdown"]), "write"),
-    tool("vmem_set_frontmatter", "Set or unset frontmatter keys of a note.", object({ vault, path: note, set: { type: "object", maxProperties: 32, additionalProperties: scalar }, unset: { type: "array", maxItems: 32, items: string(64) }, expectedSha: sha }, ["path"]), "write"),
+    tool("vmem_patch", "Replace one exact string in a note.", object({ vault, path: note, oldString: string(8192), newString: string(8192, 0), expectedSha: sha, log: logEvent }, ["path", "oldString", "newString"]), "write"),
+    tool("vmem_append", "Append markdown to a section of a note.", object({ vault, path: note, section: string(120), markdown: string(16384), expectedSha: sha, log: logEvent }, ["path", "section", "markdown"]), "write"),
+    tool("vmem_set_frontmatter", "Set or unset frontmatter keys of a note.", object({ vault, path: note, set: { type: "object", maxProperties: 32, additionalProperties: scalar }, unset: { type: "array", maxItems: 32, items: string(64) }, expectedSha: sha, log: logEvent }, ["path"]), "write"),
     tool("vmem_link", "Add a typed relation link between two notes (bidirectional by default).", object({ vault, from: note, to: note, relation: { type: "string", enum: RELATIONS }, context: string(500), bidirectional: { type: "boolean" }, log: logEvent }, ["from", "to", "relation"]), "write"),
     tool("vmem_supersede", "Mark a note superseded by another.", object({ vault, old: note, next: note, log: logEvent }, ["old", "next"]), "write"),
     tool("vmem_log_append", "Append one validated event line to the vault log.", object({ vault, type: { type: "string", enum: LOG_TYPES }, project: string(64), source: string(512), dest: string(512), note: string(500) }, ["type", "project", "source", "note"]), "write"),
-    tool("vmem_move", "Two-step rename with link rewrites: without confirm returns preview and fingerprint; then confirm=true with that fingerprint.", object({ vault, from: note, to: note, ...twoStep }, ["from", "to"]), "confirm"),
-    tool("vmem_delete", "Two-step delete: without confirm returns preview (or refusal), backlinks and fingerprint; then confirm=true with that fingerprint.", object({ vault, path: note, ...twoStep }, ["path"]), "confirm"),
+    tool("vmem_move", "Two-step rename with link rewrites: without confirm returns preview and fingerprint; then confirm=true with that fingerprint (pass log on the confirm call).", object({ vault, from: note, to: note, ...twoStep, log: logEvent }, ["from", "to"]), "confirm"),
+    tool("vmem_delete", "Two-step delete: without confirm returns preview (or refusal), backlinks and fingerprint; then confirm=true with that fingerprint (pass log on the confirm call).", object({ vault, path: note, ...twoStep, log: logEvent }, ["path"]), "confirm"),
     tool("vmem_promote_from_amem", "Two-step promotion of one durable agent-mem entry (id from amem_vault_candidates) into a vault note: without confirm returns the full note text, possible duplicates and fingerprint; confirm=true with that fingerprint creates the note, logs LEARN and records the agent-mem vault link. linkTo links an existing note instead.",
       object({ vault, id: { type: "string", minLength: 32, maxLength: 36 }, stem: string(120), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), linkTo: note, project: string(400), ...twoStep }, ["id"]), "confirm"),
     tool("vmem_lint", "Lint a private derived snapshot; write=true writes a screened report.", object({ vault, write: { type: "boolean" }, dryRun: { type: "boolean" } }), "write"),
