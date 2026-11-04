@@ -1,3 +1,5 @@
+/** Relations `vmem link --relation` writes as `- [[x]] (relation): context`. */
+export const LINK_RELATIONS = ["supports", "contradicts", "extends", "applies-to", "context-for"] as const;
 export interface Link {
   target: string;
   label: string | null;

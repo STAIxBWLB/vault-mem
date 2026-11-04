@@ -1,7 +1,7 @@
 import { createSpecMcp } from "./mcp-spec.ts";
 import { SPEC_COMMANDS } from "./spec-command-table.ts";
 import { analysisInput } from "./analysis-input.ts";
-import { buildGraph, graphNeighbors } from "./vault-graph.ts";
+import { buildGraph, graphNeighbors, LINK_RELATIONS } from "./vault-graph.ts";
 import { lintVault } from "./vault-lint.ts";
 import { writeAnalysisReports } from "./analysis-reports.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
@@ -29,6 +29,7 @@ const LOG_TYPES = ["INGEST", "ROUTE", "EXTRACT", "CONNECT", "DIGEST", "LEARN", "
 const note = string(1024), sha = { type: "string", minLength: 64, maxLength: 64 };
 const logEvent = LOG_EVENT_SCHEMA;
 const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLength: 4096, maxItems: 64, items: { type: ["string", "number", "boolean"], maxLength: 1024 } };
+const metadata = { type: "object", maxProperties: 32, properties: { authors: { type: "array", minItems: 1, maxItems: 100, items: string(1024) } }, additionalProperties: scalar };
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
@@ -49,10 +50,10 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_mocs", "MOC notes with incoming link counts.", object({ vault })),
     tool("vmem_check", "Validate a prospective note text without writing.", object({ vault, path: string(200), text: string(262144, 0) }, ["text"])),
     tool("vmem_log_tail", "Read the newest vault log lines, optionally filtered.", object({ vault, n: integer(1, 200), type: { type: "string", enum: LOG_TYPES }, grep: string(256) })),
-    tool("vmem_create", "Create a validated note. Requires a vault with write=mcp.", object({ vault, stem: string(200), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), source: { type: ["string", "array"], minLength: 1, maxLength: 512, minItems: 1, maxItems: 32, items: string(512) }, confidence: string(32), status: string(32), created: string(32, 0), extra: { type: "object", maxProperties: 32, additionalProperties: scalar }, log: logEvent }, ["stem", "type", "domain", "description"]), "write"),
+    tool("vmem_create", "Create a validated note. Requires a vault with write=mcp.", object({ vault, stem: string(200), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), source: { type: ["string", "array"], minLength: 1, maxLength: 512, minItems: 1, maxItems: 32, items: string(512) }, confidence: string(32), status: string(32), created: string(32, 0), extra: metadata, log: logEvent }, ["stem", "type", "domain", "description"]), "write"),
     tool("vmem_patch", "Replace exact strings in a note: one oldString/newString pair, or edits (1..32 pairs, each matching once in the original text, non-overlapping) applied all-or-nothing with one receipt and one log event.", object({ vault, path: note, oldString: string(8192), newString: string(8192, 0), edits: { type: "array", minItems: 1, maxItems: 32, items: object({ oldString: string(8192), newString: string(8192, 0) }, ["oldString", "newString"]) }, expectedSha: sha, log: logEvent }, ["path"]), "write"),
     tool("vmem_append", "Append markdown to a section of a note.", object({ vault, path: note, section: string(120), markdown: string(16384), expectedSha: sha, log: logEvent }, ["path", "section", "markdown"]), "write"),
-    tool("vmem_set_frontmatter", "Set or unset frontmatter keys of a note.", object({ vault, path: note, set: { type: "object", maxProperties: 32, additionalProperties: scalar }, unset: { type: "array", maxItems: 32, items: string(64) }, expectedSha: sha, log: logEvent }, ["path"]), "write"),
+    tool("vmem_set_frontmatter", "Set or unset frontmatter keys of a note.", object({ vault, path: note, set: metadata, unset: { type: "array", maxItems: 32, items: string(64) }, expectedSha: sha, log: logEvent }, ["path"]), "write"),
     tool("vmem_link", "Add a typed relation link between two notes (bidirectional by default).", object({ vault, from: note, to: note, relation: { type: "string", enum: RELATIONS }, context: string(500), bidirectional: { type: "boolean" }, log: logEvent }, ["from", "to", "relation"]), "write"),
     tool("vmem_supersede", "Mark a note superseded by another.", object({ vault, old: note, next: note, log: logEvent }, ["old", "next"]), "write"),
     tool("vmem_log_append", "Append one validated event line to the vault log.", object({ vault, type: { type: "string", enum: LOG_TYPES }, project: string(64), source: string(512), dest: string(512), note: string(500) }, ["type", "project", "source", "note"]), "write"),
@@ -62,7 +63,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
       object({ vault, id: { type: "string", minLength: 32, maxLength: 36 }, stem: string(120), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), linkTo: note, project: string(400), ...twoStep }, ["id"]), "confirm"),
     tool("vmem_lint", "Lint a private derived snapshot; write=true writes a screened report.", object({ vault, write: { type: "boolean" }, dryRun: { type: "boolean" } }), "write"),
     tool("vmem_graph_build", "Build a deterministic graph and screened reports; dryRun changes nothing.", object({ vault, dryRun: { type: "boolean" }, workspace: { type: "boolean" } }), "write"),
-    tool("vmem_graph_neighbors", "Read a bounded graph neighborhood.", object({ vault, path: note, hops: integer(1,2), limit: integer(1,500) }, ["path"])),
+    tool("vmem_graph_neighbors", "Read a bounded graph neighborhood.", object({ vault, path: note, hops: integer(1,2), limit: integer(1,500), relation: { type: "string", enum: ["wiki_link", ...LINK_RELATIONS] } }, ["path"])),
     tool("vmem_promote", "Two-step promotion of a personal note into a local org vault clone (never pushes): without confirm returns the full transformed text, dropped links, screen result and fingerprint; confirm=true with that fingerprint writes the org note, source provenance and SYNC log lines. Publishing is the separate `vmem sync` CLI.",
       object({ path: note, to: orgVault, topics: { type: "array", maxItems: 32, items: string(200) }, again: { type: "boolean" }, ...twoStep }, ["path", "to"]), "confirm"),
     tool("vmem_skills_mine", "Read-only skill-candidate mining over amem curated entries, amem capture rows and vault notes: dictionary matching, deterministic communities and novelty scoring. Returns counts, masked candidates and a markdown report; writes nothing.",
@@ -134,7 +135,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_report: args => write(args, { op: "report", path: str(args.path)!, text: str(args.body)! }, args.dryRun === true ? { dryRun: true } : {}),
     vmem_lint: args => args.write === true ? writeAnalysisReports(home,{vault:pick(args).id,kind:"lint",channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env) : lintVault(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),
     vmem_graph_build: args => writeAnalysisReports(home,{vault:pick(args).id,kind:"graph",workspace:args.workspace === true,channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env),
-    vmem_graph_neighbors: args => graphNeighbors(buildGraph(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),str(args.path)!, (args.hops as 1|2|undefined) ?? 1, (args.limit as number|undefined) ?? 50),
+    vmem_graph_neighbors: args => graphNeighbors(buildGraph(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),str(args.path)!, (args.hops as 1|2|undefined) ?? 1, (args.limit as number|undefined) ?? 50, str(args.relation)),
     vmem_status: () => ({ defaultVault: defaultVault ?? null, vaults: registryStatus(home).filter(v => ids.includes(v.id)) }),
     vmem_search: args => read(args, index => ({ hits: index.search(str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }) })),
     vmem_read: args => read(args, index => { const r = index.show(str(args.path)!, (args.maxBytes as number | undefined) ?? 16384, str(args.section), args.offset as number | undefined); return document(r); }),
