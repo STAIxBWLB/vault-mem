@@ -54,7 +54,7 @@ test("each malformed bibliographic value returns a named V01; all keys are refer
     citekey: ["", "x".repeat(65), "a b", "key.", "valid\n", 2],
     doi: ["", "https://doi.org/10.1234/example", "10.123/example", "10.1234567890/example", "10.1234/", "10.1234/a b", "10.1234/a\nb", "10.1234/a\n", 42],
     arxiv_id: ["", "2600.12345", "2613.12345", "0704.000", "2601.123456", "2601.12345v0", "hep-th/9913001", "hep-th/990100", "2601.12345\n", 2],
-    authors: ["Fixture", [], Array(101).fill("Fixture"), [1], [null]],
+    authors: ["Fixture", [], [""], [" "], Array(101).fill("Fixture"), [1], [null]],
     year: [999, 2101, 2026.5, "2026", null], venue: ["", "가".repeat(201), 2, null],
   };
   for (const [key, values] of Object.entries(invalid)) for (const value of values) {
@@ -72,10 +72,12 @@ test("writes lowercase new DOI assignments, preserve legacy bytes, and refuse du
   const file = join(f.notes, "first.md"), first = readFileSync(file, "utf8");
   expect(parseFrontmatter(first).data.doi).toBe("10.1234/synthetic.paper");
   const duplicate = f.request(create("second"));
-  expect(duplicate.ok).toBe(false); expect(duplicate.issues).toContainEqual(expect.objectContaining({ code: "V08", severity: "error", message: "citekey already exists in the vault" }));
+  expect(duplicate.ok).toBe(false); expect(duplicate.issues).toContainEqual(expect.objectContaining({ code: "V08", severity: "error", message: "citekey is already used by notes/first.md; choose another citekey" }));
   expect(f.request(create("second", { citekey: "Other2026" })).ok).toBe(true);
   const second = readFileSync(join(f.notes, "second.md"), "utf8");
-  expect(f.request({ op: "frontmatter", path: "second", set: { citekey: bibliographic.citekey } }).ok).toBe(false);
+  const duplicateUpdate = f.request({ op: "frontmatter", path: "second", set: { citekey: bibliographic.citekey } });
+  expect(duplicateUpdate.ok).toBe(false);
+  expect(duplicateUpdate.issues).toContainEqual(expect.objectContaining({ code: "V08", message: "citekey is already used by notes/first.md; choose another citekey" }));
   expect(readFileSync(join(f.notes, "second.md"), "utf8")).toBe(second);
   expect(f.request({ op: "frontmatter", path: "first", set: { doi: "10.1234/NEW.PAPER" } }).ok).toBe(true);
   expect(parseFrontmatter(readFileSync(file, "utf8")).data.doi).toBe("10.1234/new.paper");
@@ -133,6 +135,7 @@ test("JSON-RPC create and frontmatter accept 100 authors without raising other a
     { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "vmem_create", arguments: { vault: "test", stem: "paper", ...metadata, body, extra: { ...bibliographic, authors } } } },
     { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vmem_set_frontmatter", arguments: { vault: "test", path: "paper", set: { authors: [...authors].reverse() } } } },
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vmem_set_frontmatter", arguments: { vault: "test", path: "paper", set: { tags: Array(65).fill("fixture") } } } },
+    { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "vmem_set_frontmatter", arguments: { vault: "test", path: "paper", set: { authors: [""] } } } },
   ];
   for (const frame of frames) input.write(JSON.stringify(frame) + "\n");
   input.end(); await done;
@@ -143,6 +146,7 @@ test("JSON-RPC create and frontmatter accept 100 authors without raising other a
     expect(JSON.parse(response.result.content[0].text).ok).toBe(true);
   }
   expect(responses.find(row => row.id === 3).error.code).toBe(-32602);
+  expect(responses.find(row => row.id === 4).error).toEqual(expect.objectContaining({ code: -32602, message: expect.stringContaining("set.authors[0]") }));
   expect(parseFrontmatter(readFileSync(join(f.notes, "paper.md"), "utf8")).data.authors).toEqual([...authors].reverse());
 });
 

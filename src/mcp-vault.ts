@@ -29,7 +29,7 @@ const LOG_TYPES = ["INGEST", "ROUTE", "EXTRACT", "CONNECT", "DIGEST", "LEARN", "
 const note = string(1024), sha = { type: "string", minLength: 64, maxLength: 64 };
 const logEvent = LOG_EVENT_SCHEMA;
 const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLength: 4096, maxItems: 64, items: { type: ["string", "number", "boolean"], maxLength: 1024 } };
-const metadata = { type: "object", maxProperties: 32, properties: { authors: { type: "array", minItems: 1, maxItems: 100, items: string(1024, 0) } }, additionalProperties: scalar };
+const metadata = { type: "object", maxProperties: 32, properties: { authors: { type: "array", minItems: 1, maxItems: 100, items: string(1024) } }, additionalProperties: scalar };
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",

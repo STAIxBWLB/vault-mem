@@ -221,7 +221,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
               if (size.count > 10000 || size.bytes > 64 * 1024 * 1024) throw new Error("analysis: cached snapshot exceeds bound");
               for (const row of disk.query<Omit<StoredNote,"aliases"> & {aliases:string}, []>("SELECT * FROM notes").all()) {
                 this.db.query("INSERT INTO notes VALUES (?,?,?,?,?,?,?,?,?,?)").run(row.path,row.hash,row.metadata,row.title,row.description,row.body,row.type,row.domain,row.aliases,row.source);
-                this.indexText(row.path, row.title, row.description, this.searchBody(row.body, parseFrontmatter(row.source).data));
+                this.indexText(row.path, row.title, row.description, !this.adapter && row.type === "reference" ? this.searchBody(row.body, parseFrontmatter(row.source).data) : row.body);
               }
               for (const row of disk.query<{source:string;ordinal:number;data:string}, []>("SELECT * FROM links").all()) this.db.query("INSERT INTO links VALUES (?,?,?)").run(row.source,row.ordinal,row.data);
               this.db.run(`PRAGMA user_version = ${Number(disk.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0)}`);
