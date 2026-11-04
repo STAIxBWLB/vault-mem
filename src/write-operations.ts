@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeSource } from "./source.ts";
 import { parseFrontmatter, emitFrontmatter } from "./frontmatter.ts";
 import { normalizeTarget, proseLines, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
-import type { PlannedChange, WriteIssue, WriteOp } from "./write-types.ts";
+import type { PatchEdit, PlannedChange, WriteIssue, WriteOp } from "./write-types.ts";
 export class WriteRefusal extends Error {
   constructor(readonly issues: WriteIssue[]) { super(issues[0]?.message ?? "write refused"); }
 }
@@ -149,11 +149,28 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
     }
     case "patch": {
       const { path, source } = existing(operation.path);
-      if (typeof operation.oldString !== "string" || !operation.oldString || typeof operation.newString !== "string" || Buffer.byteLength(operation.oldString) > 8192 || Buffer.byteLength(operation.newString) > 8192) refuse("V09", "patch strings must be bounded and oldString nonempty", path);
-      const first = source.indexOf(operation.oldString);
-      if (first < 0 || source.indexOf(operation.oldString, first + 1) >= 0) refuse("V09", "oldString must match exactly once", path);
-      if(first < (document(source,path).frontmatter?.length ?? 0))refuse("V01","patch cannot target frontmatter; use vmem_set_frontmatter or the frontmatter command",path);
-      set(path, source.slice(0, first) + operation.newString + source.slice(first + operation.oldString.length));
+      const single = operation.oldString !== undefined || operation.newString !== undefined;
+      if (single === (operation.edits !== undefined)) refuse("V01", "patch takes either oldString/newString or edits, not both or neither; send one form", path);
+      const edits: unknown[] = single ? [{ oldString: operation.oldString, newString: operation.newString }] : Array.isArray(operation.edits) ? operation.edits : [];
+      if (edits.length < 1 || edits.length > 32) refuse("V09", "edits must list 1 to 32 replacements; split a larger change into several patches", path);
+      const frontmatterEnd = document(source, path).frontmatter?.length ?? 0;
+      // Every edit is located in the original text, so earlier edits cannot create or remove a later match.
+      const spans = edits.map((edit, index) => {
+        const at = single ? "" : `edits[${index}]: `;
+        if (!edit || typeof edit !== "object" || Array.isArray(edit) || Object.keys(edit).some(key => key !== "oldString" && key !== "newString")) refuse("V01", `${at}an edit is exactly {oldString, newString}`, path);
+        const { oldString, newString } = edit as Partial<PatchEdit>;
+        if (typeof oldString !== "string" || !oldString || typeof newString !== "string" || Buffer.byteLength(oldString) > 8192 || Buffer.byteLength(newString) > 8192) refuse("V09", `${at}patch strings must be bounded and oldString nonempty`, path);
+        const first = source.indexOf(oldString);
+        if (first < 0 || source.indexOf(oldString, first + 1) >= 0) refuse("V09", single ? "oldString must match exactly once" : `${at}oldString must match exactly once in the original note; re-read the note and widen the string`, path);
+        if (first < frontmatterEnd) refuse("V01", `${at}patch cannot target frontmatter; use vmem_set_frontmatter or the frontmatter command`, path);
+        return { start: first, end: first + oldString.length, text: newString, index };
+      }).sort((a, b) => a.start - b.start);
+      let after = "", cursor = 0;
+      for (const span of spans) {
+        if (span.start < cursor) refuse("V09", `edits[${span.index}]: oldString overlaps another edit; merge overlapping edits into one`, path);
+        after += source.slice(cursor, span.start) + span.text; cursor = span.end;
+      }
+      set(path, after + source.slice(cursor));
       break;
     }
     case "append": { const { path, source } = existing(operation.path); set(path, appendSection(source, operation.section, operation.markdown, path)); break; }

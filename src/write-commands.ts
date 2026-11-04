@@ -5,7 +5,7 @@ import { loadRegistry } from "./registry.ts";
 import { basename } from "node:path";
 import { applyWrite, MAX_WRITE_BYTES } from "./writer.ts";
 import { notePath } from "./write-operations.ts";
-import type { WriteOp, WriteRequest } from "./write-types.ts";
+import type { PatchEdit, WriteOp, WriteRequest } from "./write-types.ts";
 import type { LogEvent } from "./log-types.ts";
 import { LOG_EVENT_SCHEMA } from "./log-format.ts";
 import { argumentError } from "./mcp.ts";
@@ -44,7 +44,7 @@ function logOption(text: string | undefined): { log?: LogEvent } {
 export function runWriteCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
   const valueOptions: Record<string, string[]> = {
     new: ["--type", "--domain", "--topics", "--description", "--title", "--source", "--confidence", "--status", "--extra", "--body"],
-    patch: ["--old", "--new", "--expected-sha"], append: ["--section", "--markdown", "--expected-sha"],
+    patch: ["--old", "--new", "--edits", "--expected-sha"], append: ["--section", "--markdown", "--expected-sha"],
     frontmatter: ["--set", "--unset", "--expected-sha"], link: ["--relation", "--context"],
     move: ["--fingerprint"], delete: ["--fingerprint"], tidy: ["--fingerprint", "--map"], report: ["--body"], check: ["--path"], supersede: [],
   };
@@ -92,7 +92,16 @@ export function runWriteCommand(command: string, args: string[], home: string, e
       if (optional("--topics") !== undefined) frontmatter.topics = required("--topics").split(",").filter(Boolean).map(value => value.startsWith("[[") ? value : `[[${value}]]`);
       operation = { op: "create", path: target, frontmatter, ...(optional("--body") ? { body: input(required("--body"), home) } : {}) }; break;
     }
-    case "patch": operation = { op: "patch", path: target, oldString: required("--old"), newString: required("--new"), expectedSha: optional("--expected-sha") }; break;
+    case "patch": {
+      // --edits takes the same JSON array as the MCP `edits` argument.
+      if (optional("--edits") === undefined) { operation = { op: "patch", path: target, oldString: required("--old"), newString: required("--new"), expectedSha: optional("--expected-sha") }; break; }
+      if (optional("--old") !== undefined || optional("--new") !== undefined) throw new Error("patch: use --old/--new or --edits, not both");
+      const text = input(required("--edits"), home);
+      let edits: unknown;
+      try { edits = JSON.parse(text); } catch { throw new Error("--edits: invalid JSON; expected an array of {oldString, newString}"); }
+      if (!Array.isArray(edits)) throw new Error("--edits: expected a JSON array of {oldString, newString}");
+      operation = { op: "patch", path: target, edits: edits as PatchEdit[], expectedSha: optional("--expected-sha") }; break;
+    }
     case "append": operation = { op: "append", path: target, section: required("--section"), markdown: required("--markdown"), expectedSha: optional("--expected-sha") }; break;
     case "frontmatter": operation = { op: "frontmatter", path: target, set: optional("--set") ? object(required("--set"), "set") : {}, unset: optional("--unset")?.split(","), expectedSha: optional("--expected-sha") }; break;
     case "link": operation = { op: "link", from: target, to: positional[2]!, relation: required("--relation") as Extract<WriteOp, { op: "link" }>["relation"], context: optional("--context"), bidirectional: !flags["--one-way"] }; break;
