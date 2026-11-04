@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -171,4 +171,25 @@ test("the first schema3 scan finds an unchanged pre-existing reference DOI and p
   } finally { index.close(); }
   expect(readFileSync(file, "utf8")).toBe(source);
   expect(readFileSync(oldFile)).toEqual(oldBytes);
+});
+
+
+test("confirmed moves preserve uppercase valid and invalid legacy DOI metadata byte for byte", () => {
+  for (const doi of ["10.1234/UPPERCASE.PAPER", "https://doi.org/10.1234/EXAMPLE"]) {
+    const f = fixture(), source = note({ doi }).replace(`doi: ${JSON.stringify(doi)}`, `doi: '${doi}' # preserve quoting and comment`);
+    const oldFile = join(f.notes, "legacy.md"), nextFile = join(f.notes, "renamed.md");
+    writeFileSync(oldFile, source);
+    const operation: WriteOp = { op: "move", from: "legacy", to: "renamed" };
+    const preview = f.request(operation);
+    expect(preview.ok).toBe(true);
+    expect(readFileSync(oldFile, "utf8")).toBe(source);
+    expect(existsSync(nextFile)).toBe(false);
+    const result = applyWrite(f.home, { vault: "test", operation, confirm: true, fingerprint: preview.fingerprint });
+    expect(result.ok).toBe(true);
+    expect(result.applied).toBe(true);
+    expect(result.issues.filter(issue => issue.severity === "error")).toEqual([]);
+    if (doi.startsWith("https:")) expect(result.issues).toContainEqual(expect.objectContaining({ code: "V01", severity: "warning", message: expect.stringContaining("doi") }));
+    expect(readFileSync(nextFile, "utf8")).toBe(source);
+    expect(existsSync(oldFile)).toBe(false);
+  }
 });

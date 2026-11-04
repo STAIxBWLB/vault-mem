@@ -126,8 +126,10 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
     const before = notes.get(path) ?? (operation.op === "report" ? reportBefore ?? null : null);
     if (after !== null && operation.op !== "report") {
       try {
-        const doc = parseFrontmatter(after), previous = before === null ? undefined : parseFrontmatter(before).data;
-        // Normalize newly assigned identifiers; body-only edits leave legacy metadata byte-identical.
+        const previousText = operation.op === "move" && path === notePath(operation.to)
+          ? needed(notes, moveSourcePath(operation.from, notes)) : before;
+        const doc = parseFrontmatter(after), previous = previousText === null ? undefined : parseFrontmatter(previousText).data;
+        // Normalize newly assigned identifiers; edits and moves leave untouched legacy metadata byte-identical.
         if (doc.data.type === "reference" && typeof doc.data.doi === "string" &&
           (previous?.type !== "reference" || previous.doi !== doc.data.doi ||
             (operation.op === "frontmatter" && Object.hasOwn(operation.set, "doi")))) {
