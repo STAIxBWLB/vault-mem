@@ -39,10 +39,12 @@ function commandHelp(args: string[]): string | undefined {
   const commands = COMMANDS.filter(command => command.name === name || command.name.startsWith(name + " "));
   return commands.length ? commands.map(command => `Usage: vmem ${command.usage}`).join("\n") : undefined;
 }
-/** Runs one command; `--color=auto|always|never` is taken off first and decides the text options for stdout. */
-export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
+/** Where the text goes; library callers and tests default to a non-terminal, `main` passes the real stdout. */
+export interface Stdout { isTTY?: boolean; columns?: number }
+/** Runs one command; `--color=auto|always|never` is taken off first and decides the text options for `stdout`. */
+export function run(args: string[], env: NodeJS.ProcessEnv = process.env, stdout: Stdout = {}): { text: string; code: number } {
   const taken = takeColorFlag(args);
-  return runWith(taken.args, env, textOptions(taken.color, env));
+  return runWith(taken.args, env, textOptions(taken.color, env, stdout));
 }
 function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLAIN): { text: string; code: number } {
   if (!args.length || (args.length === 1 && ["--help", "-h", "help"].includes(args[0]!))) return { text: help(), code: 0 };
@@ -189,8 +191,8 @@ export async function runMcp(env: NodeJS.ProcessEnv = process.env): Promise<void
   await serveMcp({ tools: server.tools, handlers: server.handlers, name: "vmem", version });
 }
 /** Async commands. Only `promote-from-amem` and `skills mine` load the agent-mem seam, and only when they run. */
-export async function runAsync(argv: string[], env: NodeJS.ProcessEnv = process.env, io: { stdinIsTTY?: boolean } = {}): Promise<{ text: string; code: number }> {
-  const taken = takeColorFlag(argv), args = taken.args, text = textOptions(taken.color, env);
+export async function runAsync(argv: string[], env: NodeJS.ProcessEnv = process.env, io: { stdinIsTTY?: boolean; stdout?: Stdout } = {}): Promise<{ text: string; code: number }> {
+  const taken = takeColorFlag(argv), args = taken.args, text = textOptions(taken.color, env, io.stdout ?? {});
   const usage = commandHelp(args);
   if (usage) return { text: usage, code: 0 };
   if (args[0] === "skills") {
@@ -202,10 +204,10 @@ export async function runAsync(argv: string[], env: NodeJS.ProcessEnv = process.
   return runPromoteCommand(args.slice(1), resolveHome(env).home, env, io, text);
 }
 export async function mainAsync(args: string[]): Promise<number> {
-  try { const output = await runAsync(args, process.env, { stdinIsTTY: process.stdin.isTTY === true }); console.log(output.text); return output.code; }
+  try { const output = await runAsync(args, process.env, { stdinIsTTY: process.stdin.isTTY === true, stdout: process.stdout }); console.log(output.text); return output.code; }
   catch (error) { console.error(`vmem: ${error instanceof Error ? error.message : "operation failed"}`); return 1; }
 }
 export function main(args: string[]): number {
-  try { const output = run(args); console.log(output.text); return output.code; }
+  try { const output = run(args, process.env, process.stdout); console.log(output.text); return output.code; }
   catch (error) { console.error(`vmem: ${error instanceof Error ? error.message : "operation failed"}`); return 1; }
 }

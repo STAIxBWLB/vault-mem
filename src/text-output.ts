@@ -34,8 +34,8 @@ export function outputWidth(env: { isTTY: boolean; columns?: number; COLUMNS?: s
   if (env.isTTY) return Math.max(80, env.columns && Number.isFinite(env.columns) ? env.columns : 80);
   return env.COLUMNS && /^[1-9][0-9]*$/.test(env.COLUMNS) ? Number(env.COLUMNS) : undefined;
 }
-/** Options for the process's stdout. */
-export function textOptions(flag: string | undefined, env: NodeJS.ProcessEnv = process.env, stdout: { isTTY?: boolean; columns?: number } = process.stdout): TextOptions {
+/** Options for a stdout; the default is a non-terminal, so library calls and tests get the same text everywhere. */
+export function textOptions(flag: string | undefined, env: NodeJS.ProcessEnv = process.env, stdout: { isTTY?: boolean; columns?: number } = {}): TextOptions {
   const isTTY = stdout.isTTY === true, color = resolveColor(flag, { isTTY, TERM: env.TERM, NO_COLOR: env.NO_COLOR });
   const columns = outputWidth({ isTTY, columns: stdout.columns, COLUMNS: env.COLUMNS });
   return { color, ...(columns !== undefined ? { columns } : {}) };
