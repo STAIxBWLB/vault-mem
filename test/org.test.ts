@@ -1,11 +1,11 @@
 import { replaceTopicsSection } from "../src/write-operations.ts";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addVault } from "../src/registry.ts";
 import { promoteToOrg, screenForOrg, dropUnresolvedLinks } from "../src/org-promote.ts";
-import { syncVault, sameRemote } from "../src/sync.ts";
+import { originCheck, syncVault, sameRemote } from "../src/sync.ts";
 import { readLog } from "../src/vault-log.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { run } from "../src/cli.ts";
@@ -426,4 +426,44 @@ test("doctor skips optional checks on unavailable vaults", () => {
   const team = JSON.parse(result.text).vaults.find((v: { id: string }) => v.id === "team");
   expect(team.healthy).toBe(false);
   expect(team).not.toHaveProperty("checks");
+});
+
+test("vmem sync names a fetch or push timeout or signal with an empty stderr, and its own next step (#143)", () => {
+  const f = fixture();
+  const real = Bun.spawnSync;
+  let fake: Record<string, unknown> | undefined, on = "fetch";
+  const spawn = spyOn(Bun, "spawnSync").mockImplementation(((argv: string[], options: unknown) => fake && argv.includes(on)
+    ? { stdout: Buffer.from(""), stderr: Buffer.from(""), pid: 1, success: false, ...fake }
+    : real(argv as never, options as never)) as never);
+  try {
+    fake = { exitCode: null, signalCode: "SIGTERM", exitedDueToTimeout: true };
+    expect(syncVault(f.home, { vault: "team" }, { env: f.env }).issues).toEqual([{ code: "FETCH", severity: "error", message: "fetch failed: timed out after 60 s; check the network and credentials for origin, then rerun vmem sync" }]);
+    fake = { exitCode: null, signalCode: "SIGKILL" };
+    expect(syncVault(f.home, { vault: "team" }, { env: f.env }).issues[0]!.message).toBe("fetch failed: killed by SIGKILL; check the network and credentials for origin, then rerun vmem sync");
+    fake = { exitCode: 1 };
+    expect(syncVault(f.home, { vault: "team" }, { env: f.env }).issues[0]!.message).toBe("fetch failed: error; check the network and credentials for origin, then rerun vmem sync");
+    on = "rev-parse"; fake = { exitCode: null, signalCode: "SIGTERM", exitedDueToTimeout: true };
+    const r = syncVault(f.home, { vault: "team" }, { env: f.env });
+    expect(JSON.stringify(r.issues)).toContain("timed out after 60 s; check `git -C <vault> status`, then rerun vmem sync");
+    expect(JSON.stringify(r.issues)).not.toContain(f.org);
+    expect(() => originCheck(f.org, "unused", f.env, "doctor")).toThrow("timed out after 60 s; check `git -C <vault> status`, then rerun vmem doctor");
+  } finally { spawn.mockRestore(); }
+});
+
+test("vmem sync names a push timeout with an empty stderr, keeps the commit and gives a next step (#143)", () => {
+  const f = fixture();
+  const preview = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
+  promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team", confirm: true, fingerprint: preview.fingerprint }, { env: f.env });
+  const plan = syncVault(f.home, { vault: "team" }, { env: f.env });
+  const real = Bun.spawnSync;
+  // Match the `push` subcommand itself; `remote get-url --push` only contains "--push".
+  const spawn = spyOn(Bun, "spawnSync").mockImplementation(((argv: string[], options: unknown) => argv.includes("push")
+    ? { exitCode: null, signalCode: "SIGTERM", exitedDueToTimeout: true, stdout: Buffer.from(""), stderr: Buffer.from(""), pid: 1, success: false }
+    : real(argv as never, options as never)) as never);
+  try {
+    const r = syncVault(f.home, { vault: "team", confirm: true, fingerprint: plan.fingerprint }, { env: f.env });
+    expect(r).toMatchObject({ ok: false, applied: true, pushed: false });
+    expect(r.issues).toEqual([{ code: "PUSH", severity: "error", message: "push failed: timed out after 60 s; the local commit was kept; check the network and push access for origin, then rerun vmem sync" }]);
+    expect(spawn.mock.calls.some(args => (args[0] as string[]).includes("push"))).toBe(true);
+  } finally { spawn.mockRestore(); }
 });

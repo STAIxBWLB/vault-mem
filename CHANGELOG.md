@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Git timeouts and signals are named accurately: `timed out after 60 s` for `vmem sync` and `1 s` for the console check (from Bun's `exitedDueToTimeout`), else `killed by <signal>`, each with its own next step (`check git -C <vault> status, then rerun vmem sync`, the same for `vmem doctor`, or `inspect the vault Git state in System`). `vmem sync` FETCH and PUSH issues with an empty stderr now say why and name a next step. The console sync alert names the staged paths from the same list sync stages (#143).
+
 - Docs: the README says an older agent-console loads the plugin but the panel fails with a TypeError on `host.ui`, fixed by upgrading agent-console, and the spec fixture README says the files need only be tracked, with a commit required only for verification-stamp cases (#142).
 
 - The org sync inbox alert counts only paths `vmem sync` would stage (notes/, reports/, log), with a rename counted once. Other dirty paths are named in the detail but not counted, and a vault with no usable upstream drops the "ahead of upstream" clause. A git call that times out or is killed now logs the signal (`git status failed: timed out (SIGTERM) under the 1 s budget`) and the next step, instead of an empty cause (#138).

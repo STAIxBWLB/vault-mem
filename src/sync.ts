@@ -19,7 +19,7 @@ export interface SyncResult {
   branch: string | null;
   /** Planned changed paths that will be staged and committed. */
   paths: string[];
-  /** Changed paths outside notes/, reports/ and log: never staged. */
+  /** Changed paths outside STAGE_PREFIXES and STAGE_FILES: never staged. */
   ignored: string[];
   ahead: number;
   behind: number;
@@ -28,7 +28,8 @@ export interface SyncResult {
   pushed?: boolean;
   issues: WriteIssue[];
 }
-type Git = (args: string[], options?: { allowFail?: boolean }) => SpawnSyncReturns<string>;
+/** A git call; `cause` names why a failed call failed (timeout, signal or the last stderr line). */
+type Git = (args: string[], options?: { allowFail?: boolean }) => SpawnSyncReturns<string> & { cause: string };
 const issue = (code: string, message: string): WriteIssue => ({ code, severity: "error", message });
 /** Compare remotes after removing transport noise: scheme, credentials, trailing .git and slash. Host remotes compare case-insensitively without a trailing .git; local and file: paths keep their case and their .git suffix. */
 export function sameRemote(a: string, b: string): boolean {
@@ -45,21 +46,26 @@ export function sameRemote(a: string, b: string): boolean {
 }
 /** Time budget of the console's local sync check. */
 const GIT_TIMEOUT_BUDGET_MS = 1000;
-function gitIn(cwd: string, env: NodeJS.ProcessEnv, deadline?: number): Git {
+/** The paths `vmem sync` stages (STAGE_PREFIXES, then STAGE_FILES), as people read them. */
+export const STAGED_DESCRIPTION = ((items: string[]) => items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items.join(""))([...STAGE_PREFIXES, ...STAGE_FILES]);
+type SpawnResult = { exitCode: number | null; signalCode?: string | number | null; exitedDueToTimeout?: boolean; stderr: { toString(): string } };
+/** Why a git call failed: its timeout or signal when it left no exit code, else the last stderr line. */
+function failureCause(result: SpawnResult, budgetMs: number): string {
+  if (result.exitedDueToTimeout) return `timed out after ${budgetMs / 1000} s`;
+  if (result.exitCode === null) return `killed by ${result.signalCode ?? "a signal"}`;
+  return result.stderr.toString().trim().split("\n").at(-1)?.slice(0, 300) || "error";
+}
+const NEXT_STEP = { console: "inspect the vault Git state in System and retry", sync: "check `git -C <vault> status`, then rerun vmem sync", doctor: "check `git -C <vault> status`, then rerun vmem doctor" } as const;
+function gitIn(cwd: string, env: NodeJS.ProcessEnv, deadline?: number, context: keyof typeof NEXT_STEP = "sync"): Git {
   return (args, options = {}) => {
     const timeout = deadline === undefined ? GIT_TIMEOUT_MS : deadline - Date.now();
-    if (timeout <= 0) throw new Error("local sync check exceeded its time budget; inspect the vault Git state in System and retry");
+    if (timeout <= 0) throw new Error(`git ${args[0]} not started: the ${GIT_TIMEOUT_BUDGET_MS / 1000} s budget is used up; ${NEXT_STEP[context]}`);
     const argv = memoryGitArgv(["-C", cwd, ...args]);
     const result = Bun.spawnSync(argv, { env: memoryGitEnv({ ...env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }, { repositoryIsolation: true }), stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout });
-    const out = { status: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString(), pid: result.pid, output: [], signal: null } as unknown as SpawnSyncReturns<string>;
-    if (!options.allowFail && result.exitCode !== 0) {
-      // A timeout or signal leaves no exit code and usually no stderr: name the signal instead of an empty cause.
-      const signal = (result as { signalCode?: string | null }).signalCode ?? "a signal";
-      const cause = result.exitCode === null
-        ? (deadline === undefined ? `killed by ${signal}` : `timed out (${signal}) under the ${Math.round(GIT_TIMEOUT_BUDGET_MS / 1000)} s budget`)
-        : out.stderr.trim().split("\n").at(-1)?.slice(0, 300) || "error";
-      throw Object.assign(new Error(`git ${args[0]} failed: ${cause}${result.exitCode === null ? "; inspect the vault Git state in System and retry" : ""}`), { git: true });
-    }
+    // A timeout or signal leaves no exit code and usually no stderr, so `cause` names it instead.
+    const cause = result.exitCode === 0 ? "" : failureCause(result, deadline === undefined ? GIT_TIMEOUT_MS : GIT_TIMEOUT_BUDGET_MS);
+    const out = { status: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString(), pid: result.pid, output: [], signal: null, cause } as unknown as ReturnType<Git>;
+    if (!options.allowFail && result.exitCode !== 0) throw Object.assign(new Error(`git ${args[0]} failed: ${cause}${result.exitCode === null ? `; ${NEXT_STEP[context]}` : ""}`), { git: true });
     return out;
   };
 }
@@ -76,8 +82,8 @@ function applicableRewrites(lines: (args: string[]) => string[], urls: string[])
   });
 }
 /** Local-only origin validation shared by doctor and sync; never fetches or pushes. */
-export function originCheck(root: string, remote: string, env: NodeJS.ProcessEnv = process.env): { ok: boolean; origin: string | null; fetchUrls: string[]; pushUrls: string[]; issue?: string } {
-  const git = gitIn(root, env);
+export function originCheck(root: string, remote: string, env: NodeJS.ProcessEnv = process.env, context: "sync" | "doctor" = "sync"): { ok: boolean; origin: string | null; fetchUrls: string[]; pushUrls: string[]; issue?: string } {
+  const git = gitIn(root, env, undefined, context);
   if (realpathSync(git(["rev-parse", "--show-toplevel"]).stdout.trim()) !== root) throw new Error("vault path is not the root of its git repository");
   const origin = git(["remote", "get-url", "origin"], { allowFail: true });
   const originUrl = origin.status === 0 ? origin.stdout.trim() : null;
@@ -109,7 +115,7 @@ function aheadBehind(git: Git, upstream: string): { behind: number; ahead: numbe
 }
 /** Local-only inbox state: dirty paths plus commits ahead of the configured tracking ref. */
 export function localSyncPending(root: string, env: NodeJS.ProcessEnv = process.env): { changed: number; ignored: number; ahead: number; upstream: boolean } {
-  const git = gitIn(root, { ...env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never", GIT_NO_LAZY_FETCH: "1" }, Date.now() + GIT_TIMEOUT_BUDGET_MS);
+  const git = gitIn(root, { ...env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never", GIT_NO_LAZY_FETCH: "1" }, Date.now() + GIT_TIMEOUT_BUDGET_MS, "console");
   if (realpathSync(root) !== root || realpathSync(git(["rev-parse", "--show-toplevel"]).stdout.trim()) !== root) throw new Error("sync pending requires the registered Git worktree root; check the vault path in System");
   // Only changes sync would stage count; a rename counts once. Other dirty paths are reported separately.
   const entries = changedEntries(git), dirty = entries.filter(paths => paths.some(planned)).length, ignored = entries.length - dirty;
@@ -158,7 +164,7 @@ export function syncVault(home: string, request: { vault: string; confirm?: bool
     result.branch = branch.stdout.trim();
     if (git(["rev-parse", "--verify", "--quiet", "REBASE_HEAD"], { allowFail: true }).status === 0 || git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], { allowFail: true }).status === 0) return { ...result, issues: [issue("SYNC", "a rebase or merge is in progress; resolve it first")] };
     const fetch = git(["fetch", "--quiet", "--no-tags", "origin", result.branch], { allowFail: true });
-    if (fetch.status !== 0) return { ...result, issues: [issue("FETCH", `fetch failed: ${fetch.stderr.trim().split("\n").at(-1)?.slice(0, 300) ?? "error"}`)] };
+    if (fetch.status !== 0) return { ...result, issues: [issue("FETCH", `fetch failed: ${fetch.cause}; check the network and credentials for origin, then rerun vmem sync`)] };
     const upstream = `origin/${result.branch}`;
     const hasUpstream = git(["rev-parse", "--verify", "--quiet", `refs/remotes/${upstream}`], { allowFail: true }).status === 0;
     if (hasUpstream) {
@@ -193,7 +199,7 @@ export function syncVault(home: string, request: { vault: string; confirm?: bool
     const pushNow = lines(["remote", "get-url", "--push", "--all", "origin"]);
     if (pushNow.some(url => !sameRemote(url, spec.remote!)) || applicableRewrites(lines, [spec.remote, ...fetchUrls, ...pushNow]).length) return { ...result, applied: Boolean(result.commit), pushed: false, issues: [issue("REMOTE", "push destination changed before push; nothing was pushed")] };
     const push = git(["push", "--quiet", "--porcelain", "origin", `HEAD:refs/heads/${result.branch}`], { allowFail: true });
-    if (push.status !== 0) return { ...result, applied: Boolean(result.commit), pushed: false, issues: [issue("PUSH", `push failed: ${push.stderr.trim().split("\n").at(-1)?.slice(0, 300) ?? "error"}; the local commit was kept`)] };
+    if (push.status !== 0) return { ...result, applied: Boolean(result.commit), pushed: false, issues: [issue("PUSH", `push failed: ${push.cause}; the local commit was kept; check the network and push access for origin, then rerun vmem sync`)] };
     // Verify the remote really has our head before reporting success.
     git(["fetch", "--quiet", "--no-tags", "origin", result.branch]);
     const pushedHead = git(["rev-parse", upstream]).stdout.trim(), localHead = git(["rev-parse", "HEAD"]).stdout.trim();

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addVault } from "../src/registry.ts";
-import { localSyncPending } from "../src/sync.ts";
+import { localSyncPending, STAGED_DESCRIPTION } from "../src/sync.ts";
 import { plugin } from "../src/ui/plugin.ts";
 import type { ConsoleProvider, InboxItem } from "@staix/agent-console/contract";
 
@@ -149,14 +149,21 @@ test("only paths sync would stage count; a rename counts once; others are named 
     detail: "2 uncommitted paths to sync; 1 other path outside notes/, reports/ and log not counted; 0 local commits ahead of upstream" }]);
 });
 
-test("a timed-out or killed git call names the signal instead of an empty cause (#138)", async () => {
+test("a timed-out or killed git call names the timeout or the signal, with the console's next step (#138, #143)", async () => {
   const f = await fixture();
   const real = Bun.spawnSync;
+  let fake: Record<string, unknown> = { exitCode: null, signalCode: "SIGTERM", exitedDueToTimeout: true };
   const spawn = spyOn(Bun, "spawnSync").mockImplementation(((argv: string[], options: unknown) => argv.includes("status")
-    ? { exitCode: null, signalCode: "SIGTERM", stdout: Buffer.from(""), stderr: Buffer.from(""), pid: 1, success: false }
+    ? { stdout: Buffer.from(""), stderr: Buffer.from(""), pid: 1, success: false, ...fake }
     : real(argv as never, options as never)) as never);
   cleanups.push(() => spawn.mockRestore());
-  expect(() => localSyncPending(f.org)).toThrow("git status failed: timed out (SIGTERM) under the 1 s budget; inspect the vault Git state in System and retry");
+  expect(() => localSyncPending(f.org)).toThrow("git status failed: timed out after 1 s; inspect the vault Git state in System and retry");
   expect(await syncItems(f.provider)).toEqual([]);
-  expect(f.logs.some(line => line.includes("git status failed: timed out (SIGTERM)"))).toBe(true);
+  expect(f.logs.some(line => line.includes("git status failed: timed out after 1 s"))).toBe(true);
+  fake = { exitCode: null, signalCode: "SIGKILL" };
+  expect(() => localSyncPending(f.org)).toThrow("git status failed: killed by SIGKILL; inspect the vault Git state in System and retry");
+});
+
+test("the inbox detail names the staged paths from the same list sync stages (#143)", () => {
+  expect(STAGED_DESCRIPTION).toBe("notes/, reports/ and log");
 });
