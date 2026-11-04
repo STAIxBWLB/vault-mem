@@ -4,6 +4,8 @@
 
 - `vmem manifest --json` lists read-only MCP tools as `{name, readOnly: true}` (taken from each tool's `readOnlyHint`), so installers can approve new read tools without a hard-coded list; other tools stay plain names. The release workflow states N-1 per minor line; patch releases carry no N-1 line (#106).
 
+- Add MCP `vmem_read_file` and `vmem_list_files`, bounded read-only access to `ops/`, `reports/`, `self/`, `templates/`, `AGENTS.md` and `README.md` with `vmem_read` paging and limits; `notes/`, `log`, dot paths, symlinked components, non-UTF-8 and over-limit files are refused with the tool to use instead. Add `vmem_report`, the MCP form of `vmem report` with the same receipt and log event (#61).
+
 ## [0.3.3] - 2026-11-02
 
 - Polish the spec read surface: scope fish parent completions to the first subcommand, preserve positional help tokens after `--`, document spec MCP tools and startup source registration, clarify shared field/error guidance, reuse body section helpers, and keep literal snippets on code-point boundaries (#103).

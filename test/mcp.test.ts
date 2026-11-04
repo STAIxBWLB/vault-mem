@@ -2,13 +2,14 @@ import { CONFIG_FILE } from "../src/config.ts";
 import { specGit } from "../src/spec-git.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { addSpec, addVault } from "../src/registry.ts";
 import { serveMcp, FRAME_BYTES, validArguments, argumentError } from "../src/mcp.ts";
 import { createVaultMcp, VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
+import { run } from "../src/cli.ts";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const note = (title: string, body: string, type = "insight") => `---\ntitle: ${JSON.stringify(title)}\ndescription: Synthetic evidence for navigation.\ntype: ${type}\ndomain: research\ntopics: ["[[research]]"]\n---\n# ${title}\n\n${body}\n\n## Topics\n\n- [[research]]\n`;
@@ -283,4 +284,65 @@ test("MCP spec source refusal names startup registration, source argument and re
   const message = refused.issues[0].message;
   for (const phrase of ["startup registry", "source argument", "vmem specs add", "restart the MCP server"]) expect(message).toContain(phrase);
   expect(message).not.toContain("--source");
+});
+
+const tree = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry => { const file = join(dir, entry.name), stat = lstatSync(file); return [`${file}:${stat.size}:${stat.mtimeMs}`, ...(entry.isDirectory() ? tree(file) : [])]; }).sort();
+test("vmem_read_file reads every allowed root, pages like vmem_read, refuses other paths and never locks or writes", async () => {
+  const f = fixture(), server = createVaultMcp(f.home, { VMEM_HOME: f.home }), h = server.handlers;
+  for (const dir of ["ops", "reports", "self", "templates"]) { mkdirSync(join(f.mine, dir)); writeFileSync(join(f.mine, dir, "synthetic.md"), `# Synthetic ${dir}\n`); }
+  for (const file of ["AGENTS.md", "README.md"]) writeFileSync(join(f.mine, file), `# Synthetic ${file}\n`);
+  const paged = note("Paged Finding", "Multibyte 한글 본문 and text. ".repeat(12));
+  writeFileSync(join(f.mine, "notes", "paged.md"), paged); writeFileSync(join(f.mine, "ops", "paged.md"), paged);
+  // Same page sequence, including UTF-8 boundary backoff, as vmem_read over the same bytes.
+  for (const maxBytes of [7, 64]) {
+    let offset: number | undefined = 0, pages = 0;
+    while (offset !== undefined) {
+      const note = await h.vmem_read!({ path: "paged", maxBytes, offset }) as any, file = await h.vmem_read_file!({ path: "ops/paged.md", maxBytes, offset }) as any;
+      expect(file).toMatchObject({ body: note.body, truncated: note.truncated, offset, sha256: note.sha256 }); expect(file.nextOffset).toBe(note.nextOffset);
+      offset = file.nextOffset; pages++;
+    }
+    expect(pages).toBeGreaterThan(1);
+  }
+  mkdirSync(join(f.mine, ".git")); writeFileSync(join(f.mine, ".git", "config"), "x"); writeFileSync(join(f.mine, "ops", ".hidden.md"), "x"); writeFileSync(join(f.mine, "log"), "");
+  writeFileSync(join(f.root, "outside.md"), "outside"); symlinkSync(join(f.root, "outside.md"), join(f.mine, "ops", "escape.md")); symlinkSync(f.root, join(f.mine, "reports", "escape"));
+  writeFileSync(join(f.mine, "ops", "binary.dat"), Buffer.from([0xff, 0xfe, 0x00])); writeFileSync(join(f.mine, "ops", "large.md"), "x".repeat(2 * 1024 * 1024 + 1));
+  writeFileSync(join(f.mine, "ops", ".env"), "x"); writeFileSync(join(f.mine, "ops", "credentials.md"), "x");
+  const before = tree(f.root);
+  for (const path of ["ops/synthetic.md", "reports/synthetic.md", "self/synthetic.md", "templates/synthetic.md", "AGENTS.md", "README.md"])
+    expect(await h.vmem_read_file!({ path })).toMatchObject({ path, truncated: false, body: `# Synthetic ${path.split("/")[0]}\n` });
+  const refused = async (path: string, hint: RegExp) => { const result = await h.vmem_read_file!({ path }) as any; expect(result.refused, path).toBe(true); expect(result.issues[0].message, path).toMatch(hint); };
+  await refused("../outside.md", /vault-relative/); await refused("/etc/hosts", /vault-relative/); await refused("ops/../notes/alpha.md", /vault-relative/);
+  await refused("notes/alpha.md", /vmem_read/); await refused("log", /vmem_log_tail/); await refused(".git/config", /dot paths/); await refused("ops/.hidden.md", /dot paths/);
+  await refused("ops/escape.md", /symlinked/); await refused("reports/escape/outside.md", /symlinked/); await refused("other/x.md", /readable roots/); await refused("ops", /regular file/);
+  await refused("ops/binary.dat", /UTF-8/); await refused("ops/large.md", /read bound/); await refused("ops/missing.md", /not found/); await refused("ops/credentials.md", /denied/);
+  const listed = await h.vmem_list_files!({ dir: "ops/" }) as any;
+  expect(listed).toMatchObject({ dir: "ops", truncated: false }); expect(listed.entries.map((e: any) => e.name)).toEqual(["binary.dat", "large.md", "paged.md", "synthetic.md"]);
+  expect(listed.entries[3]).toEqual({ name: "synthetic.md", path: "ops/synthetic.md", type: "file", bytes: 16 });
+  expect((await h.vmem_list_files!({ dir: "reports" }) as any).entries.map((e: any) => e.name)).toEqual(["synthetic.md"]);
+  for (const dir of ["notes", ".git", "log", "", "AGENTS.md", "reports/escape"]) expect((await h.vmem_list_files!({ dir }) as any).refused, dir).toBe(true);
+  expect(tree(f.root)).toEqual(before);
+});
+
+test("vmem_report gives the CLI receipt and log line under the same path rules and write policy", async () => {
+  const f = fixture(), h = createVaultMcp(f.home, { VMEM_HOME: f.home }).handlers, body = "# Synthetic report\n\nCounts only.\n", source = join(f.root, "body.md");
+  writeFileSync(source, body);
+  const lastLine = () => readFileSync(join(f.mine, "log"), "utf8").trimEnd().split("\n").at(-1)!;
+  // MCP events are always agent-attributed, so the CLI runs with an agent marker for a like-for-like line.
+  const cli = run(["report", "mine", "reports/weekly.md", "--body", source, "--json"], { VMEM_HOME: f.home, CLAUDECODE: "1" });
+  expect(cli.code).toBe(0); const cliReceipt = JSON.parse(cli.text), cliLine = lastLine();
+  rmSync(join(f.mine, "reports", "weekly.md"));
+  const mcpReceipt = await h.vmem_report!({ path: "reports/weekly.md", body }) as any, mcpLine = lastLine();
+  const { fingerprint: a, ...cliRest } = cliReceipt, { fingerprint: b, ...mcpRest } = mcpReceipt;
+  expect(mcpRest).toEqual(cliRest); expect(mcpRest).toMatchObject({ ok: true, applied: true, logged: true, changes: [{ path: "reports/weekly.md", beforeSha: null }] });
+  expect([a, b].every(value => /^[a-f0-9]{64}$/.test(value))).toBe(true);
+  expect(mcpLine.slice(16)).toBe(cliLine.slice(16)); expect(mcpLine).toContain("EXTRACT  -  vmem:report → reports/weekly.md  — report (vmem:agent)");
+  expect(readFileSync(join(f.mine, "reports", "weekly.md"), "utf8")).toBe(body);
+  expect(await h.vmem_report!({ path: "ops/lint.md", body, log: { type: "LINT", project: "-", source: "vmem", dest: "ops/lint.md", note: "Vault lint report" } })).toMatchObject({ ok: true, logged: true });
+  expect(lastLine()).toContain("LINT  -  vmem → ops/lint.md  — Vault lint report (vmem:agent)");
+  const linesBefore = readFileSync(join(f.mine, "log"), "utf8");
+  expect(await h.vmem_report!({ path: "reports/preview.md", body, dryRun: true })).toMatchObject({ ok: true, applied: false, preview: true });
+  expect(existsSync(join(f.mine, "reports", "preview.md"))).toBe(false);
+  for (const path of ["self/x.md", "../x.md", "notes/x.md", "reports/../notes/x.md", ".git/x.md"]) expect(await h.vmem_report!({ path, body }), path).toMatchObject({ refused: true, applied: false });
+  expect(await h.vmem_report!({ vault: "team", path: "reports/x.md", body })).toMatchObject({ refused: true, issues: [{ code: "POLICY" }] });
+  expect(existsSync(join(f.team, "reports"))).toBe(false); expect(readFileSync(join(f.mine, "log"), "utf8")).toBe(linesBefore);
 });

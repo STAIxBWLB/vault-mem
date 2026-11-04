@@ -177,8 +177,13 @@ The vault set is read once at startup: every tool's `vault` property is an enum 
 | `vmem_promote` | `path` (in the personal vault), `to` (enum of org vaults), `topics[]`, `again`, `confirm`, `fingerprint` (two-step; never pushes) |
 | `vmem_skills_mine` | `vault`, `days`, `project`, `allProjects`, `vocab`, `skills[]`, `minSize`, `minNovelty` (read-only; see Skill mining) |
 | `vmem_promote_from_amem` | `id`, `project`, `stem`, `type`, `domain`, `topics[]`, `description`, `title`, `body`<=65536, `linkTo`, `confirm`, `fingerprint` (two-step) |
+| `vmem_read_file` | `path`, `vault`, `maxBytes`<=65536, `offset`<=2097152; returns `{path, sha256, truncated, body, offset?, nextOffset?}` (read-only; allowed roots below the table) |
+| `vmem_list_files` | `dir`, `vault`; one level, <=500 entries `{name, path, type, bytes?}` (read-only) |
+| `vmem_report` | `path` under `reports/` or `ops/`, `body`<=65536, `dryRun`, `log`; the receipt of `vmem report` |
 
 Move and delete without `confirm` write nothing and return the preview and `fingerprint`; `confirm: true` requires the fingerprint recomputed on the current state, otherwise the call is refused with `V09`. `vmem_promote_from_amem` is described under Promotion from agent-mem. `vmem_promote` is described under Org promotion and sync. Graph/lint tools are listed below. Note paths in read results are relative to `notes/`.
+
+File reads and reports: `vmem_read_file` and `vmem_list_files` read only these roots: `ops/`, `reports/`, `self/`, `templates/`, `AGENTS.md` and `README.md`. They refuse `notes/` (use `vmem_read`), `log` (use `vmem_log_tail`), absolute paths, `.` or `..` segments, dot paths such as `.git`, any symlinked component, denied paths, non-UTF-8 files and files over 2 MiB. Paging, `maxBytes` and `offset` match `vmem_read`; listings leave out dot, linked, special and denied entries. Neither tool takes a lock, touches the index or writes a file. `vmem_report` is `vmem report` over MCP: the same path rules, screening, receipt and default `EXTRACT` event (a `log` override sets another event, for example `LINT` or `GRAPH`), with `write: mcp` required; MCP events always carry the agent attribution.
 
 # Host setup
 

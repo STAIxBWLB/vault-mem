@@ -78,7 +78,7 @@ function boundedText(value: string, bytes: number): { content: string; truncated
   while (end > 0 && (buffer[end]! & 0xc0) === 0x80) end--;
   return { content: buffer.subarray(0, end).toString("utf8"), truncated: true };
 }
-function readPage(prefix: Buffer, maxBytes: number, offset: number, totalBytes: number): Pick<NoteReadResult, "content" | "truncated" | "nextOffset"> {
+export function readPage(prefix: Buffer, maxBytes: number, offset: number, totalBytes: number): Pick<NoteReadResult, "content" | "truncated" | "nextOffset"> {
   if (offset > totalBytes) throw new Error("offset: exceeds requested note or section");
   if (prefix.length && (prefix[0]! & 0xc0) === 0x80) throw new Error("offset: must be a UTF-8 character boundary");
   let end = Math.min(maxBytes, prefix.length);
