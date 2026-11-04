@@ -6,8 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { serveMcp } from "../src/mcp.ts";
-import { parseFrontmatter } from "../src/frontmatter.ts";
+import { emitFrontmatter, parseFrontmatter } from "../src/frontmatter.ts";
 import { addVault } from "../src/registry.ts";
+import { planOperation } from "../src/write-operations.ts";
 import { validateWrite } from "../src/write-validation.ts";
 import { applyWrite } from "../src/writer.ts";
 import { VaultIndex } from "../src/vault-index.ts";
@@ -62,7 +63,7 @@ test("each malformed bibliographic value returns a named V01; all keys are refer
   }
   for (const type of ["insight", "decision", "observation", "person", "project", "method", "moc"]) {
     const findings = errors({ type });
-    for (const key of Object.keys(bibliographic)) expect(findings).toContainEqual(expect.objectContaining({ code: "V01", message: `${key} is only valid on reference notes` }));
+    for (const key of Object.keys(bibliographic)) expect(findings).toContainEqual(expect.objectContaining({ code: "V01", message: `${key} is only valid on reference notes; set type: reference or unset ${key}` }));
   }
 });
 
@@ -81,8 +82,11 @@ test("writes lowercase new DOI assignments, preserve legacy bytes, and refuse du
   expect(readFileSync(join(f.notes, "second.md"), "utf8")).toBe(second);
   expect(f.request({ op: "frontmatter", path: "first", set: { doi: "10.1234/NEW.PAPER" } }).ok).toBe(true);
   expect(parseFrontmatter(readFileSync(file, "utf8")).data.doi).toBe("10.1234/new.paper");
-  // Case-sensitive BibTeX keys can coexist.
-  expect(f.request(create("third", { citekey: bibliographic.citekey.toLowerCase() })).ok).toBe(true);
+  // Stored case is kept, while a case-only collision is refused.
+  expect(parseFrontmatter(first).data.citekey).toBe(bibliographic.citekey);
+  const caseOnly = f.request(create("third", { citekey: bibliographic.citekey.toLowerCase() }));
+  expect(caseOnly.ok).toBe(false);
+  expect(caseOnly.issues).toContainEqual(expect.objectContaining({ code: "V08", severity: "error", message: expect.stringContaining("notes/first.md") }));
   const legacy = first.replace("10.1234/synthetic.paper", "10.1234/LEGACY.PAPER"); writeFileSync(file, legacy);
   expect(f.request({ op: "patch", path: "first", oldString: "Independent", newString: "Additional" }).ok).toBe(true);
   expect(readFileSync(file, "utf8")).toBe(legacy.replace("Independent", "Additional"));
@@ -97,7 +101,7 @@ test("final-snapshot uniqueness includes batch changes and citekeys on legacy no
   const change = { path: "notes/paper.md", before: null, after: note() };
   expect(validateWrite([change], ctx)).toContainEqual(expect.objectContaining({ code: "V08", severity: "error" }));
   ctx.notes.delete("notes/legacy.md");
-  expect(validateWrite([change, { ...change, path: "notes/second.md", after: note({ title: "Second" }).replace("# Synthetic Paper", "# Second") }], ctx)).toContainEqual(expect.objectContaining({ code: "V08", severity: "error" }));
+  expect(validateWrite([change, { ...change, path: "notes/second.md", after: note({ title: "Second", citekey: bibliographic.citekey.toLowerCase() }).replace("# Synthetic Paper", "# Second") }], ctx)).toContainEqual(expect.objectContaining({ code: "V08", severity: "error" }));
 });
 
 test("MCP type-filtered search finds DOI and citekey after incremental, memory and clean scans; lint stays unchanged", async () => {
@@ -192,4 +196,48 @@ test("confirmed moves preserve uppercase valid and invalid legacy DOI metadata b
     expect(readFileSync(nextFile, "utf8")).toBe(source);
     expect(existsSync(oldFile)).toBe(false);
   }
+});
+
+test("legacy case-only and exact citekey pairs warn on unrelated edits but explicit assignments error (#134)", () => {
+  for (const otherKey of ["sMiTh2020", "Smith2020"]) {
+    const f = fixture();
+    const first = note({ title: "First", citekey: "Smith2020" }).replace("# Synthetic Paper", "# First");
+    const second = note({ title: "Second", citekey: otherKey }).replace("# Synthetic Paper", "# Second");
+    const file = join(f.notes, "first.md"); writeFileSync(file, first); writeFileSync(join(f.notes, "second.md"), second);
+    const patch = f.request({ op: "patch", path: "first", oldString: "Independent", newString: "Additional" });
+    expect(patch.ok).toBe(true);
+    expect(patch.issues).toContainEqual(expect.objectContaining({ code: "V08", severity: "warning", message: expect.stringContaining("notes/second.md") }));
+    expect(parseFrontmatter(readFileSync(file, "utf8")).data.citekey).toBe("Smith2020");
+    const before = readFileSync(file, "utf8");
+    for (const citekey of ["Smith2020", "smith2020"]) {
+      const explicit = f.request({ op: "frontmatter", path: "first", set: { citekey } });
+      expect(explicit.ok).toBe(false);
+      expect(explicit.issues).toContainEqual(expect.objectContaining({ code: "V08", severity: "error", message: expect.stringContaining("notes/second.md") }));
+      expect(readFileSync(file, "utf8")).toBe(before);
+    }
+  }
+});
+
+test("arXiv new-form width depends on YY, including the 14/15 boundary (#134)", () => {
+  for (const arxiv_id of ["0801.1234", "2601.12345", "1412.9999v2", "1501.00001v1"]) expect(errors({ arxiv_id })).toEqual([]);
+  for (const arxiv_id of ["0801.12345", "2601.1234", "1412.99999", "1501.0001"]) {
+    const found = errors({ arxiv_id });
+    expect(found).toContainEqual(expect.objectContaining({ code: "V01", message: expect.stringContaining("4 digits after YYMM. for YY < 15, 5 digits for YY >= 15") }));
+  }
+});
+
+test("move and tidy keep DOI-free note bytes, and explicit equal DOI assignment still lowercases (#134)", () => {
+  const plain = note({ doi: undefined, citekey: undefined }).replace(/\n/g, "\r\n");
+  const peer = plain.replace("# Synthetic Paper", "# Peer").replace("Independent synthetic prose.", "Links to [[plain]].");
+  const notes = new Map([["notes/plain.md", plain], ["notes/peer.md", peer]]);
+  expect(planOperation({ op: "tidy" }, notes)).toEqual([]);
+  expect(planOperation({ op: "move", from: "plain", to: "renamed" }, notes)).toEqual([
+    { path: "notes/peer.md", before: peer, after: peer.replace("[[plain]]", "[[renamed]]") },
+    { path: "notes/plain.md", before: plain, after: null },
+    { path: "notes/renamed.md", before: null, after: plain },
+  ]);
+  const f = fixture(), legacy = note({ doi: "10.1234/UPPERCASE" });
+  const file = join(f.notes, "legacy.md"); writeFileSync(file, legacy);
+  expect(f.request({ op: "frontmatter", path: "legacy", set: { doi: "10.1234/UPPERCASE" } }).ok).toBe(true);
+  expect(readFileSync(file, "utf8")).toBe(emitFrontmatter(parseFrontmatter(legacy), { doi: "10.1234/uppercase" }));
 });

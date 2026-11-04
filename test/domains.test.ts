@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BUILTIN_DOMAINS, CONFIG_FILE, CONFIG_VERSION, MAX_CONFIG_BYTES, effectiveDomains, parseConfig, parseVault, readConfig } from "../src/config.ts";
+import { BUILTIN_DOMAINS, CONFIG_FILE, CONFIG_VERSION, MAX_CONFIG_BYTES, domainProblem, effectiveDomains, parseConfig, parseVault, readConfig } from "../src/config.ts";
 import { addVault, loadRegistry, registryStatus, removeVault } from "../src/registry.ts";
 import { applyWrite } from "../src/writer.ts";
 import { tidyVault } from "../src/tidy.ts";
@@ -11,7 +11,7 @@ import { lintVault } from "../src/vault-lint.ts";
 import { promoteToOrg } from "../src/org-promote.ts";
 import { promoteFromAmem, type SeamFactory } from "../src/promote.ts";
 import { createVaultMcp } from "../src/mcp-vault.ts";
-import { parseFrontmatter } from "../src/frontmatter.ts";
+import { emitFrontmatter, parseFrontmatter } from "../src/frontmatter.ts";
 import { run } from "../src/cli.ts";
 import type { WriteOp, WriteRequest } from "../src/write-types.ts";
 
@@ -102,7 +102,7 @@ test("lint enforces present domain values from its selected snapshot and keeps m
   const mine = analysisInput(f.home, "mine").snapshot, team = analysisInput(f.home, "team").snapshot;
   expect(mine.domains).toEqual([...BUILTIN_DOMAINS, "finance", "health"]);
   expect(lintVault(mine).findings.L02).toEqual([]);
-  expect(lintVault(team).findings.L02).toContainEqual(expect.stringContaining("domain finance"));
+  expect(lintVault(team).findings.L02).toContainEqual(expect.stringContaining("`domain: finance` 허용값 아님"));
   expect(JSON.parse(run(["lint", "mine", "--json"], f.env).text).findings.L02).toEqual([]);
   const noDomain = { ...team, notes: [{ path: "budget.md", source: text.replace(/^"?domain"?:.*\n/m, "") }] };
   expect(lintVault(noDomain).findings.L02).toEqual([]);
@@ -135,4 +135,27 @@ test("promote-from-amem uses target domains for preview and confirm, never links
   const preview = await promoteFromAmem(f.home, request, options); expect(preview.ok).toBe(true);
   const done = await promoteFromAmem(f.home, { ...request, confirm: true, fingerprint: preview.fingerprint }, options);
   expect(done.ok).toBe(true); expect(done.applied).toBe(true); expect(links).toEqual(["notes/domain-evidence.md"]);
+});
+
+
+test("domainProblem distinguishes invalid/missing values from undeclared valid ids (#128)", () => {
+  const vault = { id: "mine", path: "/synthetic/vault", kind: "personal" as const, write: "mcp" as const, domains: ["finance", "health"] };
+  const ids = [...BUILTIN_DOMAINS, "finance", "health"].join(", ");
+  for (const value of [undefined, null, 7, {}, ["finance"], "", "Not-an-id", "private sensitive value", "finance\n", "a".repeat(33)]) {
+    expect(domainProblem(value, vault)).toBe(`domain is missing or not a valid id for vault mine; set domain to one of ${ids}`);
+  }
+  expect(domainProblem("household", vault)).toBe(`domain household is not declared for vault mine; choose ${ids} or add the id to this vault's domains in vmem.config.json`);
+  expect(domainProblem("finance", vault)).toBeUndefined();
+  expect(domainProblem("research", vault)).toBeUndefined();
+});
+
+test("L02 domain finding lists selected-vault ids in the neighbouring Korean form (#128)", () => {
+  const f = fixture(); expect(f.request("mine", create("budget", "finance")).ok).toBe(true);
+  const source = emitFrontmatter(parseFrontmatter(readFileSync(join(f.personal, "notes", "budget.md"), "utf8")), { domain: "household" });
+  for (const vault of ["mine", "team"]) {
+    const snapshot = analysisInput(f.home, vault).snapshot;
+    snapshot.notes = [{ path: "budget.md", source }];
+    const ids = vault === "mine" ? [...BUILTIN_DOMAINS, "finance", "health"] : [...BUILTIN_DOMAINS];
+    expect(lintVault(snapshot).findings.L02).toEqual([`\`notes/budget.md\`: \`domain: household\` 허용값 아님 (${ids.join(" | ")}); vmem.config.json의 이 vault \`domains\`에 id 추가 가능`]);
+  }
 });
