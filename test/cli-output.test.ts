@@ -1,3 +1,4 @@
+import { effectiveDomains } from "../src/config.ts";
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -196,7 +197,7 @@ test("#114 AC1: --json keeps the previous compact JSON, default output is text, 
   const f = fixture();
   const status = run(["status", "--json"], f.env).text;
   expect(status).toBe(JSON.stringify({ ...resolveHome(f.env), version, healthy: true, vaults: registryStatus(f.home).map(v => ({ ...v, checks: undefined })) }));
-  const vaults = loadRegistry(f.home).vaults.map(v => ({ ...v, pii: effectivePii(v), piiPolicy: piiPolicy(v) }));
+  const vaults = loadRegistry(f.home).vaults.map(v => ({ ...v, domains: effectiveDomains(v), pii: effectivePii(v), piiPolicy: piiPolicy(v) }));
   expect(run(["vaults", "list", "--json"], f.env).text).toBe(JSON.stringify(vaults));
   expect(run(["vaults", "remove", "mine", "--json"], f.env).text).toBe(JSON.stringify({ applied: false, vault: loadRegistry(f.home).vaults[0] }));
   expect(run(["specs", "list", "--json"], f.env).text).toBe("[]");
