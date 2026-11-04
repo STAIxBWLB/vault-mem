@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-04
+
 - Search, `vmem_search`, spec grep and writer duplicate hints match a Hangul or other CJK term of 2+ characters inside particle and compound forms (`사업단` finds `사업단은`, `사업단장`, `해외사업단`) through a side FTS5 bigram table. Latin terms keep token matching and their ranking; standalone-word and title/description hits rank before substring-only body hits. The index file name gains a schema version (`-links2-schema2.sqlite`), so the first run builds a new index once and older vmem versions keep their own file (#59).
 
 - `vmem_patch` takes `edits` (1 to 32 `{oldString, newString}` pairs) as an alternative to the single pair, and `vmem patch --edits file|-` takes the same JSON array. Each `oldString` must match exactly once in the original note, edits must not overlap or start in frontmatter, and all apply or none do, with one receipt, one log event and the 256 KiB bound checked on the combined result. Several rows of one note no longer need one SHA round trip per edit (#63).
@@ -13,6 +15,8 @@
 - `vmem manifest --json` lists read-only MCP tools as `{name, readOnly: true}` (taken from each tool's `readOnlyHint`), so installers can approve new read tools without a hard-coded list; other tools stay plain names. The release workflow states N-1 per minor line; patch releases carry no N-1 line (#106).
 
 - Add MCP `vmem_read_file` and `vmem_list_files`, bounded read-only access to `ops/`, `reports/`, `self/`, `templates/`, `AGENTS.md` and `README.md` with `vmem_read` paging and limits; `notes/`, `log`, dot paths, symlinked components, non-UTF-8 and over-limit files are refused with the tool to use instead. Add `vmem_report`, the MCP form of `vmem report` with the same receipt and log event (#61).
+
+- N-1: 0.3.3 runs beside this release. The derived index moves to `<sha>-links2-schema2.sqlite` (spec caches likewise), so 0.3.3 keeps its own `-links2.sqlite` and the first 0.4.0 run builds its index once. The config format, note format and log line format are unchanged, so each version reads what the other writes. MCP and CLI changes are additive for 0.3.3 clients: new tools (`vmem_read_file`, `vmem_list_files`, `vmem_report`, `vmem_stats`), optional `log` and `edits` arguments, and `vmem_list` adds `total`, `nextCursor` and per-row `mtime` beside `notes`. Two behaviors differ: `vmem status` no longer prints `stage`, and a write with an invalid log event is refused instead of saved without its event.
 
 ## [0.3.3] - 2026-11-02
 
