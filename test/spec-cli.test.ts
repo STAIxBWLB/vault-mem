@@ -7,6 +7,8 @@ import { run } from "../src/cli.ts";
 import { specGit } from "../src/spec-git.ts";
 import { addSpec } from "../src/registry.ts";
 import { SPEC_COMMANDS } from "../src/spec-command-table.ts";
+import { commandUsage } from "../src/commands-table.ts";
+import { textOptions } from "../src/text-output.ts";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture() {
@@ -53,7 +55,10 @@ test("CLI freshness exit codes, command help, closed flags and manifest match th
   expect(() => run(["spec", "get", "root", "--max-bytes", "0"], f.env)).toThrow("vmem spec get --help");
   expect(() => run(["spec", "grep", "--typo", "x"], f.env)).toThrow("--typo");
   expect(() => run(["spec", "validate", "--require-fresh", "--require-fresh"], f.env)).toThrow("repeated option");
-  for (const item of SPEC_COMMANDS) expect(run(["spec", item.command, "--help"], f.env)).toMatchObject({ code: 0, text: expect.stringContaining(item.usage) });
+  for (const item of SPEC_COMMANDS) {
+    expect(run(["spec", item.command, "--help"], f.env)).toEqual({ code: 0, text: commandUsage(`spec ${item.command}`, textOptions(undefined, f.env))! });
+    expect(commandUsage(`spec ${item.command}`)).toContain(item.usage);
+  }
   expect(run(["completion", "bash"], f.env).text).toContain("get graph grep validate");
   const manifest = JSON.parse(run(["manifest", "--json"], f.env).text);
   for (const item of SPEC_COMMANDS) {
