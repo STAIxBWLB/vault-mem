@@ -6,6 +6,9 @@ import { basename } from "node:path";
 import { applyWrite, MAX_WRITE_BYTES } from "./writer.ts";
 import { notePath } from "./write-operations.ts";
 import type { WriteOp, WriteRequest } from "./write-types.ts";
+import type { LogEvent } from "./log-types.ts";
+import { LOG_EVENT_SCHEMA } from "./log-format.ts";
+import { argumentError } from "./mcp.ts";
 import { parseTidyMap, tidyVault, TIDY_RULES } from "./tidy.ts";
 const COMMANDS = new Set(["new", "patch", "append", "frontmatter", "link", "supersede", "move", "delete", "tidy", "report", "check"]);
 export function isWriteCommand(command: string): boolean { return COMMANDS.has(command); }
@@ -29,6 +32,15 @@ function input(file: string, home: string): string {
     return text;
   } finally { if (file !== "-") closeSync(fd); }
 }
+/** `--log JSON` checked against the same closed schema as the MCP `log` argument; registry and screening checks follow in applyWrite. */
+function logOption(text: string | undefined): { log?: LogEvent } {
+  if (text === undefined) return {};
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { throw new Error("--log: invalid JSON; expected {\"type\", \"project\", \"source\", \"note\"[, \"dest\"]}"); }
+  const error = argumentError(value, LOG_EVENT_SCHEMA, "--log");
+  if (error) throw new Error(`${error}; expected {"type", "project", "source", "note"[, "dest"]} as for log append`);
+  return { log: value as LogEvent };
+}
 export function runWriteCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
   const valueOptions: Record<string, string[]> = {
     new: ["--type", "--domain", "--topics", "--description", "--title", "--source", "--confidence", "--status", "--extra", "--body"],
@@ -36,8 +48,8 @@ export function runWriteCommand(command: string, args: string[], home: string, e
     frontmatter: ["--set", "--unset", "--expected-sha"], link: ["--relation", "--context"],
     move: ["--fingerprint"], delete: ["--fingerprint"], tidy: ["--fingerprint", "--map"], report: ["--body"], check: ["--path"], supersede: [],
   };
-  // For tidy, --log selects the log-redaction rule; tidy always writes its own LINT event.
-  const values = valueOptions[command] ? [...valueOptions[command]!, ...(command === "tidy" ? [] : ["--log"])] : undefined;
+  // For tidy, --log selects the log-redaction rule; tidy always writes its own LINT event. Check never appends an event.
+  const values = valueOptions[command] ? [...valueOptions[command]!, ...(["tidy", "check"].includes(command) ? [] : ["--log"])] : undefined;
   if (!values) throw new Error("unknown writer command");
   const twoStep = ["move", "delete", "tidy"].includes(command);
   const booleans = ["--json", "--dry-run", ...(twoStep ? ["--confirm"] : []), ...(command === "link" ? ["--one-way"] : []), ...(command === "tidy" ? TIDY_RULES.map(rule => `--${rule}`).concat("--all") : [])];
@@ -92,7 +104,7 @@ export function runWriteCommand(command: string, args: string[], home: string, e
     case "check": operation = { op: "check", path: notePath(optional("--path") ?? (target === "-" ? "checked-note" : basename(target))), text: input(target, home) }; break;
     default: throw new Error("unknown writer command");
   }
-  const request: WriteRequest = { vault, operation, channel: "cli", dryRun: flags["--dry-run"] === true, confirm: flags["--confirm"] === true, fingerprint: optional("--fingerprint"), ...(optional("--log") ? { log: object(required("--log"), "log") as unknown as import("./log-types.ts").LogEvent } : {}) };
+  const request: WriteRequest = { vault, operation, channel: "cli", dryRun: flags["--dry-run"] === true, confirm: flags["--confirm"] === true, fingerprint: optional("--fingerprint"), ...logOption(optional("--log")) };
   const result = applyWrite(home, request, { env });
   return { text: JSON.stringify(result, null, flags["--json"] ? undefined : 2), code: result.ok && result.log?.ok !== false ? 0 : 1 };
 }

@@ -7,6 +7,9 @@ import type { LogContext, LogEvent } from "./log-types.ts";
 import type { WriteIssue } from "./write-types.ts";
 
 export const LOG_TYPES = ["INGEST", "ROUTE", "EXTRACT", "CONNECT", "DIGEST", "LEARN", "LINT", "TASK", "GRAPH", "SYNC", "RETHINK", "SOURCE"] as const;
+const bounded = (maxLength: number) => ({ type: "string", minLength: 1, maxLength });
+/** Closed schema of a write's log event, shared by the MCP write tools and CLI `--log JSON`. */
+export const LOG_EVENT_SCHEMA = { type: "object", properties: { type: { type: "string", enum: [...LOG_TYPES] }, project: bounded(64), source: bounded(512), dest: bounded(512), note: bounded(500) }, required: ["type", "project", "source", "note"], additionalProperties: false };
 export const AGENT_MARKERS = ["AGENTHUB_PEER_ID", "CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "PI_SESSION_ID"] as const;
 const EVENT_KEYS = new Set(["type", "project", "source", "dest", "note"]);
 const CONTEXT_KEYS = new Set(["vault", "config", "channel", "env", "now", "projectIds"]);

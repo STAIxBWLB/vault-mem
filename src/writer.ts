@@ -1,4 +1,4 @@
-import { appendLog, matchesBinding } from "./vault-log.ts";
+import { appendLog, checkLogEvent, matchesBinding } from "./vault-log.ts";
 import type { LogEvent } from "./log-types.ts";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -142,6 +142,11 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     root = realpathSync(vault.path);
     if (root !== vault.path || isDenied(root, config.denyPaths)) refuse("V06", "vault path denied or changed");
     if (config.vaults.some(value => canonicalPath(home) === value.path || canonicalPath(home).startsWith(`${value.path}/`))) refuse("V04", "VMEM_HOME must be outside registered vaults");
+    // A given event is checked like `log append` before any lock or note change, so a bad event never leaves an unlogged write.
+    if (request.log !== undefined && request.log !== false && request.operation.op !== "check") {
+      const logIssues = checkLogEvent(home, { vault: request.vault, event: request.log, channel: request.channel }, options.env);
+      if (logIssues.length) throw new WriteRefusal(logIssues.map(issue => ({ ...issue, message: `log event refused, nothing written: ${issue.message}; fix the event fields (rules as for \`log append\`) or omit the event for the default line` })));
+    }
     const twoStep = ["move", "delete", "tidy"].includes(request.operation.op);
     const preview = request.operation.op === "check" || request.dryRun === true || (twoStep && request.confirm !== true);
     if (!preview) {
@@ -165,7 +170,8 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     for (const change of changes) if (isDenied(join(root, change.path), config.denyPaths)) refuse("V06", "planned mutation path is denied", change.path);
     issues = validateWrite(changes, { vault, config, notes, operation: request.operation, ...(options.piiSurface ? { piiSurface: options.piiSurface } : {}) });
     if (!issues.some(issue => issue.severity === "error")) issues.push(...duplicateWarnings(request, notes, changes));
-    const input = { vault: request.vault, channel: request.channel ?? "cli", operation: request.operation, expectedShas: request.expectedShas ?? {}, log: request.log ?? null };
+    // The log event is not part of the fingerprint: move/delete take it on the confirm call only.
+    const input = { vault: request.vault, channel: request.channel ?? "cli", operation: request.operation, expectedShas: request.expectedShas ?? {} };
     const identity = lstatSync(root);
     // The identity every later commit check uses must still be the bound root, not a directory swapped in meanwhile.
     if (options.binding && (Number(identity.dev) !== options.binding.dev || Number(identity.ino) !== options.binding.ino)) refuse("VAULT_DRIFT", "vault root changed since the run started; nothing written");
