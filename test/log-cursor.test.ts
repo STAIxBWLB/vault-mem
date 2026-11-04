@@ -67,10 +67,10 @@ test("the console log snapshot returns rows newest first with cursor and reset (
   const first = await p.snapshot({ after: 0, panel: "log", vault: "v" }) as { rows: { source: string }[]; cursor: string; reset?: boolean };
   expect(first.rows.map(r => r.source)).toEqual(["notes/n2.md", "notes/n1.md"]); expect(first.reset).toBeUndefined();
   appendFileSync(log, line(3));
-  const next = await p.snapshot({ panel: "log", vault: "v", after: first.cursor } as never) as { rows: { source: string }[]; cursor: string };
+  const next = await p.snapshot({ after: 0, panel: "log", vault: "v", since: first.cursor } as never) as { rows: { source: string }[]; cursor: string };
   expect(next.rows.map(r => r.source)).toEqual(["notes/n3.md"]);
   writeFileSync(log, line(4));
-  expect(await p.snapshot({ panel: "log", vault: "v", after: next.cursor } as never)).toMatchObject({ reset: true });
+  expect(await p.snapshot({ after: 0, panel: "log", vault: "v", since: next.cursor } as never)).toMatchObject({ reset: true });
 });
 
 test("the shell's numeric poll cursor keeps returning the latest rows (#48)", async () => {
@@ -118,4 +118,15 @@ test("more than `limit` new rows between polls arrive over several polls, in ord
   const e = readLogSince(home, { vault: "v", after: d.cursor, type: "LINT", limit: 2 });
   const g = readLogSince(home, { vault: "v", after: e.cursor, type: "LINT", limit: 2 });
   expect([...e.lines, ...g.lines]).toEqual([0, 1, 2].map(i => line(i, "LINT").trimEnd()));
+});
+
+test("the log cursor travels as `since` next to the console's numeric `after`, and a capped page says more (#48)", async () => {
+  writeFileSync(log, line(0));
+  const p = await plugin.open({ home: process.env.AGENTHUB_HOME!, log: () => {} });
+  const a = await p.snapshot({ after: 0, panel: "log", vault: "v" }) as { cursor: string };
+  appendFileSync(log, Array.from({ length: 101 }, (_, i) => `2026-11-04 11:00  INGEST  synthetic  notes/m${i}.md  — event ${i}\n`).join(""));
+  const b = await p.snapshot({ after: 7, panel: "log", vault: "v", since: a.cursor }) as { rows: unknown[]; cursor: string; more?: boolean; reset?: boolean };
+  expect(b.rows).toHaveLength(100); expect(b.more).toBe(true); expect(b.reset).toBeUndefined();
+  const c = await p.snapshot({ after: 7, panel: "log", vault: "v", since: b.cursor }) as { rows: { source: string }[]; more?: boolean };
+  expect(c.rows.map(r => r.source)).toEqual(["notes/m100.md"]); expect(c.more).toBeUndefined();
 });

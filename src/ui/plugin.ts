@@ -254,10 +254,10 @@ export const plugin: ConsolePlugin = {
           case "log": {
             const vault = vaultOf(args);
             if (!vault) return { rows: [] };
-            // A string `after` is the `cursor` of the previous answer: only newer rows come back, or the latest with `reset: true`.
-            // The shell's own poll sends a numeric `after` and adopts only a numeric cursor, so it keeps reading the latest rows.
-            const r = readLogSince(home, { vault: vault.id, limit: 100, ...(str(args.type) ? { type: str(args.type) } : {}), ...(str(args.after) ? { after: str(args.after) } : {}) });
-            return { vault: vault.id, rows: r.lines.map(parseLogLine).reverse(), cursor: r.cursor, ...(r.reset ? { reset: true } : {}), ...(r.ok ? {} : { error: firstIssue(r as unknown as Args) }) };
+            // `since` is the `cursor` of the previous answer: only newer rows come back, or the latest with `reset: true`.
+            // The console owns the numeric `after` (its server refuses any other type), so the log cursor travels as `since`.
+            const r = readLogSince(home, { vault: vault.id, limit: 100, ...(str(args.type) ? { type: str(args.type) } : {}), ...(str(args.since) ? { after: str(args.since) } : {}) });
+            return { vault: vault.id, rows: r.lines.map(parseLogLine).reverse(), cursor: r.cursor, ...(r.reset ? { reset: true } : {}), ...(r.more ? { more: true } : {}), ...(r.ok ? {} : { error: firstIssue(r as unknown as Args) }) };
           }
           default: return { error: `unknown panel ${input.panel}` };
         }

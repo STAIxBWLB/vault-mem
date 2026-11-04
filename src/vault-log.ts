@@ -269,15 +269,15 @@ export const MAX_LOG_CURSOR_GAP = 1024 * 1024;
 /** Bytes read from the end of the log for a first call or a reset. */
 const LOG_TAIL_WINDOW = 256 * 1024;
 const CURSOR_ANCHOR = 256;
-export interface LogSinceResult { ok: boolean; lines: string[]; cursor: string; reset: boolean; warnings: string[]; issues: WriteIssue[] }
+export interface LogSinceResult { ok: boolean; lines: string[]; cursor: string; reset: boolean; more: boolean; warnings: string[]; issues: WriteIssue[] }
 /**
- * Incremental tail for pollers. The cursor is opaque: base64url of `v1.<offset>.<sha256 of the bytes before offset>`,
+ * Incremental tail for pollers. The cursor is opaque: base64url of `v1.<offset>.<sha256 of up to 256 bytes before offset>`,
  * where offset is the end of the last complete line read. Rows come from the byte range after it, so identical lines
  * are kept apart; a cursor past the end, with a different anchor (rewritten or truncated log) or more than
  * MAX_LOG_CURSOR_GAP behind answers with the latest rows and `reset: true`. Every call reads a bounded range.
  */
 export function readLogSince(home: string, options: { vault: string; after?: string; type?: string; limit?: number }): LogSinceResult {
-  const result: LogSinceResult = { ok: false, lines: [], cursor: "", reset: false, warnings: [], issues: [] };
+  const result: LogSinceResult = { ok: false, lines: [], cursor: "", reset: false, more: false, warnings: [], issues: [] };
   let fd: number | undefined;
   try {
     const limit = options.limit ?? 100;
@@ -338,7 +338,7 @@ export function readLogSince(home: string, options: { vault: string; after?: str
       if (Buffer.byteLength(line) > MAX_READ_LINE_BYTES) { if (!result.warnings.includes("historical log line over 4096 bytes omitted")) result.warnings.push("historical log line over 4096 bytes omitted"); continue; }
       const type = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+(\S+)/.exec(line)?.[1];
       if (options.type && options.type !== type) continue;
-      if (incremental && result.lines.length === limit) { cursorAt = start + bytes.lastIndexOf(0x0a, at - 2) + 1; result.warnings.push(`more rows follow; poll again with the returned cursor`); break; }
+      if (incremental && result.lines.length === limit) { cursorAt = start + bytes.lastIndexOf(0x0a, at - 2) + 1; result.more = true; result.warnings.push(`more rows follow; poll again with the returned cursor`); break; }
       result.lines.push(line);
     }
     if (result.lines.length > limit) { result.lines = result.lines.slice(-limit); result.warnings.push(`only the newest ${limit} rows returned`); }
