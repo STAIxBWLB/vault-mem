@@ -2,6 +2,7 @@ import { compileLogFilter } from "./log-filter.ts";
 import { closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readSync, realpathSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { hostname } from "node:os";
+import { createHash } from "node:crypto";
 import { loadRegistry, syncDirectory } from "./registry.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { formatLogEvent, LOG_TYPES } from "./log-format.ts";
@@ -261,4 +262,100 @@ export function readLog(home: string, options: LogReadOptions): LogReadResult {
     if (fd !== undefined) { try { closeSync(fd); } catch { result.ok = false; result.issues.push({ code: "LOG_CLOSE", severity: "error", message: "log descriptor close failed" }); } }
   }
   return result;
+}
+
+/** Bytes a cursor poll may read forward; a larger gap answers with the latest rows and `reset: true`. */
+export const MAX_LOG_CURSOR_GAP = 1024 * 1024;
+/** Bytes read from the end of the log for a first call or a reset. */
+const LOG_TAIL_WINDOW = 256 * 1024;
+const CURSOR_ANCHOR = 256;
+export interface LogSinceResult { ok: boolean; lines: string[]; cursor: string; reset: boolean; more: boolean; warnings: string[]; issues: WriteIssue[] }
+/**
+ * Incremental tail for pollers. The cursor is opaque: base64url of `v1.<offset>.<sha256 of up to 256 bytes before offset>`,
+ * where offset is the end of the last complete line read. Rows come from the byte range after it, so identical lines
+ * are kept apart; a cursor past the end, with a different anchor (rewritten or truncated log) or more than
+ * MAX_LOG_CURSOR_GAP behind answers with the latest rows and `reset: true`. Every call reads a bounded range.
+ */
+export function readLogSince(home: string, options: { vault: string; after?: string; type?: string; limit?: number }): LogSinceResult {
+  const result: LogSinceResult = { ok: false, lines: [], cursor: "", reset: false, more: false, warnings: [], issues: [] };
+  let fd: number | undefined;
+  try {
+    const limit = options.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) refuse("L09", "log limit must be an integer 1..200");
+    if (options.type !== undefined && !(LOG_TYPES as readonly string[]).includes(options.type)) refuse("L09", "unknown log type filter");
+    if (options.after !== undefined && (typeof options.after !== "string" || options.after.length > 256)) refuse("L09", "invalid log cursor");
+    const ctx = context(home, options.vault, undefined, false), file = join(ctx.vault.path, "log");
+    try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+    catch (caught) { if ((caught as NodeJS.ErrnoException).code === "ENOENT") { result.ok = true; result.cursor = encodeCursor(0, Buffer.alloc(0)); result.reset = options.after !== undefined && options.after !== result.cursor; return result; } throw caught; }
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) refuse("L09", "log must be a plain file");
+    const size = stat.size, read = (start: number, end: number) => {
+      const out = Buffer.alloc(end - start);
+      for (let done = 0; done < out.length;) { const n = readSync(fd!, out, done, out.length - done, start + done); if (!n) refuse("LOG_READ", "log changed while reading"); done += n; }
+      return out;
+    };
+    const anchor = (offset: number) => read(Math.max(0, offset - CURSOR_ANCHOR), offset);
+    let start: number | undefined;
+    if (options.after !== undefined) {
+      const at = decodeCursor(options.after);
+      if (at && at.offset <= size && size - at.offset <= MAX_LOG_CURSOR_GAP && hashOf(anchor(at.offset)) === at.hash) start = at.offset;
+      else result.reset = true;
+    }
+    let skipFirst = false;
+    if (start === undefined) { start = Math.max(0, size - LOG_TAIL_WINDOW); skipFirst = start > 0 && read(start - 1, start)[0] !== 0x0a; }
+    const bytes = read(start, size);
+    let from = 0;
+    if (skipFirst) {
+      const nl = bytes.indexOf(0x0a);
+      if (nl < 0) {
+        // The whole window is inside one line: point the cursor at the newline before it (scanning back at most
+        // MAX_LOG_CURSOR_GAP), or at offset 0, which is a line start and, that far behind, always answers with a reset.
+        let boundary = 0;
+        for (let at = start; at > 0 && start - at < MAX_LOG_CURSOR_GAP;) {
+          const chunk = read(Math.max(0, at - 64 * 1024), at), i = chunk.lastIndexOf(0x0a);
+          if (i >= 0) { boundary = at - chunk.length + i + 1; break; }
+          at -= chunk.length;
+        }
+        result.warnings.push("historical log line over 4096 bytes omitted");
+        result.cursor = encodeCursor(boundary, anchor(boundary));
+        result.ok = true;
+        return result;
+      }
+      from = nl + 1;
+    }
+    const lastNl = bytes.lastIndexOf(0x0a), end = lastNl >= from ? lastNl + 1 : from;
+    if (end < bytes.length) result.warnings.push("incomplete final log line not yet read");
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    // A poll from a valid cursor delivers the oldest `limit` new rows and stops its cursor after the last one, so the
+    // next poll continues there; a first call or a reset shows the newest rows and moves the cursor to the end.
+    const incremental = options.after !== undefined && !result.reset;
+    let cursorAt = start + end;
+    for (let at = from; at < end;) {
+      const nl = bytes.indexOf(0x0a, at), next = nl + 1;
+      const raw = decoder.decode(bytes.subarray(at, nl)), line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+      at = next;
+      if (!line.trim() || line.trimStart().startsWith("#")) continue;
+      if (Buffer.byteLength(line) > MAX_READ_LINE_BYTES) { if (!result.warnings.includes("historical log line over 4096 bytes omitted")) result.warnings.push("historical log line over 4096 bytes omitted"); continue; }
+      const type = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+(\S+)/.exec(line)?.[1];
+      if (options.type && options.type !== type) continue;
+      if (incremental && result.lines.length === limit) { cursorAt = start + bytes.lastIndexOf(0x0a, at - 2) + 1; result.more = true; result.warnings.push(`more rows follow; poll again with the returned cursor`); break; }
+      result.lines.push(line);
+    }
+    if (result.lines.length > limit) { result.lines = result.lines.slice(-limit); result.warnings.push(`only the newest ${limit} rows returned`); }
+    result.cursor = encodeCursor(cursorAt, anchor(cursorAt));
+    result.ok = true;
+  } catch (caught) {
+    result.lines = [];
+    if (caught instanceof LogRefused) result.issues.push(...caught.issues);
+    else result.issues.push({ code: "LOG_READ", severity: "error", message: "cannot read plain UTF-8 log" });
+  } finally {
+    if (fd !== undefined) { try { closeSync(fd); } catch { result.ok = false; result.issues.push({ code: "LOG_CLOSE", severity: "error", message: "log descriptor close failed" }); } }
+  }
+  return result;
+}
+const hashOf = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+function encodeCursor(offset: number, before: Buffer): string { return Buffer.from(`v1.${offset}.${hashOf(before)}`).toString("base64url"); }
+function decodeCursor(cursor: string): { offset: number; hash: string } | undefined {
+  const m = /^v1\.(\d{1,15})\.([0-9a-f]{64})$/.exec(Buffer.from(cursor, "base64url").toString("latin1"));
+  return m ? { offset: Number(m[1]), hash: m[2]! } : undefined;
 }
