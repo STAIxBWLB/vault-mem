@@ -7,7 +7,8 @@ import { addVault, loadRegistry, removeVault, setVaultPii } from "../src/registr
 import { appendLog, readLog } from "../src/vault-log.ts";
 import { CONFIG_FILE, CONFIG_VERSION } from "../src/config.ts";
 import { VaultIndex, LINK_RESOLUTION } from "../src/vault-index.ts";
-import { VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
+import { VMEM_TOOL_NAMES, vaultTools } from "../src/mcp-vault.ts";
+import { specTools } from "../src/mcp-spec.ts";
 import { COMMANDS } from "../src/commands-table.ts";
 import { runSetup } from "../src/setup.ts";
 import { run } from "../src/cli.ts";
@@ -134,9 +135,22 @@ test("AC5: `vmem manifest --json` lists the version, the MCP tools and the CLI c
   const result = Bun.spawnSync([process.execPath, "bin/vmem.js", "manifest", "--json"], { cwd: REPO, stdout: "pipe", stderr: "pipe" });
   expect(result.exitCode).toBe(0);
   const manifest = JSON.parse(result.stdout.toString());
-  expect(manifest).toEqual({ name: "@staix/vault-mem", version: JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")).version, configVersion: CONFIG_VERSION,
-    mcp: { server: "vmem", tools: [...VMEM_TOOL_NAMES] }, commands: COMMANDS.map(c => c.name) });
+  const names = manifest.mcp.tools.map((t: string | { name: string }) => typeof t === "string" ? t : t.name);
+  expect({ ...manifest, mcp: { ...manifest.mcp, tools: names } }).toEqual({ name: "@staix/vault-mem", version: JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")).version,
+    configVersion: CONFIG_VERSION, mcp: { server: "vmem", tools: [...VMEM_TOOL_NAMES] }, commands: COMMANDS.map(c => c.name) });
   expect(() => run(["manifest", "extra"])).toThrow("unexpected arguments");
+});
+
+test("#106 AC1: the manifest marks exactly the read-only tools, none with a destructive verb", () => {
+  const defs = [...vaultTools([]), ...specTools()];
+  expect(defs.map(t => t.name).sort()).toEqual([...VMEM_TOOL_NAMES].sort());
+  const tools = JSON.parse(run(["manifest", "--json"]).text).mcp.tools as (string | { name: string; readOnly: true })[];
+  const marked = tools.filter(t => typeof t !== "string").map(t => (t as { name: string; readOnly: true }));
+  expect(marked.every(t => t.readOnly === true)).toBe(true);
+  expect(marked.map(t => t.name).sort()).toEqual(defs.filter(t => t.annotations.readOnlyHint).map(t => t.name).sort());
+  for (const { name } of marked) expect(name).not.toMatch(/delete|forget|move|purge|remove/);
+  expect(tools).toContain("vmem_lint");
+  expect(tools).toContain("vmem_delete");
 });
 
 test("setup --root registers a versioned install root and leaves the current registration until applied", () => {

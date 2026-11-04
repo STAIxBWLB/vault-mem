@@ -5,10 +5,13 @@ import { validateSpecRepo } from "./spec-validate.ts";
 import { resolveHome } from "./home.ts";
 import { loadRegistry } from "./registry.ts";
 
+/** Spec tool definitions; every spec tool is read-only. */
+export const specTools = (): McpTool[] => SPEC_COMMANDS.map(item => ({ name: item.name, description: item.description, inputSchema: item.inputSchema,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } }));
+
 export function createSpecMcp(home: string, env: NodeJS.ProcessEnv = process.env): { tools: McpTool[]; handlers: Record<string, McpHandler> } {
   const registered = loadRegistry(home).specs ?? [];
-  const tools: McpTool[] = SPEC_COMMANDS.map(item => ({ name: item.name, description: item.description, inputSchema: item.inputSchema,
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } }));
+  const tools = specTools();
   const handlers: Record<string, McpHandler> = {};
   for (const item of SPEC_COMMANDS) handlers[item.name] = args => {
     const invalid = argumentError(args, item.inputSchema);

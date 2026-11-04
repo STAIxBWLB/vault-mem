@@ -196,7 +196,7 @@ Apply is idempotent and touches only the `vmem` entry: other servers and setting
 
 `vmem completion bash|zsh|fish` prints a completion script generated from the same command table as `--help`.
 
-`vmem manifest --json` prints `{name, version, configVersion, mcp: {server, tools}, commands}`: the package version, the config format it writes, the MCP tool names and the CLI command names from the same table, for tools that would otherwise hard-code them.
+`vmem manifest --json` prints `{name, version, configVersion, mcp: {server, tools}, commands}`: the package version, the config format it writes, the MCP tools and the CLI command names from the same table, for tools that would otherwise hard-code them. A read-only tool (its `readOnlyHint` annotation) is listed as `{name, readOnly: true}`, every other tool as its plain name.
 
 # Promotion from agent-mem
 
@@ -362,7 +362,7 @@ vmem spec validate --repo /absolute/checkout --require-fresh --json
 
 `get` returns frontmatter, resolved outgoing links, backlinks, children, path, SHA-256 and computed freshness. Body reads are optional (`--body`, or body paging/section options) and use byte offsets with bounded UTF-8 pages. `graph` accepts subtree, ancestors or neighbors and an optional edge kind. `grep` searches FTS terms by default or a literal substring with `--literal`; filters are type, status, tag, parent, depends-on and covers-path. Use `--` before a positional id/query beginning with a hyphen, for example `vmem spec grep --literal -- "- [ ]"`. Results carry a continuation `nextOffset` when more matching hits exist. Snapshot path/hash filtering occurs before search limit/offset, so another scanner's cache rows cannot shorten pages. Rerun a command to refresh its snapshot. Large responses refuse with guidance or mark bounded collections as truncated.
 
-`validate` exits 1 on validation errors; stale scopes become errors only with `--require-fresh`. `--repo` validates a checkout without consulting a home/config file or creating a registry/cache, and cannot be combined with `--source` or `--worktree`. The four read tools are listed by `vmem manifest --json`; downstream hosts with frozen tool allow-lists need to add their names separately.
+`validate` exits 1 on validation errors; stale scopes become errors only with `--require-fresh`. `--repo` validates a checkout without consulting a home/config file or creating a registry/cache, and cannot be combined with `--source` or `--worktree`. The four read tools are listed by `vmem manifest --json` as `{name, readOnly: true}`; hosts that approve from a frozen allow-list instead of the manifest need to add their names separately.
 
 # Spec validation and freshness library
 

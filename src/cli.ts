@@ -1,4 +1,4 @@
-import { runSpecCommand } from "./mcp-spec.ts";
+import { runSpecCommand, specTools } from "./mcp-spec.ts";
 import { tidyVault, TIDY_RULES } from "./tidy.ts";
 import { originCheck } from "./sync.ts";
 import { registryIds } from "./vault-log.ts";
@@ -9,7 +9,7 @@ import { isWriteCommand, runWriteCommand } from "./write-commands.ts";
 import { isReadCommand, runReadCommand } from "./read-commands.ts";
 import { version } from "../package.json";
 import { COMMANDS, completionScript, help } from "./commands-table.ts";
-import { VMEM_TOOL_NAMES } from "./mcp-vault.ts";
+import { VMEM_TOOL_NAMES, vaultTools } from "./mcp-vault.ts";
 import { CONFIG_VERSION } from "./config.ts";
 import { runSetup, type SetupMode } from "./setup.ts";
 import { resolveHome } from "./home.ts";
@@ -45,7 +45,10 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
   if (args[0] === "manifest") {
     const { flags, positional } = parse(args.slice(1), ["--json"], []);
     if (positional.length) throw new Error("manifest: unexpected arguments");
-    const manifest = { name: "@staix/vault-mem", version, configVersion: CONFIG_VERSION, mcp: { server: "vmem", tools: [...VMEM_TOOL_NAMES] }, commands: COMMANDS.map(c => c.name) };
+    // Read-only tools are published as { name, readOnly: true } so installers can approve them without a hard-coded list.
+    const readOnly = new Set([...vaultTools([]), ...specTools()].filter(t => t.annotations.readOnlyHint).map(t => t.name));
+    const tools = VMEM_TOOL_NAMES.map(name => readOnly.has(name) ? { name, readOnly: true } : name);
+    const manifest = { name: "@staix/vault-mem", version, configVersion: CONFIG_VERSION, mcp: { server: "vmem", tools }, commands: COMMANDS.map(c => c.name) };
     return { text: JSON.stringify(manifest, null, flags["--json"] ? undefined : 2), code: 0 };
   }
   if (args[0] === "setup") {

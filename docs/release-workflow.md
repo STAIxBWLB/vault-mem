@@ -24,6 +24,7 @@ Tag pushes publish through this workflow. The `npm-production` environment (requ
 ## Authorized release procedure
 
 - Before requesting a tag, collect exact-head Linux/macOS check results, package file-list and smoke evidence, reference parity evidence, measured performance data, and the cutover checklist's unresolved gates. Missing representative-vault or native Obsidian evidence stays unverified.
+- State N-1 compatibility per minor line (entelecheia/ai-workspace#70). N is the release's minor line (for example 0.3.x) and N-1 is the latest patch of the previous minor line (0.2.4 for 0.3.x). A minor release's changelog entry carries one `N-1:` line saying how that version runs beside it per surface (index file, config format, CLI, MCP tools). A patch release carries none and must keep the N-1 of its minor line; a change that cannot keep it ships as a minor release.
 - Prepare the version and dated changelog entry through a reviewed PR. Revalidate the resulting candidate commit and confirm environment/trusted-publisher prerequisites through authenticated readback.
 - Obtain explicit authorization for publication, then have the authorized maintainer create the matching tag and enable publication. Review the staged artifact and required environment approval before the publish job starts.
 - After publication, separately verify registry version, integrity/provenance and clean installation of the published version. A successful workflow or npm release does not authorize writer registration, reference-tool retirement or live vault cutover.
