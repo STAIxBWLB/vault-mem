@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { run } from "../src/cli.ts";
+import { commandUsage } from "../src/commands-table.ts";
+import { textOptions } from "../src/text-output.ts";
 import { addVault, removeVault } from "../src/registry.ts";
 import { serveMcp } from "../src/mcp.ts";
 import { createVaultMcp } from "../src/mcp-vault.ts";
@@ -136,7 +138,8 @@ test("#62 AC2: stats match a direct count, and write or lock nothing in the vaul
 test("#62 status drops the stage field; stats is in help and the manifest as read-only", () => {
   const f = fixture();
   expect(JSON.parse(run(["status", "--json"], { VMEM_HOME: f.home }).text)).not.toHaveProperty("stage");
-  expect(run(["stats", "--help"]).text).toBe("Usage: vmem stats <vault> [--days 1..3650] [--json]");
+  expect(run(["stats", "--help"]).text).toBe(commandUsage("stats", textOptions(undefined))!);
+  expect(commandUsage("stats")).toContain("vmem stats <vault> [--days 1..3650] [--json]");
   expect(JSON.parse(run(["manifest", "--json"]).text).mcp.tools).toContainEqual({ name: "vmem_stats", readOnly: true });
 });
 

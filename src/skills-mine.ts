@@ -8,6 +8,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { codePointCompare as compare, labelCommunities } from "./vault-graph.ts";
 import { SECRET_PATTERNS } from "./write-validation.ts";
+import { PLAIN, stripTerminal, type TextOptions } from "./text-output.ts";
 
 /**
  * `vmem skills mine`: read-only skill-candidate mining over amem memory and vault notes, a port of the skill-mine
@@ -455,7 +456,7 @@ export async function mineSkills(home: string, options: MineOptions): Promise<Mi
 const VALUES = ["--days", "--project", "--vocab", "--skills", "--min-size", "--min-novelty"];
 const BOOLEANS = ["--all-projects", "--json"];
 /** `vmem skills mine <vault> ...`. Prints the JSON result, or the markdown report without --json. */
-export async function runSkillsCommand(args: string[], home: string, env: NodeJS.ProcessEnv): Promise<{ text: string; code: number }> {
+export async function runSkillsCommand(args: string[], home: string, env: NodeJS.ProcessEnv, text: TextOptions = PLAIN): Promise<{ text: string; code: number }> {
   if (args[0] !== "mine") throw new Error("skills: use `vmem skills mine <vault>`");
   const flags: Record<string, string | boolean> = {}, skills: string[] = [], positional: string[] = [];
   for (let i = 1; i < args.length; i++) {
@@ -483,5 +484,5 @@ export async function runSkillsCommand(args: string[], home: string, env: NodeJS
     ...(number("--min-size") !== undefined ? { minSize: number("--min-size") } : {}),
     ...(number("--min-novelty") !== undefined ? { minNovelty: number("--min-novelty") } : {}),
   });
-  return { text: flags["--json"] ? JSON.stringify(result) : result.report.trimEnd(), code: 0 };
+  return { text: flags["--json"] ? JSON.stringify(result) : stripTerminal(result.report).trimEnd(), code: 0 };
 }

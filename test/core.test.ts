@@ -152,12 +152,12 @@ test("CLI reads refresh cache, bound arguments and never edit notes/config", () 
   const { home, spec, notes, vault } = fixture(); addVault(home, spec);
   const env = { VMEM_HOME: home }, config = readFileSync(join(home, "vmem.config.json"));
   expect(JSON.parse(run(["rebuild", "test", "--json"], env).text).notes).toBe(3);
-  expect(JSON.parse(run(["search", "test", "synthetic", "--type", "moc", "--limit", "1"], env).text)[0].path).toBe("projects.md");
+  expect(JSON.parse(run(["search", "test", "synthetic", "--type", "moc", "--limit", "1", "--json"], env).text)[0].path).toBe("projects.md");
   writeFileSync(join(notes, "created.md"), "# Created\nnewword [[Atlas]]");
-  expect(JSON.parse(run(["search", "test", "newword"], env).text)[0].path).toBe("created.md");
+  expect(JSON.parse(run(["search", "test", "newword", "--json"], env).text)[0].path).toBe("created.md");
   // "Atlas" is only an alias of projects.md; links resolve by path, like Obsidian and lint L01.
-  expect(JSON.parse(run(["links", "test", "created"], env).text)[0].resolved).toBeNull();
-  expect(JSON.parse(run(["show", "test", "created", "--max-bytes", "3"], env).text).content).toBe("# C");
+  expect(JSON.parse(run(["links", "test", "created", "--json"], env).text)[0].resolved).toBeNull();
+  expect(JSON.parse(run(["show", "test", "created", "--max-bytes", "3", "--json"], env).text).content).toBe("# C");
   for (const args of [["search", "test"], ["rebuild", "test", "extra"], ["show", "test", "created", "--limit", "1"], ["links", "test", "created", "--limit", "501"], ["search", "test", "x", "--limit", "1e2"], ["show", "test", "x", "--json", "--json"], ["rebuild", "missing"]]) expect(() => run(args, env)).toThrow();
   expect(readFileSync(join(home, "vmem.config.json"))).toEqual(config);
   expect(readdirSync(vault)).toEqual(["notes"]);

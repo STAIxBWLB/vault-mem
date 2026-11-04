@@ -70,7 +70,9 @@ function graphChecks(snapshot: AnalysisSnapshot): { l11: string[]; l12: string[]
   singles.sort();
   return { l11, l12, info: `nodes ${graph.nodes?.length ?? 0} / edges ${edges.length} / communities ${communities.size}; singleton ${singles.length}개${singles.length ? ": " + singles.slice(0,10).map(s => `\`${s}\``).join(", ") : ""}` };
 }
-export function lintVault(snapshot: AnalysisSnapshot, only?: string): LintReport {
+export function lintVault(snapshot: AnalysisSnapshot, only?: string): LintReport { return lintDetails(snapshot, only).report; }
+/** The report plus what only its markdown carries: the note count, check titles and per-check info lines, for the CLI text view. */
+export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report: LintReport; notes: number; titles: Record<LintCode, string>; info: Partial<Record<LintCode, string>> } {
   const findings: Record<LintCode,string[]> = {L01:[],L02:[],L03:[],L09:[],L10:[],L11:[],L12:[],L13:[],L14:[]};
   const notes = [...snapshot.notes].sort((a,b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map(n => ({...n,...legacyDocument(n.source),stem: n.path.replace(/^notes\//, "").slice(0,-3)}));
   const stems = new Set(notes.map(n => n.stem)), inlinks = new Map(notes.map(n => [n.stem,0]));
@@ -131,5 +133,5 @@ export function lintVault(snapshot: AnalysisSnapshot, only?: string): LintReport
     if (extra[code]) lines.push("",extra[code]!);
     lines.push("");
   }
-  return { findings, errors, warnings, markdown: lines.join("\n"), summary };
+  return { report: { findings, errors, warnings, markdown: lines.join("\n"), summary }, notes: notes.length, titles: CODE_TITLES, info: extra };
 }

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSetup, SETUP_TARGETS, stableRuntime } from "../src/setup.ts";
-import { completionDefinitions, completionScript, COMMANDS } from "../src/commands-table.ts";
+import { completionDefinitions, completionScript, COMMANDS, help } from "../src/commands-table.ts";
 import { run } from "../src/cli.ts";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -117,8 +117,8 @@ test("CLI setup is non-TTY, dry-run by default, exits 1 on refusal", () => {
 });
 
 test("help and completion share one command table", () => {
-  const help = run(["--help"]).text;
-  for (const command of COMMANDS) expect(help).toContain(`vmem ${command.usage}`);
+  const text = help();
+  for (const command of COMMANDS) expect(text).toContain(`vmem ${command.usage}`);
   const defs = completionDefinitions();
   expect(defs.map(d => d.path.join(" "))).toEqual(COMMANDS.map(c => c.name));
   expect(defs.find(d => d.path.join(" ") === "vaults add")!.options["--write"]).toEqual({ value: ["mcp", "cli", "none"] });

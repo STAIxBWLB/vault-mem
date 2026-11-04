@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Every CLI command prints text for people by default, following agent-hub's conventions: tables, field blocks, LEVEL/CHECK/FINDING checks with a verdict, one result line per write, and the exact confirm or next-page command after a preview or a cut-off read. Help is grouped into sections with a description per command, and `vmem help <command>` prints one command. `--color=auto|always|never` works everywhere and honors `NO_COLOR` and `TERM=dumb`. **Breaking for scripts:** the default output was pretty JSON and is now text, so pass `--json`, which prints the same compact JSON as before (#114).
+
 ## [0.4.0] - 2026-11-04
 
 - Search, `vmem_search`, spec grep and writer duplicate hints match a Hangul or other CJK term of 2+ characters inside particle and compound forms (`사업단` finds `사업단은`, `사업단장`, `해외사업단`) through a side FTS5 bigram table. Latin terms keep token matching and their ranking; standalone-word and title/description hits rank before substring-only body hits. The index file name gains a schema version (`-links2-schema2.sqlite`), so the first run builds a new index once and older vmem versions keep their own file (#59).

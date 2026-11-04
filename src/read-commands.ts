@@ -1,8 +1,12 @@
 import { loadRegistry } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
+import { PLAIN, type TextOptions } from "./text-output.ts";
+import { linksText, rebuildText, searchText, showText } from "./read-output.ts";
+import type { NoteReadResult, SearchResult } from "./vault-index.ts";
+import type { ResolvedLink } from "./links.ts";
 const READ_COMMANDS = new Set(["rebuild", "search", "show", "links"]);
 export function isReadCommand(command: string): boolean { return READ_COMMANDS.has(command); }
-export function runReadCommand(command: string, args: string[], home: string): { text: string; code: number } {
+export function runReadCommand(command: string, args: string[], home: string, text: TextOptions = PLAIN): { text: string; code: number } {
   const options: Record<string, string | boolean> = {}, positional: string[] = [];
   const allowed = command === "search" ? ["--limit", "--type", "--domain"] : command === "show" ? ["--max-bytes", "--section", "--offset"] : command === "links" ? ["--limit"] : [];
   for (let i = 0; i < args.length; i++) {
@@ -39,5 +43,11 @@ export function runReadCommand(command: string, args: string[], home: string): {
     else if (command === "links") result = index.links(positional[1]!, limit);
     else throw new Error("unknown read command");
   } finally { index.close(); }
-  return { text: JSON.stringify(result, null, options["--json"] ? undefined : 2), code: 0 };
+  if (options["--json"]) return { text: JSON.stringify(result), code: 0 };
+  const vaultId = vault.id, target = positional[1]!;
+  const out = command === "rebuild" ? rebuildText(result as Parameters<typeof rebuildText>[0], text)
+    : command === "search" ? searchText(result as SearchResult[], text, { vault: vaultId, query: target, limit: limit ?? 50, type: options["--type"] as string | undefined, domain: options["--domain"] as string | undefined })
+    : command === "show" ? showText(result as NoteReadResult, text, { vault: vaultId, target, maxBytes })
+    : linksText(result as ResolvedLink[], text, { vault: vaultId, target, limit: limit ?? 50 });
+  return { text: out, code: 0 };
 }

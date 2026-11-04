@@ -10,6 +10,8 @@ import type { LogEvent } from "./log-types.ts";
 import { LOG_EVENT_SCHEMA } from "./log-format.ts";
 import { argumentError } from "./mcp.ts";
 import { parseTidyMap, tidyVault, TIDY_RULES } from "./tidy.ts";
+import { PLAIN, type TextOptions } from "./text-output.ts";
+import { renderTidy, renderWriteReceipt } from "./write-output.ts";
 const COMMANDS = new Set(["new", "patch", "append", "frontmatter", "link", "supersede", "move", "delete", "tidy", "report", "check"]);
 export function isWriteCommand(command: string): boolean { return COMMANDS.has(command); }
 function object(text: string, label: string): Record<string, unknown> {
@@ -41,7 +43,7 @@ function logOption(text: string | undefined): { log?: LogEvent } {
   if (error) throw new Error(`${error}; expected {"type", "project", "source", "note"[, "dest"]} as for log append`);
   return { log: value as LogEvent };
 }
-export function runWriteCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
+export function runWriteCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv = process.env, text: TextOptions = PLAIN): { text: string; code: number } {
   const valueOptions: Record<string, string[]> = {
     new: ["--type", "--domain", "--topics", "--description", "--title", "--source", "--confidence", "--status", "--extra", "--body"],
     patch: ["--old", "--new", "--edits", "--expected-sha"], append: ["--section", "--markdown", "--expected-sha"],
@@ -81,7 +83,7 @@ export function runWriteCommand(command: string, args: string[], home: string, e
     if (flags["--dry-run"] && flags["--confirm"]) throw new Error("tidy: --dry-run and --confirm are exclusive");
     const mapText = optional("--map") !== undefined ? input(required("--map"), home) : undefined;
     const result = tidyVault(home, { vault, rules, ...(mapText !== undefined ? { map: parseTidyMap(mapText), mapText } : {}), confirm: flags["--confirm"] === true && !flags["--dry-run"], fingerprint: optional("--fingerprint"), channel: "cli" }, { env });
-    return { text: JSON.stringify(result, null, flags["--json"] ? undefined : 2), code: result.ok ? 0 : 1 };
+    return { text: flags["--json"] ? JSON.stringify(result) : renderTidy(result, text, { argv: [command, ...args], positional }), code: result.ok ? 0 : 1 };
   }
   let operation: WriteOp;
   switch (command) {
@@ -115,5 +117,5 @@ export function runWriteCommand(command: string, args: string[], home: string, e
   }
   const request: WriteRequest = { vault, operation, channel: "cli", dryRun: flags["--dry-run"] === true, confirm: flags["--confirm"] === true, fingerprint: optional("--fingerprint"), ...logOption(optional("--log")) };
   const result = applyWrite(home, request, { env });
-  return { text: JSON.stringify(result, null, flags["--json"] ? undefined : 2), code: result.ok && result.log?.ok !== false ? 0 : 1 };
+  return { text: flags["--json"] ? JSON.stringify(result) : renderWriteReceipt(result, text, { argv: [command, ...args], positional }), code: result.ok && result.log?.ok !== false ? 0 : 1 };
 }
