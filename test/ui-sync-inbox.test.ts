@@ -84,7 +84,7 @@ test("local commits ahead of tracking ref count alongside dirty paths, using loc
   // A tracking ref stays usable even when the configured remote is unreachable.
   git(f.org, "remote", "set-url", "origin", "ssh://unreachable.example.invalid/vault.git");
   expect(localSyncPending(f.org)).toEqual({ changed: 1, ahead: 1 });
-  expect(await syncItems(f.provider)).toMatchObject([{ title: "2 unsynced changes in team", detail: "1 uncommitted paths; 1 local commits ahead of upstream" }]);
+  expect(await syncItems(f.provider)).toMatchObject([{ title: "2 unsynced changes in team", detail: "1 uncommitted path; 1 local commit ahead of upstream" }]);
 });
 
 test("no upstream counts only uncommitted changes, including an unborn branch", async () => {
@@ -120,4 +120,15 @@ test("cached state refreshes after 60 seconds and count changes keep the first-s
   rmSync(join(f.org, "first.txt")); rmSync(join(f.org, "second.txt"));
   clock.mockReturnValue(now + 120002);
   expect(await syncItems(f.provider)).toEqual([]);
+});
+
+
+test("a configured but missing tracking ref still reports dirty paths", async () => {
+  const f = await fixture();
+  git(f.org, "update-ref", "-d", "refs/remotes/origin/main");
+  writeFileSync(join(f.org, "draft.txt"), "Synthetic uncommitted change.\n");
+  expect(git(f.org, "config", "branch.main.remote")).toBe("origin");
+  expect(localSyncPending(f.org)).toEqual({ changed: 1, ahead: 0 });
+  expect(await syncItems(f.provider)).toMatchObject([{ title: "1 unsynced change in team", detail: "1 uncommitted path; 0 local commits ahead of upstream" }]);
+  expect(f.logs.filter(message => message.includes("sync pending"))).toEqual([]);
 });

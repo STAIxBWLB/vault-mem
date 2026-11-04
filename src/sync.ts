@@ -107,7 +107,11 @@ export function localSyncPending(root: string, env: NodeJS.ProcessEnv = process.
   if (branch.status === 1) return { changed: dirty, ahead: 0 };
   if (branch.status !== 0) throw new Error("sync pending cannot read the current branch; inspect the vault Git state in System and retry");
   const upstream = git(["for-each-ref", "--format=%(upstream)", branch.stdout.trim()]).stdout.trim();
-  return { changed: dirty, ahead: upstream ? aheadBehind(git, upstream).ahead : 0 };
+  if (!upstream) return { changed: dirty, ahead: 0 };
+  const tracking = git(["rev-parse", "--verify", "--quiet", upstream], { allowFail: true });
+  if (tracking.status === 1) return { changed: dirty, ahead: 0 };
+  if (tracking.status !== 0) throw new Error("sync pending cannot verify the tracking ref; inspect the vault Git state in System and retry");
+  return { changed: dirty, ahead: aheadBehind(git, upstream).ahead };
 }
 
 /**
