@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `vmem lint` and `vmem graph build` / `graph neighbors` name an option they do not take and where it applies (`graph build: --relation applies only to graph neighbors`) instead of `requires one vault id`; a wrong positional count keeps its message (#121).
+
 - `vmem graph build` keeps the relation of `- [[x]] (relation)` lines from `vmem link --relation` as `rel` on the `wiki_link` edge, and `vmem graph neighbors --relation` / `vmem_graph_neighbors` `relation` follow only edges of one relation (`wiki_link` for untyped links); an unknown relation is refused. Node and edge sets are unchanged (#74).
 
 - Reference notes accept typed citekey, DOI, arXiv id, authors, year and venue metadata with offline syntax checks, lowercase DOI assignments and vault-wide citekey uniqueness. Search includes reference DOI/citekey text; the first run rebuilds the index once in a separate schema3 derived cache without modifying existing notes (#73).
