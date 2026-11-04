@@ -23,9 +23,11 @@ const KEYS = new Set([
   "promoted_from", "promoted_at", "promoted_to", "source_ref",
   // Adopted in the V2 cutover (#22): decision dates/owners and person contact fields.
   "decided_at", "decided_by", "email", "phone",
+  "citekey", "doi", "arxiv_id", "authors", "year", "venue",
 ]);
 /** Adopted keys valid only on one note type (contact fields additionally only in personal vaults, by PII policy). */
-export const TYPED_KEYS: Readonly<Record<string, string>> = { decided_at: "decision", decided_by: "decision", email: "person", phone: "person" };
+export const TYPED_KEYS: Readonly<Record<string, string>> = { decided_at: "decision", decided_by: "decision", email: "person", phone: "person",
+  citekey: "reference", doi: "reference", arxiv_id: "reference", authors: "reference", year: "reference", venue: "reference" };
 export const SCHEMA_KEYS: ReadonlySet<string> = KEYS;
 const WIKI_FIELDS = ["topics", "project", "superseded_by", "supersedes", "source_ref"];
 // Exact regex set from @staix/agent-mem v0.17.0 src/memory/screen.ts; parity-tested against its root export.
@@ -146,7 +148,7 @@ interface SchemaIssue extends WriteIssue { fields: string[] }
 function schema(note: ParsedNote): SchemaIssue[] {
   const issues: SchemaIssue[] = [], { data, path } = note;
   const add=(field:string,message:string,dependencies=[field])=>issues.push({...issue("V01",message,"error",path),fields:dependencies});
-  for(const key of Object.keys(data))if(!KEYS.has(key)||(TYPED_KEYS[key]!==undefined&&data.type!==TYPED_KEYS[key]))add(key,"unknown frontmatter key",[key,"type"]);
+  for(const key of Object.keys(data))if(!KEYS.has(key)||(TYPED_KEYS[key]!==undefined&&data.type!==TYPED_KEYS[key]))add(key,TYPED_KEYS[key] === "reference" ? `${key} is only valid on reference notes` : "unknown frontmatter key",[key,"type"]);
   const description = data.description;
   if (typeof description !== "string" || !description.trim() || [...description].length > 200) add("description","description must contain 1..200 Unicode characters");
   else if ([note.title, note.h1, basename(path, ".md")].some(value => value && fold(description) === fold(value))) add("description","description must supplement the title");
@@ -158,6 +160,14 @@ function schema(note: ParsedNote): SchemaIssue[] {
     if (data[key] !== undefined && (typeof data[key] !== "string" || !allowed.has(data[key]))) add(key,`invalid ${key} enum`);
   }
   if(data.source!==undefined)try{sourceReferences(data.source);}catch{add("source","source must contain workspace-relative paths, mem ids or URLs");}
+  if (data.type === "reference") {
+    if (data.citekey !== undefined && (typeof data.citekey !== "string" || !/^[A-Za-z0-9_:-]{1,64}$/.test(data.citekey))) add("citekey", "citekey must match [A-Za-z0-9_:-]{1,64}");
+    if (data.doi !== undefined && (typeof data.doi !== "string" || !/^10\.[0-9]{4,9}\/[^\s\p{C}]+$/u.test(data.doi))) add("doi", "doi must be 10.<4..9 digit registrant>/<nonempty suffix>, without whitespace or control characters");
+    if (data.arxiv_id !== undefined && (typeof data.arxiv_id !== "string" || !/^(?:[0-9]{2}(?:0[1-9]|1[0-2])\.[0-9]{5}|[a-z]+(?:[.-][A-Za-z]+)*\/[0-9]{2}(?:0[1-9]|1[0-2])[0-9]{3})(?:v[1-9][0-9]*)?$/.test(data.arxiv_id))) add("arxiv_id", "arxiv_id must be YYMM.NNNNN or archive/YYMMNNN, optionally followed by vN (N >= 1)");
+    if (data.authors !== undefined && (!Array.isArray(data.authors) || data.authors.length < 1 || data.authors.length > 100 || data.authors.some(author => typeof author !== "string"))) add("authors", "authors must be a list of 1..100 strings");
+    if (data.year !== undefined && (typeof data.year !== "number" || !Number.isInteger(data.year) || data.year < 1000 || data.year > 2100)) add("year", "year must be an integer from 1000 to 2100");
+    if (data.venue !== undefined && (typeof data.venue !== "string" || [...data.venue].length < 1 || [...data.venue].length > 200)) add("venue", "venue must contain 1..200 Unicode characters");
+  }
   return issues;
 }
 function schemaIssues(note:ParsedNote,old:ParsedNote|undefined,context:ValidationContext):WriteIssue[]{
@@ -228,6 +238,11 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
   }
   const sourceRoot=sourceWorkspaceRoot(context.vault);
   const oldNotes = parseNotes(context.notes), newNotes = parseNotes(final, oldNotes), oldNames = names(oldNotes), newNames = names(newNotes);
+  const citekeys = new Map<string, ParsedNote[]>();
+  for (const note of newNotes.values()) if (typeof note.data.citekey === "string") {
+    const peers = citekeys.get(note.data.citekey) ?? [];
+    peers.push(note); citekeys.set(note.data.citekey, peers);
+  }
   const candidates=[...changes];
   if(context.operation.op==="frontmatter"){
     const key=noteKey(context.operation.path),existing=[...newNotes.values()].find(note=>noteKey(note.path)===key);
@@ -239,6 +254,11 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
     if (!note) { issues.push(issue("V01", "invalid frontmatter", "error", change.path)); continue; }
     const prior=context.operation.op==="move"&&noteKey(context.operation.to)===noteKey(note.path)?oldNotes.get(movedFrom(context.operation.from, context)):oldNotes.get(note.path);
     issues.push(...schemaIssues(note,prior,context), ...topicPlacement(note,prior,context));
+    if (typeof note.data.citekey === "string" && (citekeys.get(note.data.citekey)?.length ?? 0) > 1) {
+      const retained = context.operation.op !== "create" && prior?.data.citekey === note.data.citekey &&
+        [...oldNotes.values()].some(other => other.path !== prior.path && other.data.citekey === note.data.citekey);
+      issues.push(issue("V08", "citekey already exists in the vault", retained ? "warning" : "error", change.path));
+    }
     const source = note.data.source;
     let sourceDenied=strings(source).some(entry=>isDenied(entry.replaceAll("\\","/"),context.config.denyPaths));
     if(source!==undefined&&!sourceDenied)try{

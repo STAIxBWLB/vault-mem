@@ -124,6 +124,17 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
   const planned = new Map<string, PlannedChange>();
   const set = (path: string, after: string | null) => {
     const before = notes.get(path) ?? (operation.op === "report" ? reportBefore ?? null : null);
+    if (after !== null && operation.op !== "report") {
+      try {
+        const doc = parseFrontmatter(after), previous = before === null ? undefined : parseFrontmatter(before).data;
+        // Normalize newly assigned identifiers; body-only edits leave legacy metadata byte-identical.
+        if (doc.data.type === "reference" && typeof doc.data.doi === "string" &&
+          (previous?.type !== "reference" || previous.doi !== doc.data.doi ||
+            (operation.op === "frontmatter" && Object.hasOwn(operation.set, "doi")))) {
+          after = emitFrontmatter(doc, { doi: doc.data.doi.toLowerCase() });
+        }
+      } catch { /* Invalid YAML is reported by validation, without obscuring its named issue. */ }
+    }
     if (after !== before) planned.set(path, { path, before, after });
   };
   const existing = (value: string) => { const path = notePath(value); return { path, source: needed(notes, path) }; };

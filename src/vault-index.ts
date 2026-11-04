@@ -16,8 +16,8 @@ export const MAX_RESULTS = 500;
  * share the unversioned `<digest>.sqlite`; the first run of a newer version builds its own file once.
  */
 export const LINK_RESOLUTION = 2;
-/** Bump when tables or FTS columns change. Named per value like LINK_RESOLUTION. 2 = CJK bigram table. */
-export const INDEX_SCHEMA = 2;
+/** Bump when tables or FTS columns change. Named per value like LINK_RESOLUTION. 2 = CJK bigram table; 3 = reference identifiers in FTS. */
+export const INDEX_SCHEMA = 3;
 const indexName = (root: string) => `${digest(root)}-links${LINK_RESOLUTION}-schema${INDEX_SCHEMA}.sqlite`;
 /**
  * unicode61 keeps each Hangul/CJK run as one token, so `사업단` misses `사업단은`. A side table holds the
@@ -221,7 +221,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
               if (size.count > 10000 || size.bytes > 64 * 1024 * 1024) throw new Error("analysis: cached snapshot exceeds bound");
               for (const row of disk.query<Omit<StoredNote,"aliases"> & {aliases:string}, []>("SELECT * FROM notes").all()) {
                 this.db.query("INSERT INTO notes VALUES (?,?,?,?,?,?,?,?,?,?)").run(row.path,row.hash,row.metadata,row.title,row.description,row.body,row.type,row.domain,row.aliases,row.source);
-                this.indexText(row.path, row.title, row.description, row.body);
+                this.indexText(row.path, row.title, row.description, this.searchBody(row.body, parseFrontmatter(row.source).data));
               }
               for (const row of disk.query<{source:string;ordinal:number;data:string}, []>("SELECT * FROM links").all()) this.db.query("INSERT INTO links VALUES (?,?,?)").run(row.source,row.ordinal,row.data);
               this.db.run(`PRAGMA user_version = ${Number(disk.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0)}`);
@@ -242,6 +242,12 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
   }
   close(): void { this.db.close(); }
   // ponytail: grams stores its bigram text (about 2.3x the CJK bytes); contentless with stable rowids would save it.
+  /** Keep the stored body and link/analysis input unchanged; identifiers join only the FTS text. */
+  private searchBody(body: string, data: Record<string, unknown>): string {
+    if (this.adapter || data.type !== "reference") return body;
+    const identifiers = [text(data.doi), text(data.citekey)].filter(Boolean);
+    return identifiers.length ? body + "\n" + identifiers.join("\n") : body;
+  }
   private indexText(path: string, title: string, description: string, body: string): void {
     this.db.query("INSERT INTO fts VALUES (?,?,?,?)").run(path, title, description, body);
     this.db.query("INSERT INTO grams VALUES (?,?,?,?)").run(path, grams(title), grams(description), grams(body));
@@ -350,7 +356,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
         this.db.query("INSERT OR REPLACE INTO notes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(path, hash, stamp,
           title, description, body, text(data.type), text(data.domain), JSON.stringify(aliases(data.aliases ?? data.alias)), source);
         this.unindex(path);
-        this.indexText(path, title, description, body);
+        this.indexText(path, title, description, this.searchBody(body, data));
         changed++;
       }
       for (const row of this.db.query<{path:string}, []>("SELECT path FROM analysis_notes").all()) if (!present.has(row.path)) this.db.query("DELETE FROM analysis_notes WHERE path=?").run(row.path);
