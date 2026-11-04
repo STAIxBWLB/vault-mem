@@ -43,6 +43,8 @@ export function sameRemote(a: string, b: string): boolean {
   };
   return norm(a) === norm(b);
 }
+/** Time budget of the console's local sync check. */
+const GIT_TIMEOUT_BUDGET_MS = 1000;
 function gitIn(cwd: string, env: NodeJS.ProcessEnv, deadline?: number): Git {
   return (args, options = {}) => {
     const timeout = deadline === undefined ? GIT_TIMEOUT_MS : deadline - Date.now();
@@ -50,7 +52,14 @@ function gitIn(cwd: string, env: NodeJS.ProcessEnv, deadline?: number): Git {
     const argv = memoryGitArgv(["-C", cwd, ...args]);
     const result = Bun.spawnSync(argv, { env: memoryGitEnv({ ...env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }, { repositoryIsolation: true }), stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout });
     const out = { status: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString(), pid: result.pid, output: [], signal: null } as unknown as SpawnSyncReturns<string>;
-    if (!options.allowFail && result.exitCode !== 0) throw Object.assign(new Error(`git ${args[0]} failed: ${out.stderr.trim().split("\n").at(-1)?.slice(0, 300) ?? "error"}`), { git: true });
+    if (!options.allowFail && result.exitCode !== 0) {
+      // A timeout or signal leaves no exit code and usually no stderr: name the signal instead of an empty cause.
+      const signal = (result as { signalCode?: string | null }).signalCode ?? "a signal";
+      const cause = result.exitCode === null
+        ? (deadline === undefined ? `killed by ${signal}` : `timed out (${signal}) under the ${Math.round(GIT_TIMEOUT_BUDGET_MS / 1000)} s budget`)
+        : out.stderr.trim().split("\n").at(-1)?.slice(0, 300) || "error";
+      throw Object.assign(new Error(`git ${args[0]} failed: ${cause}${result.exitCode === null ? "; inspect the vault Git state in System and retry" : ""}`), { git: true });
+    }
     return out;
   };
 }
@@ -80,16 +89,17 @@ export function originCheck(root: string, remote: string, env: NodeJS.ProcessEnv
   return { ok, origin: originUrl, fetchUrls, pushUrls, ...(!ok ? { issue: originUrl === null ? "repository has no origin remote" : rewrites.length ? `git url rewrite ${rewrites[0]} applies to the vault remote; refusing because the push destination cannot be verified` : "an origin fetch or push URL does not match the configured remote; nothing was fetched or pushed" } : {}) };
 }
 function planned(path: string): boolean { return STAGE_FILES.includes(path) || STAGE_PREFIXES.some(prefix => path.startsWith(prefix)); }
-/** Parse `status --porcelain=v1 -z` into changed paths (renames contribute both sides). */
-function changed(git: Git): string[] {
-  const parts = git(["status", "--porcelain=v1", "-z", "--untracked-files=all"]).stdout.split("\0").filter(Boolean), paths: string[] = [];
+/** Parse `status --porcelain=v1 -z` into one entry per change; a rename or copy is one entry with both sides. */
+function changedEntries(git: Git): string[][] {
+  const parts = git(["status", "--porcelain=v1", "-z", "--untracked-files=all"]).stdout.split("\0").filter(Boolean), entries: string[][] = [];
   for (let i = 0; i < parts.length; i++) {
     const entry = parts[i]!, code = entry.slice(0, 2);
-    paths.push(entry.slice(3));
-    if (code.includes("R") || code.includes("C")) paths.push(parts[++i]!);
+    entries.push(code.includes("R") || code.includes("C") ? [entry.slice(3), parts[++i]!] : [entry.slice(3)]);
   }
-  return [...new Set(paths)].sort();
+  return entries;
 }
+/** Changed paths, both sides of a rename included, sorted and unique. */
+function changed(git: Git): string[] { return [...new Set(changedEntries(git).flat())].sort(); }
 
 /** Shared local history counts; no fetch is needed to compare stored refs. */
 function aheadBehind(git: Git, upstream: string): { behind: number; ahead: number } {
@@ -98,20 +108,23 @@ function aheadBehind(git: Git, upstream: string): { behind: number; ahead: numbe
   return { behind: behind!, ahead: ahead! };
 }
 /** Local-only inbox state: dirty paths plus commits ahead of the configured tracking ref. */
-export function localSyncPending(root: string, env: NodeJS.ProcessEnv = process.env): { changed: number; ahead: number } {
-  const git = gitIn(root, { ...env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never", GIT_NO_LAZY_FETCH: "1" }, Date.now() + 1000);
+export function localSyncPending(root: string, env: NodeJS.ProcessEnv = process.env): { changed: number; ignored: number; ahead: number; upstream: boolean } {
+  const git = gitIn(root, { ...env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never", GIT_NO_LAZY_FETCH: "1" }, Date.now() + GIT_TIMEOUT_BUDGET_MS);
   if (realpathSync(root) !== root || realpathSync(git(["rev-parse", "--show-toplevel"]).stdout.trim()) !== root) throw new Error("sync pending requires the registered Git worktree root; check the vault path in System");
-  const dirty = changed(git).length;
+  // Only changes sync would stage count; a rename counts once. Other dirty paths are reported separately.
+  const entries = changedEntries(git), dirty = entries.filter(paths => paths.some(planned)).length, ignored = entries.length - dirty;
+  const none = { changed: dirty, ignored, ahead: 0, upstream: false };
+  // `symbolic-ref` exits 1 only for a detached HEAD, which has no branch and so no upstream. An unborn branch
+  // passes here, but its branch ref does not exist yet, so `for-each-ref` below finds no upstream.
   const branch = git(["symbolic-ref", "--quiet", "HEAD"], { allowFail: true });
-  // An unborn or detached branch has no upstream: only its uncommitted paths count.
-  if (branch.status === 1) return { changed: dirty, ahead: 0 };
+  if (branch.status === 1) return none;
   if (branch.status !== 0) throw new Error("sync pending cannot read the current branch; inspect the vault Git state in System and retry");
   const upstream = git(["for-each-ref", "--format=%(upstream)", branch.stdout.trim()]).stdout.trim();
-  if (!upstream) return { changed: dirty, ahead: 0 };
+  if (!upstream) return none;
   const tracking = git(["rev-parse", "--verify", "--quiet", upstream], { allowFail: true });
-  if (tracking.status === 1) return { changed: dirty, ahead: 0 };
+  if (tracking.status === 1) return none;
   if (tracking.status !== 0) throw new Error("sync pending cannot verify the tracking ref; inspect the vault Git state in System and retry");
-  return { changed: dirty, ahead: aheadBehind(git, upstream).ahead };
+  return { changed: dirty, ignored, ahead: aheadBehind(git, upstream).ahead, upstream: true };
 }
 
 /**

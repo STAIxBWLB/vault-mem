@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The org sync inbox alert counts only paths `vmem sync` would stage (notes/, reports/, log), with a rename counted once. Other dirty paths are named in the detail but not counted, and a vault with no usable upstream drops the "ahead of upstream" clause. A git call that times out or is killed now logs the signal (`git status failed: timed out (SIGTERM) under the 1 s budget`) and the next step, instead of an empty cause (#138).
+
 - The console `log` snapshot returns an opaque string `cursor`; passing it back as `since` returns only the rows appended since, oldest first up to 100 per poll with `more: true` when rows remain, identical lines included. A rewritten, truncated or far-behind log answers with the latest rows and `reset: true`. The cursor travels as `since` because the console reserves the numeric `after`. Each poll reads a 256 KiB tail or at most 1 MiB forward, plus a back-scan of at most 1 MiB when the tail sits inside one long line. The Log panel keeps re-reading the latest rows, because the shell's poll already refreshes it and skips unchanged data (#48).
 
 - **Behaviour change:** citekey uniqueness now ignores ASCII case while preserving the stored case; retained legacy duplicates warn only on unrelated edits. Reference metadata enforces year-specific arXiv widths, names how to fix reference-only keys, and skips redundant DOI-normalization parsing without changing output (#134).
