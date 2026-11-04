@@ -1,5 +1,7 @@
 /** Private provider input. Never serialize a snapshot into CLI/MCP results or public evidence. */
 export interface AnalysisSnapshot {
+  /** Effective selected-vault domain set; standalone snapshots default to the built-ins. */
+  domains?: string[];
   notes: { path: string; source: string }[];
   today: string;
   logPath: string;

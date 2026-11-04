@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { sourceReferences, sourceWorkspaceRoot, missingSourceWarnings } from "./source.ts";
 import { basename, resolve } from "node:path";
-import type { VaultSpec, VmemConfig } from "./config.ts";
+import { domainProblem, type VaultSpec, type VmemConfig } from "./config.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { extractLinks, normalizeTarget, proseLines, resolveLinks, type Link, type LinkNote, type ResolvedLink } from "./links.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
@@ -11,7 +11,6 @@ import { screenPii } from "./pii.ts";
 import { moveSourcePath } from "./write-operations.ts";
 
 const TYPES = new Set(["insight", "decision", "observation", "person", "project", "method", "moc", "reference"]);
-const DOMAINS = new Set(["research", "projects", "teaching", "operations", "people", "ai-practice"]);
 const CONFIDENCE = new Set(["proven", "likely", "experimental"]);
 const STATUS = new Set(["active", "superseded", "archived"]);
 const CATEGORY = new Set(["gap", "prompt", "workflow"]);
@@ -145,7 +144,7 @@ function changedBrokenLinks(oldNotes: Map<string, ParsedNote>, newNotes: Map<str
   return issues;
 }
 interface SchemaIssue extends WriteIssue { fields: string[] }
-function schema(note: ParsedNote): SchemaIssue[] {
+function schema(note: ParsedNote, vault: VaultSpec): SchemaIssue[] {
   const issues: SchemaIssue[] = [], { data, path } = note;
   const add=(field:string,message:string,dependencies=[field])=>issues.push({...issue("V01",message,"error",path),fields:dependencies});
   for(const key of Object.keys(data))if(!KEYS.has(key)||(TYPED_KEYS[key]!==undefined&&data.type!==TYPED_KEYS[key]))add(key,TYPED_KEYS[key] === "reference" ? `${key} is only valid on reference notes` : "unknown frontmatter key",[key,"type"]);
@@ -154,7 +153,8 @@ function schema(note: ParsedNote): SchemaIssue[] {
   else if ([note.title, note.h1, basename(path, ".md")].some(value => value && fold(description) === fold(value))) add("description","description must supplement the title");
   if (typeof data.type !== "string" || !TYPES.has(data.type)) add("type","invalid or missing note type");
   if (data.type !== "moc" || data.domain !== undefined) {
-    if (typeof data.domain !== "string" || !DOMAINS.has(data.domain)) add("domain","invalid or missing domain");
+    const problem = domainProblem(data.domain, vault);
+    if (problem) add("domain", problem);
   }
   for (const [key, allowed] of [["confidence", CONFIDENCE], ["status", STATUS], ["category", CATEGORY]] as const) {
     if (data[key] !== undefined && (typeof data[key] !== "string" || !allowed.has(data[key]))) add(key,`invalid ${key} enum`);
@@ -174,8 +174,8 @@ function schemaIssues(note:ParsedNote,old:ParsedNote|undefined,context:Validatio
   const op=context.operation;
   const explicit=op.op==="frontmatter"&&noteKey(op.path)===noteKey(note.path)?new Set(Object.keys(op.set)):new Set<string>();
   const value=(n:ParsedNote,key:string)=>n.data[key];
-  const previous=old?schema(old):[];
-  return schema(note).map(({fields,...finding})=>{
+  const previous=old?schema(old,context.vault):[];
+  return schema(note,context.vault).map(({fields,...finding})=>{
     const retained=op.op!=="create"&&old&&!fields.some(key=>explicit.has(key))&&fields.every(key=>isDeepStrictEqual(value(note,key),value(old,key)))&&previous.some(before=>before.message===finding.message&&isDeepStrictEqual(before.fields,fields));
     return {...finding,severity:retained?"warning":"error"};
   });

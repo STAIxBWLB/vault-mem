@@ -2,7 +2,7 @@
  * Text renderers for the registry, health, setup and manifest commands (#114). Each is a pure function of the
  * command's JSON result; `--json` never comes through here, and the text shows no more than that JSON carries.
  */
-import { PII_SURFACES, type SpecSourceSpec, type VaultSpec } from "./config.ts";
+import { effectiveDomains, PII_SURFACES, type SpecSourceSpec, type VaultSpec } from "./config.ts";
 import type { ResolvedHome } from "./home.ts";
 import type { PiiMatrix, PiiRow } from "./pii.ts";
 import { effectivePii, type RecoveryReport } from "./registry.ts";
@@ -82,7 +82,7 @@ export function renderRecover(r: RecoveryReport, o: TextOptions): string {
 }
 
 export function renderVaultsList(vaults: VaultRow[], o: TextOptions): string {
-  return vaults.length ? table(["VAULT", "KIND", "WRITE", "PII", "PATH"], vaults.map(v => [v.id, v.kind, v.write, v.pii, v.path]), o) : paragraph(NO_VAULTS, o);
+  return vaults.length ? table(["VAULT", "KIND", "WRITE", "PII", "DOMAINS", "PATH"], vaults.map(v => [v.id, v.kind, v.write, v.pii, effectiveDomains(v).join(", "), v.path]), o) : paragraph(NO_VAULTS, o);
 }
 export function renderVaultAdd(r: { vault: VaultSpec }, o: TextOptions): string {
   const v = r.vault;

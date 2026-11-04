@@ -4,7 +4,7 @@ import { realPath, memoryGitArgv, memoryGitEnv } from "./platform.ts";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { CONFIG_FILE, MAX_CONFIG_BYTES, parseConfig, parsePii, parseVault, parseSpec, piiExtensions, readConfig, type VaultSpec, type SpecSourceSpec, type VmemConfig } from "./config.ts";
+import { CONFIG_FILE, MAX_CONFIG_BYTES, effectiveDomains, parseConfig, parsePii, parseVault, parseSpec, piiExtensions, readConfig, type VaultSpec, type SpecSourceSpec, type VmemConfig } from "./config.ts";
 import { loosenedCells, piiPolicy, piiShorthand } from "./pii.ts";
 export const LOCK_FILE = "config.lock";
 const TEMP = /^\.config-[0-9a-f-]{36}\.tmp$/;
@@ -44,6 +44,7 @@ function mutate<T>(home: string, update: (config: VmemConfig) => T): T {
     writeFileSync(lockFd, JSON.stringify(owner) + "\n");
     const config = loadRegistry(home), result = update(config);
     if (config.specs !== undefined) config.version = Math.max(config.version ?? 1, 2);
+    if (config.vaults.some(vault => vault.domains !== undefined)) config.version = Math.max(config.version ?? 1, 3);
     parseConfig(config);
     const text = JSON.stringify(config, null, 2) + "\n";
     if (Buffer.byteLength(text) > MAX_CONFIG_BYTES) throw new Error(`${join(home, CONFIG_FILE)}: serialized config exceeds 64 KiB`);
@@ -194,7 +195,7 @@ export function setVaultPii(home: string, id: string, value: unknown, confirm = 
 export function registryStatus(home: string) {
   const config = loadRegistry(home);
   return config.vaults.map(vault => {
-    const base = { ...vault, pii: effectivePii(vault), piiPolicy: piiPolicy(vault) };
+    const base = { ...vault, domains: effectiveDomains(vault), pii: effectivePii(vault), piiPolicy: piiPolicy(vault) };
     try {
       const root = realpathSync(vault.path), notes = join(root, "notes");
       if (root !== vault.path || realpathSync(notes) !== notes || !statSync(notes).isDirectory()) throw new Error("changed");
