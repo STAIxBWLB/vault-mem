@@ -43,10 +43,12 @@ export function sameRemote(a: string, b: string): boolean {
   };
   return norm(a) === norm(b);
 }
-function gitIn(cwd: string, env: NodeJS.ProcessEnv): Git {
+function gitIn(cwd: string, env: NodeJS.ProcessEnv, deadline?: number): Git {
   return (args, options = {}) => {
+    const timeout = deadline === undefined ? GIT_TIMEOUT_MS : deadline - Date.now();
+    if (timeout <= 0) throw new Error("local sync check exceeded its time budget; inspect the vault Git state in System and retry");
     const argv = memoryGitArgv(["-C", cwd, ...args]);
-    const result = Bun.spawnSync(argv, { env: memoryGitEnv({ ...env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }, { repositoryIsolation: true }), stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: GIT_TIMEOUT_MS });
+    const result = Bun.spawnSync(argv, { env: memoryGitEnv({ ...env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }, { repositoryIsolation: true }), stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout });
     const out = { status: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString(), pid: result.pid, output: [], signal: null } as unknown as SpawnSyncReturns<string>;
     if (!options.allowFail && result.exitCode !== 0) throw Object.assign(new Error(`git ${args[0]} failed: ${out.stderr.trim().split("\n").at(-1)?.slice(0, 300) ?? "error"}`), { git: true });
     return out;
@@ -89,6 +91,25 @@ function changed(git: Git): string[] {
   return [...new Set(paths)].sort();
 }
 
+/** Shared local history counts; no fetch is needed to compare stored refs. */
+function aheadBehind(git: Git, upstream: string): { behind: number; ahead: number } {
+  const [behind, ahead] = git(["rev-list", "--left-right", "--count", `${upstream}...HEAD`]).stdout.trim().split(/\s+/).map(Number);
+  if (!Number.isSafeInteger(behind) || !Number.isSafeInteger(ahead) || behind! < 0 || ahead! < 0) throw new Error("git rev-list returned invalid counts; inspect the vault Git state in System and retry");
+  return { behind: behind!, ahead: ahead! };
+}
+/** Local-only inbox state: dirty paths plus commits ahead of the configured tracking ref. */
+export function localSyncPending(root: string, env: NodeJS.ProcessEnv = process.env): { changed: number; ahead: number } {
+  const git = gitIn(root, { ...env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never", GIT_NO_LAZY_FETCH: "1" }, Date.now() + 1000);
+  if (realpathSync(root) !== root || realpathSync(git(["rev-parse", "--show-toplevel"]).stdout.trim()) !== root) throw new Error("sync pending requires the registered Git worktree root; check the vault path in System");
+  const dirty = changed(git).length;
+  const branch = git(["symbolic-ref", "--quiet", "HEAD"], { allowFail: true });
+  // An unborn or detached branch has no upstream: only its uncommitted paths count.
+  if (branch.status === 1) return { changed: dirty, ahead: 0 };
+  if (branch.status !== 0) throw new Error("sync pending cannot read the current branch; inspect the vault Git state in System and retry");
+  const upstream = git(["for-each-ref", "--format=%(upstream)", branch.stdout.trim()]).stdout.trim();
+  return { changed: dirty, ahead: upstream ? aheadBehind(git, upstream).ahead : 0 };
+}
+
 /**
  * Explicit, never scheduled publication of one vault clone. Without `confirm` it fetches, checks the
  * configured remote against `origin`, and previews what would be staged; nothing is committed or pushed.
@@ -124,8 +145,8 @@ export function syncVault(home: string, request: { vault: string; confirm?: bool
     const upstream = `origin/${result.branch}`;
     const hasUpstream = git(["rev-parse", "--verify", "--quiet", `refs/remotes/${upstream}`], { allowFail: true }).status === 0;
     if (hasUpstream) {
-      const [behind, ahead] = git(["rev-list", "--left-right", "--count", `${upstream}...HEAD`]).stdout.trim().split(/\s+/).map(Number);
-      result.behind = behind ?? 0; result.ahead = ahead ?? 0;
+      const counts = aheadBehind(git, upstream);
+      result.behind = counts.behind; result.ahead = counts.ahead;
     }
     const all = changed(git);
     result.paths = all.filter(planned); result.ignored = all.filter(path => !planned(path));

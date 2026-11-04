@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Inbox alerts show each org vault's uncommitted paths plus local commits ahead of its tracking ref, with a stable first-seen time and an Overview link. Checks stay local, bounded and cached for 60 seconds; one vault's Git failure is logged and skipped (#48).
+
 - The console panel uses the kit's `ui.button` and `ui.notice(text, "err")`, which screen readers announce assertively, instead of its own button and error helpers; the truncated-body note is a polite warning. `@staix/agent-console` moves to 4c4c1e0 (#122).
 
 - The console panel builds every view from the agent-console panel kit (`host.ui`): lists use `ui.rows`/`ui.row`, so `j`/`k`/`Enter` work on them, and a note opens in `ui.detail`. The panel CSS uses only the kit's public classes and `--acon-*` tokens, and the `@staix/agent-console` devDependency moves to 5af4dcc, which has `ConsoleUi` (#57).

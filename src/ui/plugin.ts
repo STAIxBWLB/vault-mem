@@ -10,6 +10,8 @@ import { createVaultMcp } from "../mcp-vault.ts";
 import { validArguments } from "../mcp.ts";
 import { listPromotionCandidates } from "../promote.ts";
 import { loadRegistry } from "../registry.ts";
+import { localSyncPending } from "../sync.ts";
+import { isDenied } from "../platform.ts";
 import { lintVault } from "../vault-lint.ts";
 import type { LintCode } from "../analysis-types.ts";
 
@@ -130,6 +132,22 @@ export const plugin: ConsolePlugin = {
       lintCache.set(id, { at: Date.now(), report });
       return report;
     };
+    // Like lint, local Git state refreshes at most once per minute, including failures.
+    const syncCache = new Map<string, { at: number; pending: ReturnType<typeof localSyncPending> | null }>();
+    const syncPending = (id: string) => {
+      const hit = syncCache.get(id);
+      if (hit && Date.now() - hit.at < CACHE_MS) return hit.pending;
+      let pending: ReturnType<typeof localSyncPending> | null = null;
+      try {
+        const config = loadRegistry(home), spec = config.vaults.find(v => v.id === id);
+        const startup = mcp.vaults.find(v => v.id === id);
+        if (!spec || JSON.stringify(spec) !== JSON.stringify(startup)) throw new Error("vault binding changed; restart the console provider");
+        if (isDenied(spec.path, config.denyPaths)) throw new Error("vault path is denied; check its path policy in System");
+        pending = localSyncPending(spec.path);
+      } catch (error) { ctx.log(`vmem: sync pending ${id} failed: ${error instanceof Error ? error.message : String(error)}`); }
+      syncCache.set(id, { at: Date.now(), pending });
+      return pending;
+    };
     const projectOf = new Map<string, string>();
     const candidates = async () => {
       try {
@@ -160,6 +178,14 @@ export const plugin: ConsolePlugin = {
         const stale = report.findings.L11 ?? [];
         if (stale.length) items.push({ id: `stale:${v.id}`, group: "alert", kind: "lint", title: `Graph report is stale in ${v.id}`, detail: stale[0]!, at: since(`stale:${v.id}`),
           chip: { text: "stale", tone: "warn" }, verbs: [], link: { panel: "lint", params: { vault: v.id } } });
+      }
+      for (const v of mcp.vaults.filter(x => x.kind === "org")) {
+        const pending = syncPending(v.id);
+        if (!pending) continue;
+        const count = pending.changed + pending.ahead;
+        if (count > 0) items.push({ id: `sync:${v.id}`, group: "alert", kind: "sync", title: `${count} unsynced change${count === 1 ? "" : "s"} in ${v.id}`,
+          detail: `${pending.changed} uncommitted paths; ${pending.ahead} local commits ahead of upstream`, at: since(`sync:${v.id}`),
+          chip: { text: "sync pending", tone: "warn" }, verbs: [], link: { panel: "overview", params: { vault: v.id } } });
       }
       for (const id of firstSeen.keys()) if (!items.some(i => i.id === id)) firstSeen.delete(id);
       return items;
