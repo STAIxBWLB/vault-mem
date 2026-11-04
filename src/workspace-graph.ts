@@ -16,6 +16,13 @@ const FRONTMATTER = /^---\s*\n([\s\S]*?)\n---\s*\n/;
 const WIKI = /\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]/g;
 const PRIORITY = { wiki_link: 0, fm_ref: 1, bu_member: 2, source_ref: 3, related: 4, supersedes: 5 };
 export type WorkCounters = Record<"work_docs" | "yaml_fail" | "template_skip" | "related_unresolved" | "related_ambiguous" | "related_dir_skip" | "related_root_escape" | "related_home_escape" | "source_stub" | "source_dead" | "source_nonmd" | "source_skiproot" | "collisions" | "dup_edges", number>;
+/**
+ * Edge attributes `scripts/workspace-parity.ts` compares with `build-graph.py --work-root`. The Python reference puts no
+ * `rel` on wiki_link edges; vmem keeps the `vmem link --relation` type there, so that `rel` is outside parity.
+ */
+export function workspaceParityEdgeKey(e: Record<string, unknown>): string {
+  return (["relation", "field", "rel"] as const).map(a => e[a] === undefined || (a === "rel" && e.relation === "wiki_link") ? "" : String(e[a])).join("|");
+}
 export function workSkipped(path: string, roots: string[]): boolean {
   const normalized = path.normalize("NFC").replace(/^\/+|\/+$/g, "");
   return roots.some(root => normalized === root || normalized.startsWith(root + "/"));
@@ -129,7 +136,8 @@ export function buildWorkspaceGraph(snapshot: AnalysisSnapshot, work: WorkspaceS
     if (!current || PRIORITY[edge.relation] > PRIORITY[current.relation]) best.set(key, edge);
   }
   const edges = new Map(graph.edges.map(edge => [pair(edge), edge]));
-  for (const [key, edge] of best) edges.set(key, { ...edges.get(key), ...edge });
+  // A vault wiki link's `rel` belongs to that relation only: a higher-priority work edge on the pair drops it.
+  for (const [key, edge] of best) { const prior = edges.get(key); edges.set(key, prior && prior.relation === edge.relation ? { ...prior, ...edge } : edge); }
   graph.edges = [...edges.values()];
   if (graph.nodes.length > 20000 || graph.edges.length > 100000) throw new Error("workspace graph: node or edge bound exceeded");
   finalizeGraph(graph);

@@ -1,3 +1,4 @@
+import { BUILTIN_DOMAINS } from "./config.ts";
 import { parseAnalysisYaml, scalarText, yamlTruthy, AnalysisYamlUnsupported } from "./analysis-yaml.ts";
 import type { AnalysisSnapshot, LintCode, LintReport } from "./analysis-types.ts";
 const TYPES = ["decision", "insight", "method", "moc", "observation", "person", "project", "reference"];
@@ -90,6 +91,9 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
     if (fm === null) { findings.L02.push(prefix + "frontmatter 없음/파싱 실패"); continue; }
     if (fm.status === "superseded") superseded++;
     if (!TYPES.includes(String(fm.type))) findings.L02.push(prefix + `\`type: ${py(fm.type)}\` 허용값 아님 (${TYPES.join(" | ")})`);
+    if (fm.domain !== undefined && (typeof fm.domain !== "string" || !(snapshot.domains ?? BUILTIN_DOMAINS).includes(fm.domain))) {
+      findings.L02.push(prefix + `domain ${py(fm.domain)} is not declared for this vault; choose an effective domain or add the id to its domains in vmem.config.json`);
+    }
     if (fm.type === "moc") { if (!truth(fm.description)) findings.L02.push(prefix + "`type: moc` 노트는 `description` 필수"); }
     else if (!truth(fm.topics)) findings.L02.push(prefix + "`topics` 없음/빈 배열");
     for (const [key,allowed] of [["confidence",CONFIDENCE],["status",STATUS]] as const) if (fm[key] !== undefined && fm[key] !== null && !allowed.includes(py(fm[key]))) findings.L02.push(prefix + `\`${key}: ${py(fm[key])}\` 허용값 아님 (${allowed.join(" | ")})${key === "status" ? " (status는 노트 생애주기이지 사업 진행 상태가 아님 — 작업 상태는 본문에)" : ""}`);

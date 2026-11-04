@@ -5,6 +5,10 @@ import { buildGraph, graphNeighbors } from "./vault-graph.ts";
 import { writeAnalysisReports } from "./analysis-reports.ts";
 import { PLAIN, type TextOptions } from "./text-output.ts";
 
+const OPTION_SCOPE: Record<string, string> = {
+  "--hops": "graph neighbors", "--limit": "graph neighbors", "--relation": "graph neighbors",
+  "--note": "lint", "--write": "lint", "--workspace": "graph build", "--dry-run": "lint --write and graph build",
+};
 export function runAnalysisCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv = process.env, text: TextOptions = PLAIN): { text: string; code: number } {
   const values: Record<string,string> = {}, flags = new Set<string>(), positional: string[] = [];
   for (let i=0;i<args.length;i++) {
@@ -12,27 +16,30 @@ export function runAnalysisCommand(command: string, args: string[], home: string
     if (!word.startsWith("-")) { positional.push(word); continue; }
     if (word in values || flags.has(word)) throw new Error("analysis: repeated option");
     if (["--json","--dry-run","--write","--workspace"].includes(word)) flags.add(word);
-    else if (["--note","--hops","--limit"].includes(word)) { const value = args[++i]; if (!value || value.startsWith("--")) throw new Error(`${word}: requires value`); values[word]=value; }
+    else if (["--note","--hops","--limit","--relation"].includes(word)) { const value = args[++i]; if (!value || value.startsWith("--")) throw new Error(`${word}: requires value`); values[word]=value; }
     else throw new Error(`analysis: unknown option ${word}`);
   }
+  // An option the subcommand does not take is named with where it applies, before any positional check.
+  const subcommand = command === "lint" ? "lint" : `graph ${positional[0] ?? ""}`.trim();
+  const accepted = command === "lint" ? ["--json", "--dry-run", "--write", "--note"] : positional[0] === "build" ? ["--json", "--dry-run", "--workspace"] : positional[0] === "neighbors" ? ["--json", "--hops", "--limit", "--relation"] : undefined;
+  if (accepted) for (const option of [...flags, ...Object.keys(values)]) if (!accepted.includes(option)) throw new Error(`${subcommand}: ${option} applies only to ${OPTION_SCOPE[option]}`);
   if (command === "lint") {
-    if (positional.length !== 1 || values["--hops"] || values["--limit"] || flags.has("--workspace")) throw new Error("lint: requires one vault id");
+    if (positional.length !== 1) throw new Error("lint: requires one vault id");
     if (flags.has("--write")) { const result = writeAnalysisReports(home,{vault:positional[0]!,kind:"lint",note:values["--note"],dryRun:flags.has("--dry-run")},env); return {text:flags.has("--json") ? JSON.stringify(result) : analysisWriteText(result,text,{kind:"lint",dryRun:flags.has("--dry-run")}),code:result.ok && (result.summary as {errors?:number}).errors === 0 ? 0 : 1}; }
     const {snapshot} = analysisInput(home,positional[0]!);
     const details = lintDetails(snapshot,values["--note"]), report = details.report;
     return {text:flags.has("--json") ? JSON.stringify(report) : lintText(details,text,{vault:positional[0]!,note:values["--note"]}),code:report.errors ? 1 : 0};
   }
   const action = positional.shift();
-  if (values["--note"] || flags.has("--write")) throw new Error("graph: unsupported option");
   if (action === "build") {
-    if (positional.length !== 1 || values["--hops"] || values["--limit"]) throw new Error("graph build: requires one vault id");
+    if (positional.length !== 1) throw new Error("graph build: requires one vault id");
     const result = writeAnalysisReports(home,{vault:positional[0]!,kind:"graph",workspace:flags.has("--workspace"),dryRun:flags.has("--dry-run")},env);
     return {text:flags.has("--json") ? JSON.stringify(result) : analysisWriteText(result,text,{kind:"graph",dryRun:flags.has("--dry-run")}),code:result.ok ? 0 : 1};
   }
-  if (action !== "neighbors" || positional.length !== 2 || flags.has("--workspace")) throw new Error("graph: use build <vault> or neighbors <vault> <stem>");
+  if (action !== "neighbors" || positional.length !== 2) throw new Error("graph: use build <vault> or neighbors <vault> <stem>");
   const hops = Number(values["--hops"] ?? 1), limit = Number(values["--limit"] ?? 50);
   if ((hops !== 1 && hops !== 2) || !Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error("graph neighbors: hops 1..2, limit 1..500");
   const {snapshot} = analysisInput(home,positional[0]!);
-  const result = graphNeighbors(buildGraph(snapshot),positional[1]!,hops,limit);
-  return {text:flags.has("--json") ? JSON.stringify(result) : neighborsText(result,text,{vault:positional[0]!,limit}),code:0};
+  const result = graphNeighbors(buildGraph(snapshot),positional[1]!,hops,limit,values["--relation"]);
+  return {text:flags.has("--json") ? JSON.stringify(result) : neighborsText(result,text,{vault:positional[0]!,limit,relation:values["--relation"]}),code:0};
 }
