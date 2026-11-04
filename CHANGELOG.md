@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The org sync inbox alert counts only paths `vmem sync` would stage (notes/, reports/, log), with a rename counted once. Other dirty paths are named in the detail but not counted, and a vault with no usable upstream drops the "ahead of upstream" clause. A git call that times out or is killed now logs the signal (`git status failed: timed out (SIGTERM) under the 1 s budget`) and the next step, instead of an empty cause (#138).
+
 - Spec schema fixtures validate every error/warning class in separate default-budget tests and skip unused commit/HEAD setup, avoiding the aggregate macOS timeout. Git inspection failures now name the termination signal and 10-second inspection budget, including shorter parent/test timeouts (#137).
 
 - The console panel's "shown" and "selected" chips use the neutral tone, because they mark a selection and not a state. Two unused panel CSS rules are removed, and the README states that the panel needs agent-console 0.1.0 or later (#129).

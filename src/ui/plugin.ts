@@ -185,7 +185,9 @@ export const plugin: ConsolePlugin = {
         if (!pending) continue;
         const count = pending.changed + pending.ahead;
         if (count > 0) items.push({ id: `sync:${v.id}`, group: "alert", kind: "sync", title: `${count} unsynced change${count === 1 ? "" : "s"} in ${v.id}`,
-          detail: `${pending.changed} uncommitted path${pending.changed === 1 ? "" : "s"}; ${pending.ahead} local commit${pending.ahead === 1 ? "" : "s"} ahead of upstream`, at: since(`sync:${v.id}`),
+          detail: [`${pending.changed} uncommitted path${pending.changed === 1 ? "" : "s"} to sync`,
+            ...(pending.ignored ? [`${pending.ignored} other path${pending.ignored === 1 ? "" : "s"} outside notes/, reports/ and log not counted`] : []),
+            ...(pending.upstream ? [`${pending.ahead} local commit${pending.ahead === 1 ? "" : "s"} ahead of upstream`] : [])].join("; "), at: since(`sync:${v.id}`),
           chip: { text: "sync pending", tone: "warn" }, verbs: [], link: { panel: "overview", params: { vault: v.id } } });
       }
       for (const id of firstSeen.keys()) if (!items.some(i => i.id === id)) firstSeen.delete(id);

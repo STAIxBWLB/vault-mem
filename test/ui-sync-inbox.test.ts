@@ -51,11 +51,11 @@ test("clean org vault has no sync alert; dirty personal vault is not scanned for
   expect(await syncItems(f.provider)).toEqual([]);
   const calls = spawn.mock.calls.map(args => args[0]).filter(Array.isArray) as string[][];
   expect(calls.some(args => args.includes(f.personal))).toBe(false);
-  expect(localSyncPending(f.org)).toEqual({ changed: 0, ahead: 0 });
+  expect(localSyncPending(f.org)).toEqual({ changed: 0, ignored: 0, ahead: 0, upstream: true });
 });
 
 test("uncommitted paths produce a stable alert, without verbs, network commands, prompts or Git writes", async () => {
-  const f = await fixture(); writeFileSync(join(f.org, "draft.txt"), "Synthetic org change.\n");
+  const f = await fixture(); writeFileSync(join(f.org, "notes", "draft.md"), "Synthetic org change.\n");
   const index = readFileSync(join(f.org, ".git", "index"));
   const spawn = spyOn(Bun, "spawnSync"); cleanups.push(() => spawn.mockRestore());
   const [item] = await syncItems(f.provider);
@@ -78,26 +78,29 @@ test("uncommitted paths produce a stable alert, without verbs, network commands,
 });
 
 test("local commits ahead of tracking ref count alongside dirty paths, using local refs only", async () => {
-  const f = await fixture(); writeFileSync(join(f.org, "committed.txt"), "Synthetic committed change.\n");
+  const f = await fixture(); writeFileSync(join(f.org, "notes", "committed.md"), "Synthetic committed change.\n");
   git(f.org, "add", "."); git(f.org, "commit", "--quiet", "-m", "local only");
-  writeFileSync(join(f.org, "uncommitted.txt"), "Synthetic worktree change.\n");
+  writeFileSync(join(f.org, "notes", "uncommitted.md"), "Synthetic worktree change.\n");
   // A tracking ref stays usable even when the configured remote is unreachable.
   git(f.org, "remote", "set-url", "origin", "ssh://unreachable.example.invalid/vault.git");
-  expect(localSyncPending(f.org)).toEqual({ changed: 1, ahead: 1 });
-  expect(await syncItems(f.provider)).toMatchObject([{ title: "2 unsynced changes in team", detail: "1 uncommitted path; 1 local commit ahead of upstream" }]);
+  expect(localSyncPending(f.org)).toEqual({ changed: 1, ignored: 0, ahead: 1, upstream: true });
+  expect(await syncItems(f.provider)).toMatchObject([{ title: "2 unsynced changes in team", detail: "1 uncommitted path to sync; 1 local commit ahead of upstream" }]);
 });
 
 test("no upstream counts only uncommitted changes, including an unborn branch", async () => {
   const f = await fixture({ upstream: false });
-  writeFileSync(join(f.org, "committed.txt"), "Synthetic commit.\n"); git(f.org, "add", "."); git(f.org, "commit", "--quiet", "-m", "untracked history");
-  expect(localSyncPending(f.org)).toEqual({ changed: 0, ahead: 0 });
+  writeFileSync(join(f.org, "notes", "committed.md"), "Synthetic commit.\n"); git(f.org, "add", "."); git(f.org, "commit", "--quiet", "-m", "untracked history");
+  expect(localSyncPending(f.org)).toEqual({ changed: 0, ignored: 0, ahead: 0, upstream: false });
   expect(await syncItems(f.provider)).toEqual([]);
-  const unborn = join(f.root, "unborn"); mkdirSync(unborn); git(unborn, "init", "--quiet", "-b", "main"); writeFileSync(join(unborn, "draft.txt"), "Synthetic draft.\n");
-  expect(localSyncPending(unborn)).toEqual({ changed: 1, ahead: 0 });
+  writeFileSync(join(f.org, "notes", "draft.md"), "Synthetic draft.\n");
+  expect(await syncItems(f.provider)).toEqual([]); // cached for 60 s
+  expect(localSyncPending(f.org)).toEqual({ changed: 1, ignored: 0, ahead: 0, upstream: false });
+  const unborn = join(f.root, "unborn"); mkdirSync(join(unborn, "notes"), { recursive: true }); git(unborn, "init", "--quiet", "-b", "main"); writeFileSync(join(unborn, "notes", "draft.md"), "Synthetic draft.\n");
+  expect(localSyncPending(unborn)).toEqual({ changed: 1, ignored: 0, ahead: 0, upstream: false });
 });
 
 test("a Git failure logs and skips only that vault, and failures are cached", async () => {
-  const f = await fixture({ broken: true }); writeFileSync(join(f.org, "draft.txt"), "Synthetic change.\n");
+  const f = await fixture({ broken: true }); writeFileSync(join(f.org, "notes", "draft.md"), "Synthetic change.\n");
   const spawn = spyOn(Bun, "spawnSync"); cleanups.push(() => spawn.mockRestore());
   expect((await syncItems(f.provider)).map(item => item.id)).toEqual(["sync:team"]);
   expect(f.logs.filter(line => line.includes("sync pending broken failed"))).toHaveLength(1);
@@ -108,16 +111,16 @@ test("a Git failure logs and skips only that vault, and failures are cached", as
 });
 
 test("cached state refreshes after 60 seconds and count changes keep the first-seen time", async () => {
-  const f = await fixture(); writeFileSync(join(f.org, "first.txt"), "Synthetic first change.\n");
+  const f = await fixture(); writeFileSync(join(f.org, "notes", "first.md"), "Synthetic first change.\n");
   const now = Date.now(), clock = spyOn(Date, "now").mockReturnValue(now); cleanups.push(() => clock.mockRestore());
   const [first] = await syncItems(f.provider);
-  writeFileSync(join(f.org, "second.txt"), "Synthetic second change.\n");
+  writeFileSync(join(f.org, "notes", "second.md"), "Synthetic second change.\n");
   clock.mockReturnValue(now + 5000);
   expect((await syncItems(f.provider))[0]!.title).toBe("1 unsynced change in team");
   clock.mockReturnValue(now + 60001);
   const [second] = await syncItems(f.provider);
   expect(second!.title).toBe("2 unsynced changes in team"); expect(second!.at).toBe(first!.at);
-  rmSync(join(f.org, "first.txt")); rmSync(join(f.org, "second.txt"));
+  rmSync(join(f.org, "notes", "first.md")); rmSync(join(f.org, "notes", "second.md"));
   clock.mockReturnValue(now + 120002);
   expect(await syncItems(f.provider)).toEqual([]);
 });
@@ -126,9 +129,34 @@ test("cached state refreshes after 60 seconds and count changes keep the first-s
 test("a configured but missing tracking ref still reports dirty paths", async () => {
   const f = await fixture();
   git(f.org, "update-ref", "-d", "refs/remotes/origin/main");
-  writeFileSync(join(f.org, "draft.txt"), "Synthetic uncommitted change.\n");
+  writeFileSync(join(f.org, "notes", "draft.md"), "Synthetic uncommitted change.\n");
   expect(git(f.org, "config", "branch.main.remote")).toBe("origin");
-  expect(localSyncPending(f.org)).toEqual({ changed: 1, ahead: 0 });
-  expect(await syncItems(f.provider)).toMatchObject([{ title: "1 unsynced change in team", detail: "1 uncommitted path; 0 local commits ahead of upstream" }]);
+  expect(localSyncPending(f.org)).toEqual({ changed: 1, ignored: 0, ahead: 0, upstream: false });
+  expect(await syncItems(f.provider)).toMatchObject([{ title: "1 unsynced change in team", detail: "1 uncommitted path to sync" }]);
   expect(f.logs.filter(message => message.includes("sync pending"))).toEqual([]);
+});
+
+test("only paths sync would stage count; a rename counts once; others are named but not counted (#138)", async () => {
+  const f = await fixture();
+  writeFileSync(join(f.org, "draft.txt"), "Synthetic root file sync never stages.\n");
+  expect(localSyncPending(f.org)).toEqual({ changed: 0, ignored: 1, ahead: 0, upstream: true });
+  expect(await syncItems(f.provider)).toEqual([]);
+  git(f.org, "mv", "notes/research.md", "notes/renamed.md");
+  writeFileSync(join(f.org, "log"), "2026-11-04 10:00  INGEST  synthetic  notes/renamed.md  — synthetic\n");
+  expect(localSyncPending(f.org)).toEqual({ changed: 2, ignored: 1, ahead: 0, upstream: true });
+  const later = await plugin.open({ home: process.env.AGENTHUB_HOME!, log: () => {} });
+  expect(await syncItems(later)).toMatchObject([{ title: "2 unsynced changes in team",
+    detail: "2 uncommitted paths to sync; 1 other path outside notes/, reports/ and log not counted; 0 local commits ahead of upstream" }]);
+});
+
+test("a timed-out or killed git call names the signal instead of an empty cause (#138)", async () => {
+  const f = await fixture();
+  const real = Bun.spawnSync;
+  const spawn = spyOn(Bun, "spawnSync").mockImplementation(((argv: string[], options: unknown) => argv.includes("status")
+    ? { exitCode: null, signalCode: "SIGTERM", stdout: Buffer.from(""), stderr: Buffer.from(""), pid: 1, success: false }
+    : real(argv as never, options as never)) as never);
+  cleanups.push(() => spawn.mockRestore());
+  expect(() => localSyncPending(f.org)).toThrow("git status failed: timed out (SIGTERM) under the 1 s budget; inspect the vault Git state in System and retry");
+  expect(await syncItems(f.provider)).toEqual([]);
+  expect(f.logs.some(line => line.includes("git status failed: timed out (SIGTERM)"))).toBe(true);
 });
