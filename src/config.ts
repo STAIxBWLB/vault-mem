@@ -21,9 +21,9 @@ export function effectiveDomains(vault: Pick<VaultSpec, "domains">): string[] {
 /** A named, actionable domain refusal shared by writers and promotion targets. */
 export function domainProblem(value: unknown, vault: VaultSpec): string | undefined {
   const domains = effectiveDomains(vault);
-  if (typeof value === "string" && domains.includes(value)) return undefined;
-  const name = typeof value === "string" && /^[a-z][a-z0-9-]{0,31}(?![\s\S])/.test(value) ? `domain ${value}` : "invalid or missing domain";
-  return `${name} is not declared for vault ${vault.id}; choose ${domains.join(", ")} or add the id to this vault's domains in ${CONFIG_FILE}`;
+  if (typeof value !== "string" || !/^[a-z][a-z0-9-]{0,31}(?![\s\S])/.test(value)) return `domain is missing or not a valid id for vault ${vault.id}; set domain to one of ${domains.join(", ")}`;
+  if (domains.includes(value)) return undefined;
+  return `domain ${value} is not declared for vault ${vault.id}; choose ${domains.join(", ")} or add the id to this vault's domains in ${CONFIG_FILE}`;
 }
 export type PiiAction = "allow" | "warn" | "deny";
 export const PII_SURFACES = ["notes", "log", "promotion"] as const;
