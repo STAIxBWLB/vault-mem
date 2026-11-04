@@ -8,7 +8,7 @@
 
 - The console panel builds every view from the agent-console panel kit (`host.ui`): lists use `ui.rows`/`ui.row`, so `j`/`k`/`Enter` work on them, and a note opens in `ui.detail`. The panel CSS uses only the kit's public classes and `--acon-*` tokens, and the `@staix/agent-console` devDependency moves to 5af4dcc, which has `ConsoleUi` (#57).
 
-- `vmem lint` and `vmem graph build` / `graph neighbors` name an option they do not take and where it applies (`graph build: --relation applies only to graph neighbors`) instead of `requires one vault id`; a wrong positional count keeps its message (#121).
+- `vmem lint` and `vmem graph build` / `graph neighbors` name an option they do not take and where it applies (`graph build: --relation applies only to graph neighbors`) instead of `requires one vault id`. `graph neighbors` now refuses `--dry-run`, which it used to accept and ignore. A wrong positional count keeps its message (#121, #127).
 
 - `vmem graph build` keeps the relation of `- [[x]] (relation)` lines from `vmem link --relation` as `rel` on the `wiki_link` edge, and `vmem graph neighbors --relation` / `vmem_graph_neighbors` `relation` follow only edges of one relation (`wiki_link` for untyped links); an unknown relation is refused. Node and edge sets are unchanged (#74).
 
