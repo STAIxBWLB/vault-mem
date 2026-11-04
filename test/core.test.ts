@@ -12,7 +12,8 @@ function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-core-"))); roots.push(root);
   const vault = join(root, "vault"), home = join(root, "home"), notes = join(vault, "notes");
   mkdirSync(notes, { recursive: true });
-  for (const file of readdirSync("test/fixtures/core")) copyFileSync(join("test/fixtures/core", file), join(notes, file));
+  // NFC names, so the checkout's spelling of café.md (NFD on some macOS copies) cannot change the paths tests expect (#147).
+  for (const file of readdirSync("test/fixtures/core")) copyFileSync(join("test/fixtures/core", file), join(notes, file.normalize("NFC")));
   const spec = { id: "test", path: resolve(vault), kind: "personal" as const, write: "none" as const };
   return { root, vault, home, notes, spec };
 }
@@ -86,6 +87,23 @@ test("a cache written by an older link resolver recomputes every link on the nex
     try { db.run("UPDATE links SET data=json_set(data,'$.resolved','stale.md','$.reason',NULL)"); db.run("PRAGMA user_version = 0"); } finally { db.close(); }
     expect(index.scan()).toEqual({ notes: 3, changed: 0, removed: 0 });
     expect(snapshot(index)).toEqual(fresh);
+  } finally { index.close(); }
+});
+test("#147: an NFD-named note is reported under its on-disk name and found from NFC targets", () => {
+  const { home, spec, notes } = fixture();
+  for (const file of readdirSync(notes)) rmSync(join(notes, file));
+  const nfd = "cafe\u0301.md", nfc = "caf\u00e9";
+  writeFileSync(join(notes, nfd), "---\ntitle: Coffee Place\ntype: concept\ndomain: research\ndescription: Coffee.\n---\nA coffee note.\n");
+  writeFileSync(join(notes, "map.md"), `---\ntitle: Map\ntype: concept\ndomain: research\ndescription: Map.\n---\n[[${nfc}]]\n`);
+  expect(readdirSync(notes)).toContain(nfd);
+  const index = new VaultIndex(home, spec);
+  try {
+    index.scan();
+    expect(index.search("coffee").map(n => n.path)).toEqual([nfd]);
+    expect(index.show(nfc).path).toBe(nfd);
+    expect(index.show(`notes/${nfc}.md`).path).toBe(nfd);
+    const [link] = index.links("map");
+    expect(link!.resolved).toBe(nfd); expect(link!.reason).toBeNull();
   } finally { index.close(); }
 });
 test("unicode FTS5, BM25 relevance, filters, bounded search/show/links", () => {
