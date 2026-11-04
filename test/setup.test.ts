@@ -244,3 +244,55 @@ test("escaped TOML keys of the entry's subtables are owned, so apply leaves no s
   expect(f.setup("codex", "undo").actions[0]!.change).toBe("restore");
   expect(readFileSync(file, "utf8")).toBe(source);
 });
+
+test("a table whose quoted key contains ] survives apply byte for byte and undo restores it (#133)", () => {
+  const f = fixture(), file = f.files.codex!;
+  mkdirSync(join(file, ".."), { recursive: true });
+  const after = `[mcp_servers."x]y"]\ncommand = "keep"\n\n[a] # c\nkeep = 1\n\n[[arr.'l]t']]\nn = 1\n`;
+  const source = `[mcp_servers.vmem]\ncommand = "/old"\nargs = []\n\n${after}`;
+  writeFileSync(file, source);
+  expect(f.setup("codex", "apply").actions[0]!.change).toBe("replace");
+  expect(readFileSync(file, "utf8")).toBe(`[mcp_servers.vmem]\ncommand = "/opt/bun/bin/bun"\nargs = ["--smol", "/opt/vmem/bin/vmem.js", "mcp"]\n\n${after}`);
+  expect(Bun.TOML.parse(readFileSync(file, "utf8")) as any).toMatchObject({ mcp_servers: { "x]y": { command: "keep" } }, a: { keep: 1 } });
+  expect(f.setup("codex", "undo").actions[0]!.change).toBe("restore");
+  expect(readFileSync(file, "utf8")).toBe(source);
+});
+
+test("a root inline mcp_servers table is refused with the inline-table fix, in dry run and apply alike (#133)", () => {
+  const f = fixture(), file = f.files.codex!;
+  const source = `model = "gpt"\nmcp_servers = { other = { command = "x" } }\n`;
+  mkdirSync(join(file, ".."), { recursive: true }); writeFileSync(file, source);
+  for (const mode of ["dry-run", "apply"] as const) {
+    const action = f.setup("codex", mode).actions[0]!;
+    expect(action.change).toBe("refused");
+    expect(action.reason).toMatch(/would not parse \(.+\); convert the inline mcp_servers value to \[mcp_servers\.<name>\] tables, then rerun setup$/);
+  }
+  expect(readFileSync(file, "utf8")).toBe(source);
+  expect(existsSync(join(f.state, "setup"))).toBe(false);
+});
+
+test("an undo whose restored file would not parse names the undo rerun (#133)", () => {
+  const f = fixture(), file = f.files.codex!;
+  const source = `[mcp_servers.vmem]\ncommand = "/old"\nargs = []\n`;
+  mkdirSync(join(file, ".."), { recursive: true }); writeFileSync(file, source);
+  expect(f.setup("codex", "apply").actions[0]!.change).toBe("replace");
+  const dir = join(f.state, "setup"), receipt = join(dir, readdirSync(dir)[0]!);
+  const value = JSON.parse(readFileSync(receipt, "utf8"));
+  value.priorToml = ["[mcp_servers.vmem]", "command = "];
+  writeFileSync(receipt, JSON.stringify(value));
+  const installed = readFileSync(file, "utf8");
+  const action = f.setup("codex", "undo").actions[0]!;
+  expect(action.change).toBe("refused");
+  expect(action.reason).toMatch(/would not parse \(.+\); rewrite the vmem entry by hand as a \[mcp_servers\.vmem\] table, then rerun `vmem setup codex --undo`$/);
+  expect(readFileSync(file, "utf8")).toBe(installed);
+  expect(existsSync(receipt)).toBe(true);
+});
+
+test("inline-table advice applies only to a root mcp_servers value, not one under another table (#133)", () => {
+  const f = fixture(), file = f.files.codex!;
+  mkdirSync(join(file, ".."), { recursive: true });
+  writeFileSync(file, `[mcp_servers]\nvmem = { command = "/old", args = [] }\n\n[profiles.x]\nmcp_servers = { a = 1 }\n`);
+  const reason = f.setup("codex", "dry-run").actions[0]!.reason!;
+  expect(reason).toContain("rewrite the vmem entry by hand");
+  expect(reason).not.toContain("convert the inline");
+});

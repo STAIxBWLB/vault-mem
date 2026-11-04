@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `vmem setup codex` reads TOML table headers quote-aware, so a table such as `[mcp_servers."x]y"]` after the vmem table is no longer swallowed by apply. When the planned file would not parse, the refusal names the right fix: convert a root inline `mcp_servers = { ... }` to `[mcp_servers.<name>]` tables, and on undo rerun `vmem setup codex --undo` (#133).
+
 - Missing or invalid domain ids get a direct set-domain hint without echoing the value; undeclared ids keep their named refusal. L02 domain findings use the neighbouring Korean form, list the selected vault's allowed ids and point to its domains config (#128).
 
 - The console panel uses the kit's `ui.button` and `ui.notice(text, "err")`, which screen readers announce assertively, instead of its own button and error helpers; the truncated-body note is a polite warning. `@staix/agent-console` moves to 4c4c1e0 (#122).
