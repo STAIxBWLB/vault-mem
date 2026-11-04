@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-04
+
 - Git timeouts and signals are named accurately: `timed out after 60 s` for `vmem sync` and `1 s` for the console check (from Bun's `exitedDueToTimeout`), else `killed by <signal>`, each with its own next step (`check git -C <vault> status, then rerun vmem sync`, the same for `vmem doctor`, or `inspect the vault Git state in System`). `vmem sync` FETCH and PUSH issues with an empty stderr now say why and name a next step. The console sync alert names the staged paths from the same list sync stages (#143).
 
 - Docs: the README says an older agent-console loads the plugin but the panel fails with a TypeError on `host.ui`, fixed by upgrading agent-console, and the spec fixture README says the files need only be tracked, with a commit required only for verification-stamp cases (#142).
@@ -37,6 +39,8 @@
 - `vmem setup codex` replaces a vmem entry whose table header uses quoted or spaced keys (`["mcp_servers".vmem]`, `[mcp_servers."vmem"]`, `[ mcp_servers . vmem ]`) and its subtables in place instead of adding a second table and refusing. The dry run now renders and parses the planned file, so a refusal shows in the preview as it does on apply (#116).
 
 - Every CLI command prints text for people by default, following agent-hub's conventions: tables, field blocks, LEVEL/CHECK/FINDING checks with a verdict, one result line per write, and the exact confirm or next-page command after a preview or a cut-off read. Help is grouped into sections with a description per command, and `vmem help <command>` prints one command. `--color=auto|always|never` works everywhere and honors `NO_COLOR` and `TERM=dumb`. **Breaking for scripts:** the default output was pretty JSON and is now text, so pass `--json`, which prints the same compact JSON as before (#114).
+
+- N-1: Against 0.4.0, the derived index moves to `<sha>-links2-schema3.sqlite` (spec caches likewise), so each version keeps its own cache and the first 0.5.0 run builds it once. Configs with vault `domains` use format 3; 0.4.0 reads and preserves those newer-format fields but does not enforce extra domains. Note files remain Markdown/YAML, with new reference-only citekey/DOI/arXiv/authors/year/venue fields that 0.4.0 does not validate or author; use 0.5.0 for this metadata and extra-domain writes. Citekey uniqueness is ASCII case-insensitive in 0.5.0; retained legacy duplicates warn only on unrelated edits. Log line format is unchanged. CLI output now defaults to text: scripts must pass `--json` for structured output. Existing MCP tools remain available; reference metadata and the optional `vmem_graph_neighbors` `relation` parameter are additive, and graph wiki-link edges may add `rel`. The console `log` snapshot adds `cursor` and accepts `since`; older callers can omit `since` for the latest rows. These CLI and validation behavior changes require a minor release.
 
 ## [0.4.0] - 2026-11-04
 
