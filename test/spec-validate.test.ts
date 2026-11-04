@@ -32,10 +32,12 @@ function tree(root: string): unknown {
   });
 }
 
-test("schema contract fixture covers every listed error and warning class without source/config writes", () => {
-  const expected = JSON.parse(readFileSync(join(FIXTURES, "expected.json"), "utf8")) as Record<string, { errors: string[]; warnings: string[] }>;
-  for (const [name, classes] of Object.entries(expected)) {
-    const f = fixture(); cpSync(join(FIXTURES, name), f.repo, { recursive: true }); f.commit();
+const schemaCases = JSON.parse(readFileSync(join(FIXTURES, "expected.json"), "utf8")) as Record<string, { errors: string[]; warnings: string[] }>;
+// Give each contract case its own default test budget, as the CLI fixture matrix already does.
+for (const [name, classes] of Object.entries(schemaCases)) test(`schema contract fixture: ${name} preserves all error/warning classes without writes`, () => {
+    const f = fixture(); cpSync(join(FIXTURES, name), f.repo, { recursive: true });
+    // Paths checks need tracked files, not a commit or an unused HEAD lookup; history has dedicated freshness tests.
+    f.git(["add", "--", "."]);
     const before = tree(f.root), result = validateSpecRepo(f.repo, { env: { ...process.env, VMEM_HOME: f.home } });
     expect([...new Set(result.report.items.filter(item => item.severity === "error").map(item => item.code))].sort(), name).toEqual([...classes.errors].sort());
     expect([...new Set(result.report.items.filter(item => item.severity === "warning").map(item => item.code))].sort(), name).toEqual([...classes.warnings].sort());
@@ -45,7 +47,6 @@ test("schema contract fixture covers every listed error and warning class withou
     expect(tree(f.root), name).toEqual(before);
     expect(existsSync(f.home), name).toBe(false);
     expect(result).not.toHaveProperty("snapshot");
-  }
 });
 
 test("discovery candidate boundary preserves missing fields and ignores title-only or malformed ordinary Markdown", () => {

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Spec schema fixtures validate every error/warning class in separate default-budget tests and skip unused commit/HEAD setup, avoiding the aggregate macOS timeout. Git inspection failures now name the termination signal and 10-second inspection budget, including shorter parent/test timeouts (#137).
+
 - **Behaviour change:** citekey uniqueness now ignores ASCII case while preserving the stored case; retained legacy duplicates warn only on unrelated edits. Reference metadata enforces year-specific arXiv widths, names how to fix reference-only keys, and skips redundant DOI-normalization parsing without changing output (#134).
 
 - Inbox alerts show each org vault's uncommitted paths plus local commits ahead of its tracking ref, with a stable first-seen time and an Overview link. Checks stay local, bounded and cached for 60 seconds; one vault's Git failure is logged and skipped (#48).
