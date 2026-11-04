@@ -233,3 +233,13 @@ test("a planned TOML file that does not parse is refused by the dry run and by a
   expect(readFileSync(file, "utf8")).toBe(source);
   expect(existsSync(join(f.state, "setup"))).toBe(false);
 });
+
+test("escaped TOML keys of the entry's subtables are owned, so apply leaves no stale table and undo restores (#116)", () => {
+  const f = fixture(), file = f.files.codex!;
+  const source = `[mcp_servers.vmem]\ncommand = "/old"\nargs = []\n[mcp_servers."\\u0076mem"."\\U00000065nv"]\nA = "1"\n\n[other]\nkeep = 1\n`;
+  mkdirSync(join(file, ".."), { recursive: true }); writeFileSync(file, source);
+  expect(f.setup("codex", "apply").actions[0]!.change).toBe("replace");
+  expect((Bun.TOML.parse(readFileSync(file, "utf8")) as any).mcp_servers.vmem).toEqual(entry);
+  expect(f.setup("codex", "undo").actions[0]!.change).toBe("restore");
+  expect(readFileSync(file, "utf8")).toBe(source);
+});

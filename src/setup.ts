@@ -83,9 +83,18 @@ function tomlKey(name: string): string[] | undefined {
   while (part.lastIndex < name.length) {
     const m = part.exec(name);
     if (!m) return undefined;
-    try { parts.push(m[1] ?? m[3] ?? JSON.parse(`"${m[2]}"`)); } catch { return undefined; }
+    try { parts.push(m[1] ?? m[3] ?? tomlUnescape(m[2]!)); } catch { return undefined; }
   }
   return parts;
+}
+const TOML_ESCAPES: Record<string, string> = { b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", e: "\x1b", '"': '"', "\\": "\\" };
+/** A TOML basic-string body decoded: `\uXXXX`, `\UXXXXXXXX`, `\xHH` and the short escapes; any other escape throws. */
+function tomlUnescape(body: string): string {
+  return body.replace(/\\(?:u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|x([0-9A-Fa-f]{2})|(.))/g, (_, u, U, x, c) => {
+    if (u ?? U ?? x) return String.fromCodePoint(parseInt(u ?? U ?? x, 16));
+    if (c in TOML_ESCAPES) return TOML_ESCAPES[c]!;
+    throw new Error("invalid TOML escape");
+  });
 }
 /** Every table owned by the entry (`[mcp_servers.vmem]` and any `[mcp_servers.vmem.*]`), wherever it appears. */
 function tomlSpans(lines: string[]): [number, number][] {
