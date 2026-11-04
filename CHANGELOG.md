@@ -4,11 +4,17 @@
 
 - **Behaviour change:** citekey uniqueness now ignores ASCII case while preserving the stored case; retained legacy duplicates warn only on unrelated edits. Reference metadata enforces year-specific arXiv widths, names how to fix reference-only keys, and skips redundant DOI-normalization parsing without changing output (#134).
 
+- Inbox alerts show each org vault's uncommitted paths plus local commits ahead of its tracking ref, with a stable first-seen time and an Overview link. Checks stay local, bounded and cached for 60 seconds; one vault's Git failure is logged and skipped (#48).
+
+- `vmem setup codex` reads TOML table headers quote-aware, so a table such as `[mcp_servers."x]y"]` after the vmem table is no longer swallowed by apply. When the planned file would not parse, the refusal names the right fix: convert a root inline `mcp_servers = { ... }` to `[mcp_servers.<name>]` tables, and on undo rerun `vmem setup codex --undo` (#133).
+
+- Missing or invalid domain ids get a direct set-domain hint without echoing the value; undeclared ids keep their named refusal. L02 domain findings use the neighbouring Korean form, list the selected vault's allowed ids and point to its domains config (#128).
+
 - The console panel uses the kit's `ui.button` and `ui.notice(text, "err")`, which screen readers announce assertively, instead of its own button and error helpers; the truncated-body note is a polite warning. `@staix/agent-console` moves to 4c4c1e0 (#122).
 
 - The console panel builds every view from the agent-console panel kit (`host.ui`): lists use `ui.rows`/`ui.row`, so `j`/`k`/`Enter` work on them, and a note opens in `ui.detail`. The panel CSS uses only the kit's public classes and `--acon-*` tokens, and the `@staix/agent-console` devDependency moves to 5af4dcc, which has `ConsoleUi` (#57).
 
-- `vmem lint` and `vmem graph build` / `graph neighbors` name an option they do not take and where it applies (`graph build: --relation applies only to graph neighbors`) instead of `requires one vault id`; a wrong positional count keeps its message (#121).
+- `vmem lint` and `vmem graph build` / `graph neighbors` name an option they do not take and where it applies (`graph build: --relation applies only to graph neighbors`) instead of `requires one vault id`. `graph neighbors` now refuses `--dry-run`, which it used to accept and ignore. A wrong positional count keeps its message (#121, #127).
 
 - `vmem graph build` keeps the relation of `- [[x]] (relation)` lines from `vmem link --relation` as `rel` on the `wiki_link` edge, and `vmem graph neighbors --relation` / `vmem_graph_neighbors` `relation` follow only edges of one relation (`wiki_link` for untyped links); an unknown relation is refused. Node and edge sets are unchanged (#74).
 

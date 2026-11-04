@@ -246,7 +246,7 @@ vmem promote-from-amem personal mem:<id> --link-to existing-note  # link an exis
 `vmem setup <target> --apply` also writes `$AGENTHUB_HOME/console/plugins/vmem.json` (default `~/.agenthub`; directory 0700, file 0600) with the absolute path and sha256 of `src/ui/plugin.ts`. `acon ui` then shows a Vault area. Re-run setup after upgrading vmem: acon refuses a module whose hash changed.
 
 - Panels: Overview (vaults, maps, recent log), Search, Note (body, links, actions), Promote (agent-mem candidates), Lint (typed findings linked to notes) and Log (parsed rows).
-- Inbox: promotion candidates (group `candidate`), lint errors and a stale graph report (group `alert`). The palette searches notes.
+- Inbox: promotion candidates (group `candidate`), lint errors, a stale graph report and org-vault sync pending (group `alert`). Sync pending counts uncommitted paths plus local commits ahead of the upstream tracking ref; without an upstream it counts only uncommitted paths. It reads local Git state only (no fetch or credential prompt), caches each vault result or failure for 60 seconds, and opens Overview with that vault, with no one-key sync verb. The palette searches notes.
 - Actions: `delete`, `move`, `promote` (to an org vault) and `promote-from-amem` reuse the two-step MCP tools. Each first answers a preview with the planned changes; the write happens only after the console's confirm dialog, and only while the fingerprint still matches.
 - The provider calls the `vmem mcp` handlers in process, so the console has exactly the MCP rights: writes need a vault with `write: mcp`, and log lines carry the agent attribution.
 - The module is exported as `@staix/vault-mem/ui-plugin`. Lint results are cached for 60 seconds per vault.
