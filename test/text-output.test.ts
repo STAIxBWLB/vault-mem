@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fields, issueTable, outputWidth, paint, PLAIN, resolveColor, shellWord, table, takeColorFlag, textOptions, tone, wrap } from "../src/text-output.ts";
 import { run } from "../src/cli.ts";
 
@@ -39,4 +42,21 @@ test("fields align labels, skip empty values and hang wrapped values; issues sor
   expect(issueTable([], PLAIN)).toBeUndefined();
   expect(shellWord("notes/a.md")).toBe("notes/a.md");
   expect(shellWord("it's here")).toBe(`'it'"'"'s here'`);
+});
+
+test("#114 the executable dispatches on the command even when --color comes first", async () => {
+  const bin = join(import.meta.dir, "..", "bin", "vmem.js"), home = mkdtempSync(join(tmpdir(), "vmem-color-"));
+  try {
+    const env = { ...process.env, VMEM_HOME: home, NO_COLOR: "" };
+    const skills = Bun.spawnSync([process.execPath, bin, "--color=never", "skills", "mine", "absent"], { env, stdout: "pipe", stderr: "pipe" });
+    expect(skills.stderr.toString()).not.toContain("unknown command");
+    const bad = Bun.spawnSync([process.execPath, bin, "--color=loud", "status"], { env, stdout: "pipe", stderr: "pipe" });
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stderr.toString()).toContain("--color=auto");
+    const mcp = Bun.spawn([process.execPath, bin, "--color=never", "mcp"], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } }) + "\n");
+    mcp.stdin.end();
+    const out = await new Response(mcp.stdout).text();
+    expect(JSON.parse(out.trim().split("\n")[0]!).result.serverInfo.name).toBe("vmem");
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });

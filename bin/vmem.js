@@ -5,8 +5,14 @@ if (!version || Number(version[1]) < 1 || (Number(version[1]) === 1 && (Number(v
   process.exit(1);
 }
 const { main, mainAsync, runMcp } = await import("../src/cli.ts");
-if (process.argv.length === 3 && process.argv[2] === "mcp") {
+const { resolveColor, takeColorFlag } = await import("../src/text-output.ts");
+const argv = process.argv.slice(2);
+// `--color=` may stand anywhere, so the dispatch looks at the words without it; main/mainAsync take it off again.
+let words;
+try { const taken = takeColorFlag(argv); resolveColor(taken.color, { isTTY: false }); words = taken.args; }
+catch (error) { console.error(`vmem: ${error instanceof Error ? error.message : "invalid --color"}`); process.exit(1); }
+if (words.length === 1 && words[0] === "mcp") {
   try { await runMcp(); }
   catch (error) { console.error(`vmem mcp: ${error instanceof Error ? error.message : "failed"}`); process.exitCode = 1; }
-} else if (process.argv[2] === "promote-from-amem" || process.argv[2] === "skills") process.exitCode = await mainAsync(process.argv.slice(2));
-else process.exitCode = main(process.argv.slice(2));
+} else if (words[0] === "promote-from-amem" || words[0] === "skills") process.exitCode = await mainAsync(argv);
+else process.exitCode = main(argv);
