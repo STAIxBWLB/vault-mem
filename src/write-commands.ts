@@ -10,6 +10,7 @@ import type { LogEvent } from "./log-types.ts";
 import { LOG_EVENT_SCHEMA } from "./log-format.ts";
 import { argumentError } from "./mcp.ts";
 import { parseTidyMap, tidyVault, TIDY_RULES } from "./tidy.ts";
+import { PLAIN, type TextOptions } from "./text-output.ts";
 const COMMANDS = new Set(["new", "patch", "append", "frontmatter", "link", "supersede", "move", "delete", "tidy", "report", "check"]);
 export function isWriteCommand(command: string): boolean { return COMMANDS.has(command); }
 function object(text: string, label: string): Record<string, unknown> {
@@ -41,7 +42,7 @@ function logOption(text: string | undefined): { log?: LogEvent } {
   if (error) throw new Error(`${error}; expected {"type", "project", "source", "note"[, "dest"]} as for log append`);
   return { log: value as LogEvent };
 }
-export function runWriteCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
+export function runWriteCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv = process.env, text: TextOptions = PLAIN): { text: string; code: number } {
   const valueOptions: Record<string, string[]> = {
     new: ["--type", "--domain", "--topics", "--description", "--title", "--source", "--confidence", "--status", "--extra", "--body"],
     patch: ["--old", "--new", "--edits", "--expected-sha"], append: ["--section", "--markdown", "--expected-sha"],

@@ -2,8 +2,9 @@ import { analysisInput } from "./analysis-input.ts";
 import { lintVault } from "./vault-lint.ts";
 import { buildGraph, graphNeighbors } from "./vault-graph.ts";
 import { writeAnalysisReports } from "./analysis-reports.ts";
+import { PLAIN, type TextOptions } from "./text-output.ts";
 
-export function runAnalysisCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
+export function runAnalysisCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv = process.env, text: TextOptions = PLAIN): { text: string; code: number } {
   const values: Record<string,string> = {}, flags = new Set<string>(), positional: string[] = [];
   for (let i=0;i<args.length;i++) {
     const word = args[i]!;

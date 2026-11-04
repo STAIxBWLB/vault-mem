@@ -4,6 +4,7 @@ import { executeSpecCommand } from "./spec-commands.ts";
 import { validateSpecRepo } from "./spec-validate.ts";
 import { resolveHome } from "./home.ts";
 import { loadRegistry } from "./registry.ts";
+import { PLAIN, type TextOptions } from "./text-output.ts";
 
 /** Spec tool definitions; every spec tool is read-only. */
 export const specTools = (): McpTool[] => SPEC_COMMANDS.map(item => ({ name: item.name, description: item.description, inputSchema: item.inputSchema,
@@ -26,7 +27,7 @@ export function createSpecMcp(home: string, env: NodeJS.ProcessEnv = process.env
 }
 
 /** Parse with the same bounded field schemas as MCP. --repo deliberately bypasses home resolution. */
-export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
+export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.env, text: TextOptions = PLAIN): { text: string; code: number } {
   const item = SPEC_COMMANDS.find(entry => entry.command === args[0]);
   if (!item) throw new Error("spec: unknown command; use vmem spec --help");
   const values: Record<string, unknown> = {}, positional: string[] = [];

@@ -1,8 +1,9 @@
 import { loadRegistry } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
+import { PLAIN, type TextOptions } from "./text-output.ts";
 const READ_COMMANDS = new Set(["rebuild", "search", "show", "links"]);
 export function isReadCommand(command: string): boolean { return READ_COMMANDS.has(command); }
-export function runReadCommand(command: string, args: string[], home: string): { text: string; code: number } {
+export function runReadCommand(command: string, args: string[], home: string, text: TextOptions = PLAIN): { text: string; code: number } {
   const options: Record<string, string | boolean> = {}, positional: string[] = [];
   const allowed = command === "search" ? ["--limit", "--type", "--domain"] : command === "show" ? ["--max-bytes", "--section", "--offset"] : command === "links" ? ["--limit"] : [];
   for (let i = 0; i < args.length; i++) {

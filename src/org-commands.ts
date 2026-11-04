@@ -1,5 +1,6 @@
 import { promoteToOrg } from "./org-promote.ts";
 import { syncVault } from "./sync.ts";
+import { PLAIN, type TextOptions } from "./text-output.ts";
 
 function parse(command: string, args: string[], values: string[], booleans: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
@@ -15,7 +16,7 @@ function parse(command: string, args: string[], values: string[], booleans: stri
   return { flags, positional, value: (name: string) => typeof flags[name] === "string" ? flags[name] as string : undefined };
 }
 /** `vmem promote <vault> <note> --to <org>` and `vmem sync <vault>`: both preview unless `--confirm --fingerprint`. */
-export function runOrgCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv): { text: string; code: number } {
+export function runOrgCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv, text: TextOptions = PLAIN): { text: string; code: number } {
   if (command === "promote") {
     const { flags, positional, value } = parse(command, args, ["--to", "--topics", "--fingerprint", "--log-project"], ["--again", "--confirm", "--json"]);
     if (positional.length !== 2 || !value("--to")) throw new Error("promote: requires personal vault id, note and --to <org vault>");

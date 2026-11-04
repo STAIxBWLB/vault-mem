@@ -1,6 +1,7 @@
 import { appendLog, readLog } from "./vault-log.ts";
 import type { LogEvent } from "./log-types.ts";
-export function runLogCommand(args: string[], home: string, env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
+import { PLAIN, type TextOptions } from "./text-output.ts";
+export function runLogCommand(args: string[], home: string, env: NodeJS.ProcessEnv = process.env, text: TextOptions = PLAIN): { text: string; code: number } {
   const command = args[0];
   if (!["tail", "grep", "append"].includes(command ?? "")) throw new Error("log: use tail, grep or append");
   const positional: string[] = [], flags: Record<string, string | boolean> = {};

@@ -6,6 +6,7 @@ import { loadRegistry } from "./registry.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { MAX_WRITE_BYTES } from "./writer.ts";
 import { listPromotionCandidates, promoteFromAmem, type PromoteRequest } from "./promote.ts";
+import { PLAIN, type TextOptions } from "./text-output.ts";
 
 const VALUES = ["--project", "--limit", "--stem", "--type", "--domain", "--topics", "--description", "--title", "--body", "--link-to", "--log-project", "--fingerprint"];
 const BOOLEANS = ["--all-projects", "--edit", "--confirm", "--json"];
@@ -35,7 +36,7 @@ function editBody(draft: string, env: NodeJS.ProcessEnv, stdinIsTTY: boolean): s
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 /** `vmem promote-from-amem <vault> [<mem-id>] ...`: lists candidates, previews, or confirms one promotion. */
-export async function runPromoteCommand(args: string[], home: string, env: NodeJS.ProcessEnv, io: { stdinIsTTY?: boolean } = {}): Promise<{ text: string; code: number }> {
+export async function runPromoteCommand(args: string[], home: string, env: NodeJS.ProcessEnv, io: { stdinIsTTY?: boolean } = {}, text: TextOptions = PLAIN): Promise<{ text: string; code: number }> {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;

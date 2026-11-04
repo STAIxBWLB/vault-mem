@@ -16,6 +16,7 @@ import { resolveHome } from "./home.ts";
 import { addVault, addSpec, removeSpec, specStatus, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault, setVaultPii } from "./registry.ts";
 import { piiPolicy } from "./pii.ts";
 import { vaultStats } from "./vault-stats.ts";
+import { PLAIN, takeColorFlag, textOptions, type TextOptions } from "./text-output.ts";
 function parse(args: string[], allowed: string[], values: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -38,7 +39,12 @@ function commandHelp(args: string[]): string | undefined {
   const commands = COMMANDS.filter(command => command.name === name || command.name.startsWith(name + " "));
   return commands.length ? commands.map(command => `Usage: vmem ${command.usage}`).join("\n") : undefined;
 }
+/** Runs one command; `--color=auto|always|never` is taken off first and decides the text options for stdout. */
 export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { text: string; code: number } {
+  const taken = takeColorFlag(args);
+  return runWith(taken.args, env, textOptions(taken.color, env));
+}
+function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLAIN): { text: string; code: number } {
   if (!args.length || (args.length === 1 && ["--help", "-h", "help"].includes(args[0]!))) return { text: help(), code: 0 };
   const usage = commandHelp(args);
   if (usage) return { text: usage, code: 0 };
@@ -63,12 +69,12 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
     if (args.length !== 2) throw new Error("completion: requires bash, zsh or fish");
     return { text: completionScript(args[1]!).trimEnd(), code: 0 };
   }
-  if (args[0] === "spec") return runSpecCommand(args.slice(1), env);
-  if (args[0] === "lint" || args[0] === "graph") return runAnalysisCommand(args[0],args.slice(1),resolveHome(env).home,env);
-  if (args[0] === "promote" || args[0] === "sync") return runOrgCommand(args[0], args.slice(1), resolveHome(env).home, env);
-  if (args[0] === "log") return runLogCommand(args.slice(1), resolveHome(env).home, env);
-  if (isWriteCommand(args[0]!)) return runWriteCommand(args[0]!, args.slice(1), resolveHome(env).home, env);
-  if (isReadCommand(args[0]!)) return runReadCommand(args[0]!, args.slice(1), resolveHome(env).home);
+  if (args[0] === "spec") return runSpecCommand(args.slice(1), env, text);
+  if (args[0] === "lint" || args[0] === "graph") return runAnalysisCommand(args[0],args.slice(1),resolveHome(env).home,env,text);
+  if (args[0] === "promote" || args[0] === "sync") return runOrgCommand(args[0], args.slice(1), resolveHome(env).home, env, text);
+  if (args[0] === "log") return runLogCommand(args.slice(1), resolveHome(env).home, env, text);
+  if (isWriteCommand(args[0]!)) return runWriteCommand(args[0]!, args.slice(1), resolveHome(env).home, env, text);
+  if (isReadCommand(args[0]!)) return runReadCommand(args[0]!, args.slice(1), resolveHome(env).home, text);
   const group = args[0] === "vaults" || args[0] === "specs";
   const command = group ? `${args[0]} ${args[1] ?? ""}` : args[0];
   const tail = args.slice(group ? 2 : 1);
@@ -183,16 +189,17 @@ export async function runMcp(env: NodeJS.ProcessEnv = process.env): Promise<void
   await serveMcp({ tools: server.tools, handlers: server.handlers, name: "vmem", version });
 }
 /** Async commands. Only `promote-from-amem` and `skills mine` load the agent-mem seam, and only when they run. */
-export async function runAsync(args: string[], env: NodeJS.ProcessEnv = process.env, io: { stdinIsTTY?: boolean } = {}): Promise<{ text: string; code: number }> {
+export async function runAsync(argv: string[], env: NodeJS.ProcessEnv = process.env, io: { stdinIsTTY?: boolean } = {}): Promise<{ text: string; code: number }> {
+  const taken = takeColorFlag(argv), args = taken.args, text = textOptions(taken.color, env);
   const usage = commandHelp(args);
   if (usage) return { text: usage, code: 0 };
   if (args[0] === "skills") {
     const { runSkillsCommand } = await import("./skills-mine.ts");
-    return runSkillsCommand(args.slice(1), resolveHome(env).home, env);
+    return runSkillsCommand(args.slice(1), resolveHome(env).home, env, text);
   }
-  if (args[0] !== "promote-from-amem") return run(args, env);
+  if (args[0] !== "promote-from-amem") return runWith(args, env, text);
   const { runPromoteCommand } = await import("./promote-command.ts");
-  return runPromoteCommand(args.slice(1), resolveHome(env).home, env, io);
+  return runPromoteCommand(args.slice(1), resolveHome(env).home, env, io, text);
 }
 export async function mainAsync(args: string[]): Promise<number> {
   try { const output = await runAsync(args, process.env, { stdinIsTTY: process.stdin.isTTY === true }); console.log(output.text); return output.code; }
