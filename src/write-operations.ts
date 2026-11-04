@@ -119,12 +119,20 @@ function bodyAlreadyLinks(notes:Map<string,string>,from:string,to:string):boolea
   }catch{ /* Unrelated malformed legacy YAML cannot resolve an alias. */ }
   return resolveLinks(metadata,new Map([[from,references]])).some(link=>link.source===from&&link.resolved===to);
 }
+/** Conservative lexical fast path; escaped, tagged or anchored YAML keys still take semantic parsing. */
+function mayHaveDoi(source: string): boolean {
+  const closing = /^(?:---|\.\.\.)[ \t]*\r?$/gm;
+  closing.lastIndex = source.indexOf("\n") + 1;
+  const header = source.slice(0, closing.exec(source)?.index ?? source.length);
+  return /(?:^|[{\n,])[ \t]*(?:doi|["']doi["'])[ \t]*:|[\\!&*?]/.test(header);
+}
 /** Plan transformations in memory. This function never touches files. */
 export function planOperation(operation: WriteOp, notes: Map<string, string>, reportBefore?: string | null): PlannedChange[] {
   const planned = new Map<string, PlannedChange>();
   const set = (path: string, after: string | null) => {
     const before = notes.get(path) ?? (operation.op === "report" ? reportBefore ?? null : null);
-    if (after !== null && operation.op !== "report") {
+    if (after === before) return;
+    if (after !== null && operation.op !== "report" && mayHaveDoi(after)) {
       try {
         const previousText = operation.op === "move" && path === notePath(operation.to)
           ? needed(notes, moveSourcePath(operation.from, notes)) : before;
@@ -194,6 +202,8 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
       for (const key of operation.unset ?? []) changes[key] = undefined;
       try {
         const before = document(source, path);
+        // An explicit equal legacy DOI assignment still canonicalizes before the unchanged-text fast path.
+        if ((Object.hasOwn(changes, "type") ? changes.type : before.data.type) === "reference" && typeof changes.doi === "string") changes.doi = changes.doi.toLowerCase();
         let after = emitFrontmatter(before, normalizedSourceChanges(changes));
         if (Object.hasOwn(operation.set, "topics") && !isDeepStrictEqual(changes.topics, before.data.topics) && Array.isArray(changes.topics) && changes.topics.every((value): value is string => typeof value === "string")) {
           const doc = document(after, path);
