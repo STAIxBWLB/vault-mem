@@ -45,6 +45,10 @@ const cell = (value: CellInput): Cell => typeof value === "object" && value !== 
 /** Control characters (terminal escapes, tabs, newlines) never reach the terminal from data. */
 export const clean = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
 export const width = (text: string) => Bun.stringWidth(text);
+/** Note and spec bodies printed as is, minus terminal escape sequences (OSC, CSI, C1) and control characters other than tab and newline. */
+export const stripTerminal = (text: string) => text
+  .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b\[[0-?]*[ -/]*[@-~]?|\u009b[0-?]*[ -/]*[@-~]?|\u001b[^[\]]?/g, "")
+  .replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
 export function paint(text: string, tone: Tone | undefined, o: TextOptions): string {
   return o.color && tone && text ? `\u001b[${CODES[tone]}m${text}\u001b[0m` : text;
 }
@@ -113,4 +117,4 @@ export function issueTable(issues: readonly WriteIssue[], o: TextOptions): strin
 /** The command a person runs next, for example to confirm a preview or read the next page. */
 export const nextCommand = (label: string, command: string, o: TextOptions) => `${label}: ${paint(clean(command), "info", o)}`;
 /** Quotes one shell word only when it needs it, so a printed command can be pasted. */
-export const shellWord = (word: string) => /^[A-Za-z0-9_./:=@%+,-]+$/.test(word) ? word : `'${word.replace(/'/g, `'"'"'`)}'`;
+export const shellWord = (word: string) => /^[\p{L}\p{N}_./:=@%+,-]+$/u.test(word) ? word : `'${word.replace(/'/g, `'"'"'`)}'`;

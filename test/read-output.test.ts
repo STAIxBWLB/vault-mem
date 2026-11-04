@@ -1,3 +1,4 @@
+import { stripTerminal } from "../src/text-output.ts";
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,7 +12,7 @@ import { lintDetails, lintVault } from "../src/vault-lint.ts";
 import { buildGraph, graphNeighbors } from "../src/vault-graph.ts";
 import { analysisCorpus } from "./fixtures/analysis-corpus.ts";
 import { PLAIN } from "../src/text-output.ts";
-import { analysisWriteText, linksText, lintText, logAppendText, logReadText, neighborsText, rebuildText, searchText, showText, stripEscapes } from "../src/read-output.ts";
+import { analysisWriteText, linksText, lintText, logAppendText, logReadText, neighborsText, rebuildText, searchText, showText } from "../src/read-output.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -39,7 +40,7 @@ test("#114 search: one hit per row with its snippet beneath, a count line and th
     "beta.md   Beta            method",
     "",
     "2 results for \"lanterns\"",
-    "more: vmem search demo lanterns --type method --limit 4",
+    "next: vmem search demo lanterns --type method --limit 4",
   ].join("\n"));
   expect(searchText(hits, PLAIN, { vault: "demo", query: "two words", limit: 50 })).not.toContain("more:");
   expect(searchText([], PLAIN, { vault: "demo", query: "none", limit: 50 })).toBe("0 results for \"none\"");
@@ -67,17 +68,17 @@ test("#114 show: title line, fields, the body as is without escapes, and for a t
     "  Second",
     "  ... more headings",
   ].join("\n"));
-  expect(stripEscapes("a\u001b[2Kb\u009b31mc\u001bcd\u0008e\tf")).toBe("abcde\tf");
+  expect(stripTerminal("a\u001b[2Kb\u009b31mc\u001bcd\u0008e\tf")).toBe("abcde\tf");
 });
 
 test("#114 links, log, rebuild and neighbours render tables, counts and next commands", () => {
   const link = (target: string, resolved: string | null, reason: "missing-note" | null, heading: string | null = null) => ({ target, label: null, heading, block: null, embed: false, line: 3, source: "alpha.md", resolved, reason });
   expect(linksText([link("beta", "beta.md", null, "First"), link("missing", null, "missing-note")], PLAIN, { vault: "demo", target: "alpha", limit: 2 })).toBe([
-    "OUT", "TARGET      RESOLVED      LINE", "beta#First  beta.md       3", "missing     missing-note  3", "", "2 links from alpha.md", "more: vmem links demo alpha --limit 4",
+    "OUT", "TARGET      RESOLVED      LINE", "beta#First  beta.md       3", "missing     missing-note  3", "", "2 links from alpha.md", "next: vmem links demo alpha --limit 4",
   ].join("\n"));
   const read = { ok: true, lines: ["2026-11-02 10:00  CONNECT  -  synthetic  — second"], dataLines: 2, warnings: ["incomplete final log line omitted"], issues: [] };
   expect(logReadText(read, PLAIN, { command: "grep", vault: "demo", pattern: "sec ond", limit: 1 })).toBe([
-    "2026-11-02 10:00  CONNECT  -  synthetic  — second", "", "1 line (log has 2)", "more: vmem log grep demo 'sec ond' --limit 2", "", "warning: incomplete final log line omitted",
+    "2026-11-02 10:00  CONNECT  -  synthetic  — second", "", "1 line (log has 2)", "next: vmem log grep demo 'sec ond' --limit 2", "", "warning: incomplete final log line omitted",
   ].join("\n"));
   expect(logAppendText({ ok: true, appended: true, synced: true, bytesWritten: 53, issues: [] }, PLAIN, { vault: "demo", type: "LEARN" })).toBe("appended LEARN to the demo log (53 bytes)");
   expect(logAppendText({ ok: false, appended: false, synced: false, bytesWritten: 0, issues: [{ code: "L09", severity: "error", message: "bad" }] }, PLAIN, { vault: "demo", type: "LEARN" }))
@@ -86,7 +87,7 @@ test("#114 links, log, rebuild and neighbours render tables, counts and next com
   const node = (id: string) => ({ id, label: id.toUpperCase(), type: "method", domain: "", source_file: `notes/${id}.md`, community: 0, degree: 1 });
   const edge = (source: string, target: string) => ({ source, target, relation: "wiki_link" as const, confidence_tag: "EXTRACTED" as const, confidence: 1 as const });
   expect(neighborsText({ start: "a", hops: 2, nodes: [node("a"), node("c"), node("b")], edges: [edge("b", "c"), edge("a", "b")], truncated: true }, PLAIN, { vault: "demo", limit: 3 })).toBe([
-    "NOTE  HOPS  RELATION   TITLE", "b     1     wiki_link  B", "c     2     wiki_link  C", "", "2 neighbours of a within 2 hops", "more: vmem graph neighbors demo a --hops 2 --limit 6",
+    "NOTE  HOPS  RELATION   TITLE", "b     1     wiki_link  B", "c     2     wiki_link  C", "", "2 neighbours of a within 2 hops", "next: vmem graph neighbors demo a --hops 2 --limit 6",
   ].join("\n"));
 });
 

@@ -8,7 +8,7 @@ import type { SpecEdge, SpecNode } from "./spec-graph.ts";
 import type { SpecFreshnessEntry } from "./spec-freshness.ts";
 import type { SpecValidationIssue, SpecValidationReport } from "./spec-validate.ts";
 import type { SpecDiagnostic } from "./spec-source.ts";
-import { blocks, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions } from "./text-output.ts";
+import { blocks, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
 
 /** What the renderers need from the command line: the spec arguments (`get root --body`) and their parsed values. */
 export interface SpecTextContext { args: readonly string[]; values: Record<string, unknown>; repo?: string }
@@ -23,8 +23,6 @@ export interface SpecGrepHit { id: string; path: string; title: string; type: st
 export interface SpecGrepResult { source: string; worktree: string; hits: SpecGrepHit[]; offset: number; truncated: boolean; nextOffset?: number }
 export type SpecValidateResult = SpecValidationReport & { source?: string; worktree?: string };
 
-/** Body text keeps newlines and tabs; escape sequences and other control characters are removed. */
-export const bodyText = (text: string) => text.replace(/\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
 const value = (data: unknown): string => typeof data === "string" ? data : Array.isArray(data) ? data.map(value).join(", ") : data === undefined || data === null ? "" : JSON.stringify(data);
 const statusTone = (status: string | undefined): CellInput => status === "active" ? tone(status, "ok") : status === "deprecated" ? tone(status, "warn") : status ?? "-";
 const counted = (shown: number, total: number) => shown < total ? ` (${shown} of ${total})` : "";
@@ -53,9 +51,9 @@ export function renderSpecGet(r: SpecGetResult, o: TextOptions, context: SpecTex
     ["section", r.section], ["offset", r.offset],
     ["sections", r.headings?.length ? r.headings.join(", ") + (r.headingsTruncated ? ", ..." : "") : undefined],
   ], o);
-  const body = r.body === undefined ? undefined : bodyText(r.body).replace(/\n+$/, "");
+  const body = r.body === undefined ? undefined : stripTerminal(r.body).replace(/\n+$/, "");
   return blocks(heading(`spec ${r.id}${title ? `: ${title}` : ""}`, o), info, issueTable(r.freshnessIssues, o), body,
-    r.bodyTruncated && r.nextOffset !== undefined && nextCommand("next page", offsetCommand(context.args, r.nextOffset), o));
+    r.bodyTruncated && r.nextOffset !== undefined && nextCommand("next", offsetCommand(context.args, r.nextOffset), o));
 }
 
 /** The slice as a table in breadth-first order from the root: DEPTH and EDGE say how each node was reached. */
@@ -88,10 +86,10 @@ export function renderSpecGraph(r: SpecGraphResult, o: TextOptions, context: Spe
 export function renderSpecGrep(r: SpecGrepResult, o: TextOptions, context: SpecTextContext): string {
   if (!r.hits.length) return paragraph(r.offset ? `no more hits after offset ${r.offset}` : "no specs matched", o);
   const lines = table(["ID", "TYPE", "STATUS", "TITLE"], r.hits.map(hit => [tone(hit.id, "info"), hit.type || "-", statusTone(hit.status), hit.title]), { color: o.color }).split("\n");
-  const body = [lines[0]!, ...r.hits.flatMap((hit, i) => [lines[i + 1]!, paragraph(bodyText(hit.snippet).replace(/\s+/g, " ").trim(), o, "muted", "  ")])].join("\n");
+  const body = [lines[0]!, ...r.hits.flatMap((hit, i) => [lines[i + 1]!, paragraph(stripTerminal(hit.snippet).replace(/\s+/g, " ").trim(), o, "muted", "  ")])].join("\n");
   const range = r.offset || r.truncated ? `hits ${r.offset + 1}-${r.offset + r.hits.length}` : plural(r.hits.length, "hit");
   return blocks(body, [paragraph(range + (r.truncated ? ", more remain" : ""), o),
-    r.truncated && r.nextOffset !== undefined && nextCommand("next page", offsetCommand(context.args, r.nextOffset), o)].filter(Boolean).join("\n"));
+    r.truncated && r.nextOffset !== undefined && nextCommand("next", offsetCommand(context.args, r.nextOffset), o)].filter(Boolean).join("\n"));
 }
 
 const finding = (item: { path: string; field?: string; target?: string; firstPath?: string; message: string }) =>

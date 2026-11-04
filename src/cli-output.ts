@@ -19,7 +19,7 @@ export interface Manifest { name: string; version: string; configVersion: number
 
 const OK = tone("ok", "ok"), WARN = tone("warn", "warn"), FAIL = tone("fail", "fail");
 const homeLine = (r: StatusResult, o: TextOptions) => `${heading(`vmem ${r.version}`, o)}  home ${clean(r.home)} (${r.source})`;
-const NO_VAULTS = "No vaults registered; add one with vmem vaults add <id> <absolute-path> --kind personal|org --write mcp|cli|none.";
+const NO_VAULTS = "no vaults registered; add one with vmem vaults add <id> <absolute-path> --kind personal|org --write mcp|cli|none";
 
 export function renderStatus(r: StatusResult, o: TextOptions): string {
   const title = `${homeLine(r, o)}  ${r.healthy ? paint("healthy", "ok", o) : paint("unhealthy", "fail", o)}`;
@@ -43,7 +43,7 @@ export function renderDoctor(r: StatusResult, o: TextOptions): string {
       rows.push([check.ok ? OK : FAIL, name, check.ok ? (name === "remote" ? v.remote : name === "registry" ? v.registry : "ok") : check.issue]);
     }
     if (v.tidy) rows.push([WARN, "tidy", tidyFinding(v.tidy)]);
-    const next = v.tidy ? `\n${nextCommand("Next", `vmem tidy ${shellWord(v.id)} --all`, o)}, then confirm its fingerprint to apply the migration` : "";
+    const next = v.tidy ? `\n${nextCommand("next", `vmem tidy ${shellWord(v.id)} --all`, o)}, then confirm its fingerprint to apply the migration` : "";
     return `${heading(`Vault ${v.id}`, o)}\n${table(["LEVEL", "CHECK", "FINDING"], rows, o)}${next}`;
   });
   const specs = (r.specs ?? []).map(s => {
@@ -71,14 +71,14 @@ export function renderStats(r: VaultStats, o: TextOptions): string {
 export function renderRecover(r: RecoveryReport, o: TextOptions): string {
   const owner = r.lock.owner ? `pid ${r.lock.owner.pid} on ${r.lock.owner.host} since ${r.lock.owner.created}` : undefined;
   const detail = fields([["lock", r.lock.path], ["state", r.lock.state], ["owner", owner], ["temporary files", r.temporaryFiles.join(", ")]], o);
-  if (r.blocked) return blocks(paragraph(`Recovery blocked: ${r.blocked}`, o, "fail"), detail);
+  if (r.blocked) return blocks(paragraph(`recovery blocked: ${r.blocked}`, o, "fail"), detail);
   if (r.applied) {
     const done = [r.lock.removed ? "the stale registry lock" : "", r.removedTemporaryFiles.length ? plural(r.removedTemporaryFiles.length, "temporary config file") : ""].filter(Boolean);
-    return paragraph(done.length ? `Recovered: removed ${done.join(" and ")}.` : "Nothing to recover: no stale lock and no temporary config files.", o, done.length ? "ok" : undefined);
+    return paragraph(done.length ? `recovered: removed ${done.join(" and ")}` : "nothing to recover: no stale lock and no temporary config files", o, done.length ? "ok" : undefined);
   }
   const work = [r.lock.state === "stale" ? "the stale registry lock" : "", r.temporaryFiles.length ? plural(r.temporaryFiles.length, "temporary config file") : ""].filter(Boolean);
-  if (!work.length) return paragraph("Nothing to recover: no stale lock and no temporary config files.", o);
-  return blocks(paragraph(`Would remove ${work.join(" and ")}.`, o), detail, nextCommand("Confirm", "vmem recover --confirm", o));
+  if (!work.length) return paragraph("nothing to recover: no stale lock and no temporary config files", o);
+  return blocks(paragraph(`dry run: would remove ${work.join(" and ")}`, o), detail, nextCommand("confirm", "vmem recover --confirm", o));
 }
 
 export function renderVaultsList(vaults: VaultRow[], o: TextOptions): string {
@@ -86,21 +86,21 @@ export function renderVaultsList(vaults: VaultRow[], o: TextOptions): string {
 }
 export function renderVaultAdd(r: { vault: VaultSpec }, o: TextOptions): string {
   const v = r.vault;
-  return paragraph(`Registered vault ${v.id}: ${v.kind}, write ${v.write}, PII ${effectivePii(v)}, at ${v.path}.`, o, "ok");
+  return paragraph(`registered vault ${v.id}: ${v.kind}, write ${v.write}, PII ${effectivePii(v)}, at ${v.path}`, o, "ok");
 }
 export function renderSpecsList(specs: SpecSourceSpec[], o: TextOptions): string {
   return specs.length ? table(["SOURCE", "WRITE", "PII", "PATH"], specs.map(s => [s.id, s.write, s.pii, s.path]), o)
-    : paragraph("No spec sources registered; add one with vmem specs add <id> <absolute-path>.", o);
+    : paragraph("no spec sources registered; add one with vmem specs add <id> <absolute-path>", o);
 }
 export function renderSpecAdd(r: { spec: SpecSourceSpec }, o: TextOptions): string {
-  return paragraph(`Registered spec source ${r.spec.id}: write ${r.spec.write}, PII ${r.spec.pii}, at ${r.spec.path}.`, o, "ok");
+  return paragraph(`registered spec source ${r.spec.id}: write ${r.spec.write}, PII ${r.spec.pii}, at ${r.spec.path}`, o, "ok");
 }
 /** `vaults remove` and `specs remove`: unregistering only, so the files are always said to stay. */
 export function renderRemove(group: "vaults" | "specs", r: { applied: boolean; vault?: { id: string; path: string }; spec?: { id: string; path: string } }, o: TextOptions): string {
   const entry = (r.vault ?? r.spec)!, what = `${group === "vaults" ? "vault" : "spec source"} ${entry.id} at ${entry.path}`;
   const stays = group === "vaults" ? "its files stay on disk" : "the repository stays on disk";
-  if (r.applied) return paragraph(`Unregistered ${what}; ${stays}.`, o, "ok");
-  return blocks(paragraph(`Would unregister ${what}; ${stays}.`, o), nextCommand("Confirm", `vmem ${group} remove ${shellWord(entry.id)} --confirm`, o));
+  if (r.applied) return paragraph(`unregistered ${what}; ${stays}`, o, "ok");
+  return blocks(paragraph(`dry run: would unregister ${what}; ${stays}`, o), nextCommand("confirm", `vmem ${group} remove ${shellWord(entry.id)} --confirm`, o));
 }
 
 export interface PiiResult { vault: string; pii: string; piiPolicy: PiiMatrix; applied?: boolean; changed?: boolean; loosened?: string[]; preview?: true }
@@ -109,12 +109,12 @@ export function renderVaultPii(r: PiiResult, o: TextOptions, confirm?: string): 
   const row = (name: string, cells: PiiRow): CellInput[] => [name, ...PII_SURFACES.map(surface => cells[surface])];
   const matrix = table(["CATEGORY", "NOTES", "LOG", "PROMOTION"], [row("email", r.piiPolicy.email), row("phone", r.piiPolicy.phone), row("custom", r.piiPolicy.custom),
     ...r.piiPolicy.patterns.map(p => row(`pattern ${p.name}`, p.action))], o);
-  const allow = r.piiPolicy.allow.length ? paragraph(`Allow list: ${plural(r.piiPolicy.allow.length, "entry", "entries")} (shown with --json)`, o) : undefined;
+  const allow = r.piiPolicy.allow.length ? paragraph(`allow list: ${plural(r.piiPolicy.allow.length, "entry", "entries")} (shown with --json)`, o) : undefined;
   const title = r.changed === undefined ? `Vault ${r.vault} PII policy: ${r.pii}`
-    : !r.changed ? `No change: vault ${r.vault} already has this PII policy (${r.pii}).`
-    : r.applied ? `Set the PII policy of vault ${r.vault} to ${r.pii}.` : `Would set the PII policy of vault ${r.vault} to ${r.pii}:`;
+    : !r.changed ? `unchanged: vault ${r.vault} already has this PII policy (${r.pii})`
+    : r.applied ? `set the PII policy of vault ${r.vault} to ${r.pii}` : `dry run: would set the PII policy of vault ${r.vault} to ${r.pii}`;
   const loosened = r.loosened?.length ? r.loosened.map(cell => paragraph(`loosens ${cell}`, o, "warn")).join("\n") : undefined;
-  const next = r.preview && r.changed && confirm ? nextCommand("Confirm", confirm, o) : undefined;
+  const next = r.preview && r.changed && confirm ? nextCommand("confirm", confirm, o) : undefined;
   return blocks(paragraph(title, o, r.applied ? "ok" : undefined), matrix, allow, loosened, next);
 }
 
@@ -129,12 +129,12 @@ export function renderManifest(m: Manifest, o: TextOptions): string {
 export function renderSetup(r: SetupReport, o: TextOptions, apply?: string): string {
   const rows = [...r.actions.map(a => ({ host: a.target, ...a })), ...(r.console ? [{ host: "console", ...r.console }] : [])];
   const reasons = rows.some(a => a.reason), refused = rows.filter(a => a.change === "refused").length, pending = rows.some(a => !["none", "unchanged", "refused"].includes(a.change));
-  const title = r.mode === "dry-run" ? "Setup preview: nothing written." : r.applied ? (r.mode === "apply" ? "Setup applied." : "Setup undone.") : "Nothing changed.";
+  const title = r.mode === "dry-run" ? "dry run: nothing written" : r.applied ? (r.mode === "apply" ? "setup applied" : "setup undone") : "unchanged: nothing to do";
   const changeTone = (change: string) => change === "refused" ? "fail" : ["none", "unchanged"].includes(change) ? "muted" : "info";
   return blocks(paragraph(title, o, r.applied ? "ok" : undefined),
     fields([["server", [r.entry.command, ...r.entry.args].map(shellWord).join(" ")], ["root", r.root ? `${r.root.path} (${r.root.version})` : undefined]], o),
     rows.length ? table(["HOST", "CHANGE", "PATH", ...(reasons ? ["REASON"] : [])], rows.map(a => [a.host, tone(a.change, changeTone(a.change)), a.file, a.reason]), o) : undefined,
     r.notes.map(note => paragraph(note, o)).join("\n"),
     refused ? paragraph(`${plural(refused, "host")} refused; see REASON.`, o, "fail") : undefined,
-    r.mode === "dry-run" && pending && apply ? nextCommand("Apply", apply, o) : undefined);
+    r.mode === "dry-run" && pending && apply ? nextCommand("apply", apply, o) : undefined);
 }

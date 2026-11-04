@@ -48,7 +48,7 @@ test("#114 spec get prints a title line, a field block, the body without escapes
     "",
     "# Root\n\n## Scope\nLine red",
     "",
-    "next page: vmem spec get root --section Scope --max-bytes 32 --offset 32",
+    "next: vmem spec get root --section Scope --max-bytes 32 --offset 32",
   ].join("\n"));
 });
 
@@ -93,7 +93,7 @@ test("#114 spec graph lists the slice breadth-first with EDGE and DEPTH; spec gr
   ].join("\n"));
   const grep = renderSpecGrep({ source: "repo", worktree: "/w", offset: 0, truncated: true, nextOffset: 1,
     hits: [{ id: "root", path: "SPEC.md", title: "Root", type: "goal", status: "active", snippet: "line\none \u001b[31mred\u001b[0m" }] }, PLAIN, { args: ["grep", "--literal", "--", "red"], values: {} });
-  expect(grep).toBe("ID    TYPE  STATUS  TITLE\nroot  goal  active  Root\n  line one red\n\nhits 1-1, more remain\nnext page: vmem spec grep --literal --offset 1 -- red");
+  expect(grep).toBe("ID    TYPE  STATUS  TITLE\nroot  goal  active  Root\n  line one red\n\nhits 1-1, more remain\nnext: vmem spec grep --literal --offset 1 -- red");
   expect(renderSpecGrep({ source: "repo", worktree: "/w", offset: 0, truncated: false, hits: [] }, PLAIN, { args: ["grep"], values: {} })).toBe("no specs matched");
   expect(offsetCommand(["get", "my spec", "--offset", "5", "--body"], 9)).toBe("vmem spec get 'my spec' --body --offset 9");
 });

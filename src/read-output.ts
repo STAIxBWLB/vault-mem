@@ -8,32 +8,28 @@ import type { LogReadResult, LogReceipt } from "./log-types.ts";
 import type { LintCode, LintReport } from "./analysis-types.ts";
 import type { GraphNeighborhood } from "./vault-graph.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
-import { blocks, clean, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type TextOptions } from "./text-output.ts";
+import { blocks, clean, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type TextOptions, stripTerminal } from "./text-output.ts";
 
 const command = (...words: string[]) => ["vmem", ...words].map(shellWord).join(" ");
-/** Note text printed as is, minus terminal escape sequences and control characters other than tab and newline. */
-export const stripEscapes = (text: string) => text
-  .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b\[[0-?]*[ -/]*[@-~]?|\u009b[0-?]*[ -/]*[@-~]?|\u001b[^[\]]?/g, "")
-  .replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
 
 export function searchText(hits: SearchResult[], o: TextOptions, c: { vault: string; query: string; limit: number; type?: string; domain?: string }): string {
   const count = `${plural(hits.length, "result")} for ${JSON.stringify(clean(c.query))}`;
   if (!hits.length) return count;
   // Rows stay on one line so each snippet sits under its own hit.
   const rows = table(["PATH", "TITLE", "TYPE"], hits.map(h => [h.path, h.title, h.type]), { ...o, columns: undefined }).split("\n");
-  const list = [rows[0]!, ...hits.flatMap((h, i) => [rows[i + 1]!, ...(stripEscapes(h.snippet).trim() ? [paragraph(stripEscapes(h.snippet).trim(), o, "muted", "  ")] : [])])].join("\n");
+  const list = [rows[0]!, ...hits.flatMap((h, i) => [rows[i + 1]!, ...(stripTerminal(h.snippet).trim() ? [paragraph(stripTerminal(h.snippet).trim(), o, "muted", "  ")] : [])])].join("\n");
   const filters = [...(c.type ? ["--type", c.type] : []), ...(c.domain ? ["--domain", c.domain] : [])];
-  const more = hits.length >= c.limit && c.limit < 500 ? nextCommand("more", command("search", c.vault, c.query, ...filters, "--limit", String(Math.min(500, c.limit * 2))), o) : undefined;
+  const more = hits.length >= c.limit && c.limit < 500 ? nextCommand("next", command("search", c.vault, c.query, ...filters, "--limit", String(Math.min(500, c.limit * 2))), o) : undefined;
   return blocks(list, [count, more].filter(Boolean).join("\n"));
 }
 
 export function showText(r: NoteReadResult, o: TextOptions, c: { vault: string; target: string; maxBytes?: number }): string {
   const head = [heading(r.path, o), fields([["section", r.section], ["sha256", r.hash.slice(0, 12)], ["bytes", Buffer.byteLength(r.content)], ["offset", r.offset]], o)].join("\n");
-  if (!r.truncated) return blocks(head, stripEscapes(r.content).replace(/\n+$/, ""));
+  if (!r.truncated) return blocks(head, stripTerminal(r.content).replace(/\n+$/, ""));
   const words = ["show", c.vault, c.target, ...(r.section ? ["--section", r.section] : []), ...(c.maxBytes !== undefined ? ["--max-bytes", String(c.maxBytes)] : []), "--offset", String(r.nextOffset)];
   const tail = [paint("truncated", "warn", o), ...(r.nextOffset !== undefined ? [nextCommand("next", command(...words), o)] : [])];
   const headings = r.headings?.length ? ["H2 headings (read one with --section):", ...r.headings.map(h => `  ${clean(h)}`), ...(r.headingsTruncated ? [paint("  ... more headings", "muted", o)] : [])].join("\n") : undefined;
-  return blocks(head, stripEscapes(r.content).replace(/\n+$/, ""), tail.join("\n"), headings);
+  return blocks(head, stripTerminal(r.content).replace(/\n+$/, ""), tail.join("\n"), headings);
 }
 
 export function linksText(links: ResolvedLink[], o: TextOptions, c: { vault: string; target: string; limit: number }): string {
@@ -42,7 +38,7 @@ export function linksText(links: ResolvedLink[], o: TextOptions, c: { vault: str
   if (!links.length) return count;
   const target = (l: ResolvedLink) => l.target + (l.heading !== null ? `#${l.heading}` : "") + (l.block !== null ? `#^${l.block}` : "");
   const rows = links.map(l => [target(l), l.resolved ?? tone(l.reason ?? "unresolved", "warn"), l.line]);
-  const more = links.length >= c.limit && c.limit < 500 ? nextCommand("more", command("links", c.vault, c.target, "--limit", String(Math.min(500, c.limit * 2))), o) : undefined;
+  const more = links.length >= c.limit && c.limit < 500 ? nextCommand("next", command("links", c.vault, c.target, "--limit", String(Math.min(500, c.limit * 2))), o) : undefined;
   return blocks(heading("OUT", o) + "\n" + table(["TARGET", "RESOLVED", "LINE"], rows, o), [count, more].filter(Boolean).join("\n"));
 }
 
@@ -55,7 +51,7 @@ export function logReadText(r: LogReadResult, o: TextOptions, c: { command: "tai
   if (!r.ok) return blocks(paint(`log ${c.command}: not read`, "fail", o), issueTable(r.issues, o), warnings(r.warnings, o));
   const count = `${plural(r.lines.length, "line")}${r.dataLines !== null ? ` (log has ${r.dataLines})` : ""}`;
   const words = ["log", c.command, c.vault, ...(c.pattern !== undefined ? [c.pattern] : []), ...(c.type ? ["--type", c.type] : []), "--limit", String(Math.min(200, c.limit * 2))];
-  const more = r.lines.length >= c.limit && c.limit < 200 ? nextCommand("more", command(...words), o) : undefined;
+  const more = r.lines.length >= c.limit && c.limit < 200 ? nextCommand("next", command(...words), o) : undefined;
   return blocks(r.lines.length ? r.lines.map(clean).join("\n") : undefined, [count, more].filter(Boolean).join("\n"), warnings(r.warnings, o), issueTable(r.issues, o));
 }
 export function logAppendText(r: LogReceipt, o: TextOptions, c: { vault: string; type: string }): string {
@@ -97,7 +93,7 @@ export function neighborsText(r: GraphNeighborhood, o: TextOptions, c: { vault: 
   const relation = (id: string) => [...new Set(r.edges.filter(e => (e.source === id && hops.get(e.target) === hops.get(id)! - 1) || (e.target === id && hops.get(e.source) === hops.get(id)! - 1)).map(e => e.relation))].join(",");
   const nodes = r.nodes.filter(n => n.id !== r.start).sort((a, b) => (hops.get(a.id) ?? 9) - (hops.get(b.id) ?? 9));
   const count = `${plural(nodes.length, "neighbour")} of ${clean(r.start)} within ${plural(r.hops, "hop")}`;
-  const more = r.truncated && c.limit < 500 ? nextCommand("more", command("graph", "neighbors", c.vault, r.start, "--hops", String(r.hops), "--limit", String(Math.min(500, c.limit * 2))), o) : undefined;
+  const more = r.truncated && c.limit < 500 ? nextCommand("next", command("graph", "neighbors", c.vault, r.start, "--hops", String(r.hops), "--limit", String(Math.min(500, c.limit * 2))), o) : undefined;
   if (!nodes.length) return [count, more].filter(Boolean).join("\n");
   return blocks(table(["NOTE", "HOPS", "RELATION", "TITLE"], nodes.map(n => [n.id, hops.get(n.id), relation(n.id), n.label]), o), [count, more].filter(Boolean).join("\n"));
 }
