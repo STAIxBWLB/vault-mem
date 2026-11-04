@@ -54,7 +54,7 @@ test("agent/non-TTY create persists atomically, returns receipt and updates FTS"
   expect(result.applied).toBe(true); expect(result.indexUpdated).toBe(true);
   const text = readFileSync(join(f.notes, "agent-finding.md"), "utf8");
   expect(result.changes[0].sha256).toBe(sha256(text));
-  expect(JSON.parse(run(["search", "test", "stdin"], f.env).text)[0].path).toBe("agent-finding.md");
+  expect(JSON.parse(run(["search", "test", "stdin", "--json"], f.env).text)[0].path).toBe("agent-finding.md");
   expect(existsSync(join(f.vault, MUTATION_LOCK))).toBe(false);
   expect(readdirSync(f.notes).some(file => file.startsWith(".vmem-"))).toBe(false);
 });
@@ -99,7 +99,7 @@ test("move previews, rejects drift and rewrites wiki/heading/block/embed and fro
   expect(text).toContain("[[renamed]] [[renamed|label]] [[renamed#Anchor]] ![[renamed#^block]] [[Prior Alias]]");
   expect(text).toContain("`[[old]]`\n```md\n[[old]]\n```");
   expect(parseFrontmatter(text).data.source_ref).toBe("[[renamed]]");
-  const links = JSON.parse(run(["links", "test", "references"], f.env).text) as { target: string; resolved: string | null }[];
+  const links = JSON.parse(run(["links", "test", "references", "--json"], f.env).text) as { target: string; resolved: string | null }[];
   expect(links.filter(link => link.target === "renamed").every(link => link.resolved === "renamed.md")).toBe(true);
   expect(links.map(link => link.resolved)).toEqual(["renamed.md", "renamed.md", "renamed.md", "renamed.md", null, "research.md"]);
 });
@@ -108,7 +108,7 @@ test("an alias-only link is refused by the writer, unresolved in links and dead 
   const refused = f.request({ op: "create", path: "cites-alias", frontmatter: { title: "Cites Alias", description: "Synthetic alias citation.", type: "insight", domain: "research", topics: ["[[research]]"] }, body: `# Cites Alias\n\n${body}\n\n## Topics\n\n- [[research]]\n` });
   expect(refused.ok).toBe(false); expect(refused.issues.some(issue => issue.code === "V03" && issue.severity === "error")).toBe(true);
   writeFileSync(join(f.notes, "cites-alias.md"), note("Cites Alias", body));
-  expect(JSON.parse(run(["links", "test", "cites-alias"], f.env).text)[0]).toMatchObject({ target: "Prior Alias", resolved: null, reason: "missing-note" });
+  expect(JSON.parse(run(["links", "test", "cites-alias", "--json"], f.env).text)[0]).toMatchObject({ target: "Prior Alias", resolved: null, reason: "missing-note" });
   expect(JSON.parse(run(["lint", "test", "--json"], f.env).text).findings.L01.some((finding: string) => finding.includes("[[Prior Alias]]"))).toBe(true);
 });
 test("delete/tidy preview-confirm and report path/schema rules", () => {

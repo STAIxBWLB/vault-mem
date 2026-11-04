@@ -9,6 +9,7 @@ import { canonicalPath, isDenied } from "./platform.ts";
 import { codePointCompare as compare, labelCommunities } from "./vault-graph.ts";
 import { SECRET_PATTERNS } from "./write-validation.ts";
 import { PLAIN, type TextOptions } from "./text-output.ts";
+import { stripEscapes } from "./read-output.ts";
 
 /**
  * `vmem skills mine`: read-only skill-candidate mining over amem memory and vault notes, a port of the skill-mine
@@ -484,5 +485,5 @@ export async function runSkillsCommand(args: string[], home: string, env: NodeJS
     ...(number("--min-size") !== undefined ? { minSize: number("--min-size") } : {}),
     ...(number("--min-novelty") !== undefined ? { minNovelty: number("--min-novelty") } : {}),
   });
-  return { text: flags["--json"] ? JSON.stringify(result) : result.report.trimEnd(), code: 0 };
+  return { text: flags["--json"] ? JSON.stringify(result) : stripEscapes(result.report).trimEnd(), code: 0 };
 }
