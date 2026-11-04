@@ -5,6 +5,7 @@ import { validateSpecRepo } from "./spec-validate.ts";
 import { resolveHome } from "./home.ts";
 import { loadRegistry } from "./registry.ts";
 import { PLAIN, type TextOptions } from "./text-output.ts";
+import { renderSpec } from "./spec-output.ts";
 
 /** Spec tool definitions; every spec tool is read-only. */
 export const specTools = (): McpTool[] => SPEC_COMMANDS.map(item => ({ name: item.name, description: item.description, inputSchema: item.inputSchema,
@@ -65,5 +66,6 @@ export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.
   const result = repo !== undefined
     ? validateSpecRepo(repo, { requireFresh: values.requireFresh as boolean | undefined, limit: values.limit as number | undefined, env }).report
     : executeSpecCommand(resolveHome(env).home, item.command, values, env);
-  return { text: JSON.stringify(result, null, json ? undefined : 2), code: item.command === "validate" && !(result as { ok: boolean }).ok ? 1 : 0 };
+  const code = item.command === "validate" && !(result as { ok: boolean }).ok ? 1 : 0;
+  return { text: json ? JSON.stringify(result) : renderSpec(item.command, result, text, { args, values, ...(repo !== undefined ? { repo } : {}) }), code };
 }
