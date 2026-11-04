@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Git timeouts and signals are named accurately: `timed out after 60 s` for `vmem sync` and `1 s` for the console check (from Bun's `exitedDueToTimeout`), else `killed by <signal>`, each with its own next step (`check git -C <vault> status, then rerun vmem sync` or `inspect the vault Git state in System`). `vmem sync` FETCH and PUSH issues with an empty stderr now say why. The console sync alert names the staged paths from the same list sync stages (#143).
+
 - The org sync inbox alert counts only paths `vmem sync` would stage (notes/, reports/, log), with a rename counted once. Other dirty paths are named in the detail but not counted, and a vault with no usable upstream drops the "ahead of upstream" clause. A git call that times out or is killed now logs the signal (`git status failed: timed out (SIGTERM) under the 1 s budget`) and the next step, instead of an empty cause (#138).
 
 - Spec schema fixtures validate every error/warning class in separate default-budget tests and skip unused commit/HEAD setup, avoiding the aggregate macOS timeout. Git inspection failures now name the termination signal and 10-second inspection budget, including shorter parent/test timeouts (#137).

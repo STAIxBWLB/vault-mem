@@ -1,5 +1,5 @@
 import { replaceTopicsSection } from "../src/write-operations.ts";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -426,4 +426,25 @@ test("doctor skips optional checks on unavailable vaults", () => {
   const team = JSON.parse(result.text).vaults.find((v: { id: string }) => v.id === "team");
   expect(team.healthy).toBe(false);
   expect(team).not.toHaveProperty("checks");
+});
+
+test("vmem sync names a fetch or push timeout or signal with an empty stderr, and its own next step (#143)", () => {
+  const f = fixture();
+  const real = Bun.spawnSync;
+  let fake: Record<string, unknown> | undefined, on = "fetch";
+  const spawn = spyOn(Bun, "spawnSync").mockImplementation(((argv: string[], options: unknown) => fake && argv.includes(on)
+    ? { stdout: Buffer.from(""), stderr: Buffer.from(""), pid: 1, success: false, ...fake }
+    : real(argv as never, options as never)) as never);
+  try {
+    fake = { exitCode: null, signalCode: "SIGTERM", exitedDueToTimeout: true };
+    expect(syncVault(f.home, { vault: "team" }, { env: f.env }).issues).toEqual([{ code: "FETCH", severity: "error", message: "fetch failed: timed out after 60 s" }]);
+    fake = { exitCode: null, signalCode: "SIGKILL" };
+    expect(syncVault(f.home, { vault: "team" }, { env: f.env }).issues[0]!.message).toBe("fetch failed: killed by SIGKILL");
+    fake = { exitCode: 1 };
+    expect(syncVault(f.home, { vault: "team" }, { env: f.env }).issues[0]!.message).toBe("fetch failed: error");
+    on = "rev-parse"; fake = { exitCode: null, signalCode: "SIGTERM", exitedDueToTimeout: true };
+    const r = syncVault(f.home, { vault: "team" }, { env: f.env });
+    expect(JSON.stringify(r.issues)).toContain("timed out after 60 s; check `git -C <vault> status`, then rerun vmem sync");
+    expect(JSON.stringify(r.issues)).not.toContain(f.org);
+  } finally { spawn.mockRestore(); }
 });
