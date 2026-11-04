@@ -81,3 +81,21 @@ test("the shell's numeric poll cursor keeps returning the latest rows (#48)", as
   appendFileSync(log, line(3));
   expect((await p.snapshot({ after: 0, panel: "log", vault: "v" }) as { rows: unknown[] }).rows).toHaveLength(3);
 });
+
+test("a pending line longer than the tail window keeps the cursor on a line start and is omitted whole (#48)", () => {
+  const huge = "x".repeat(300 * 1024);
+  writeFileSync(log, huge);
+  const a = readLogSince(home, { vault: "v" });
+  expect(a.lines).toEqual([]);
+  expect(Buffer.from(a.cursor, "base64url").toString().split(".")[1]).toBe("0");
+  appendFileSync(log, "tail-of-the-long-line\n" + line(1));
+  const b = readLogSince(home, { vault: "v", after: a.cursor });
+  expect(b.reset).toBe(false);
+  expect(b.lines).toEqual([line(1).trimEnd()]);
+  expect(b.warnings).toContain("historical log line over 4096 bytes omitted");
+  writeFileSync(log, line(1) + huge);
+  const c = readLogSince(home, { vault: "v" });
+  expect(Buffer.from(c.cursor, "base64url").toString().split(".")[1]).toBe(String(Buffer.byteLength(line(1))));
+  appendFileSync(log, "\n" + line(2));
+  expect(readLogSince(home, { vault: "v", after: c.cursor }).lines).toEqual([line(2).trimEnd()]);
+});

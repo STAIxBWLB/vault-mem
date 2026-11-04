@@ -305,7 +305,24 @@ export function readLogSince(home: string, options: { vault: string; after?: str
     if (start === undefined) { start = Math.max(0, size - LOG_TAIL_WINDOW); skipFirst = start > 0 && read(start - 1, start)[0] !== 0x0a; }
     const bytes = read(start, size);
     let from = 0;
-    if (skipFirst) { const nl = bytes.indexOf(0x0a); from = nl < 0 ? bytes.length : nl + 1; }
+    if (skipFirst) {
+      const nl = bytes.indexOf(0x0a);
+      if (nl < 0) {
+        // The whole window is inside one line: point the cursor at the newline before it (scanning back at most
+        // MAX_LOG_CURSOR_GAP), or at offset 0, which is a line start and, that far behind, always answers with a reset.
+        let boundary = 0;
+        for (let at = start; at > 0 && start - at < MAX_LOG_CURSOR_GAP;) {
+          const chunk = read(Math.max(0, at - 64 * 1024), at), i = chunk.lastIndexOf(0x0a);
+          if (i >= 0) { boundary = at - chunk.length + i + 1; break; }
+          at -= chunk.length;
+        }
+        result.warnings.push("historical log line over 4096 bytes omitted");
+        result.cursor = encodeCursor(boundary, anchor(boundary));
+        result.ok = true;
+        return result;
+      }
+      from = nl + 1;
+    }
     const lastNl = bytes.lastIndexOf(0x0a), end = lastNl >= from ? lastNl + 1 : from;
     if (end < bytes.length) result.warnings.push("incomplete final log line not yet read");
     const decoder = new TextDecoder("utf-8", { fatal: true });
