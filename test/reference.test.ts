@@ -1,3 +1,5 @@
+import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,7 +43,7 @@ test("reference metadata accepts all keys, boundaries and old/new arXiv identifi
   for (const fields of [
     { citekey: "a".repeat(64), authors: Array(100).fill("Fixture"), year: 1000, venue: "가".repeat(200) },
     { citekey: "A_0:-", authors: ["Fixture"], year: 2100, venue: "X" },
-    { arxiv_id: "hep-th/9901001" }, { arxiv_id: "math.GT/0301001v12" }, { arxiv_id: "2612.12345" },
+    { arxiv_id: "0704.0001" }, { arxiv_id: "0704.0001v2" }, { arxiv_id: "hep-th/9901001" }, { arxiv_id: "math.GT/0301001v12" }, { arxiv_id: "2612.12345" },
   ]) expect(errors(fields)).toEqual([]);
   // The fields are optional, so existing reference notes remain valid.
   expect(errors(Object.fromEntries(Object.keys(bibliographic).map(key => [key, undefined])))).toEqual([]);
@@ -51,7 +53,7 @@ test("each malformed bibliographic value returns a named V01; all keys are refer
   const invalid: Record<string, unknown[]> = {
     citekey: ["", "x".repeat(65), "a b", "key.", "valid\n", 2],
     doi: ["", "https://doi.org/10.1234/example", "10.123/example", "10.1234567890/example", "10.1234/", "10.1234/a b", "10.1234/a\nb", "10.1234/a\n", 42],
-    arxiv_id: ["", "2600.12345", "2613.12345", "2601.1234", "2601.123456", "2601.12345v0", "hep-th/9913001", "hep-th/990100", "2601.12345\n", 2],
+    arxiv_id: ["", "2600.12345", "2613.12345", "0704.000", "2601.123456", "2601.12345v0", "hep-th/9913001", "hep-th/990100", "2601.12345\n", 2],
     authors: ["Fixture", [], Array(101).fill("Fixture"), [1], [null]],
     year: [999, 2101, 2026.5, "2026", null], venue: ["", "가".repeat(201), 2, null],
   };
@@ -142,4 +144,27 @@ test("JSON-RPC create and frontmatter accept 100 authors without raising other a
   }
   expect(responses.find(row => row.id === 3).error.code).toBe(-32602);
   expect(parseFrontmatter(readFileSync(join(f.notes, "paper.md"), "utf8")).data.authors).toEqual([...authors].reverse());
+});
+
+
+test("the first schema3 scan finds an unchanged pre-existing reference DOI and preserves the older cache", () => {
+  const f = fixture(), source = note({ doi: "10.1234/preexisting.paper" });
+  const file = join(f.notes, "preexisting.md"); writeFileSync(file, source);
+  const indexes = join(f.home, "indexes"); mkdirSync(indexes, { recursive: true });
+  const digest = createHash("sha256").update(f.spec.path).digest("hex");
+  const oldFile = join(indexes, `${digest}-links2-schema2.sqlite`), old = new Database(oldFile);
+  // Previous FTS content has the body only, so the metadata DOI cannot match.
+  old.run("CREATE VIRTUAL TABLE fts USING fts5(path UNINDEXED, title, description, body, tokenize='unicode61')");
+  old.query("INSERT INTO fts VALUES (?,?,?,?)").run("preexisting.md", metadata.title, metadata.description, body);
+  expect(old.query("SELECT path FROM fts WHERE fts MATCH ?").all('"10.1234/preexisting.paper"')).toEqual([]);
+  old.close();
+  const oldBytes = readFileSync(oldFile), index = new VaultIndex(f.home, f.spec);
+  try {
+    expect(index.file).toEndWith("-links2-schema3.sqlite");
+    expect(index.scan()).toEqual({ notes: 2, changed: 2, removed: 0 });
+    expect(index.search("10.1234/preexisting.paper", { type: "reference" }).map(hit => hit.path)).toEqual(["preexisting.md"]);
+    expect(index.scan()).toEqual({ notes: 2, changed: 0, removed: 0 });
+  } finally { index.close(); }
+  expect(readFileSync(file, "utf8")).toBe(source);
+  expect(readFileSync(oldFile)).toEqual(oldBytes);
 });
