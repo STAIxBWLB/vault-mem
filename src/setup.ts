@@ -179,7 +179,10 @@ function putEntry(host: HostFile, text: string | null, value: unknown, rawToml?:
     catch (error) {
       const reason = error instanceof Error ? error.message : "TOML parse error";
       // A root `mcp_servers = { ... }` cannot take an appended [mcp_servers.vmem] table: there is no entry to rewrite.
-      const inline = lines.some(line => /^\s*(?:mcp_servers|"mcp_servers"|'mcp_servers')\s*=\s*\{/.test(line));
+      // Only root lines count: those before the first table header. A dotted `mcp_servers.<x> = {` fails the same way.
+      const firstHeader = lines.findIndex(line => tomlHeaderName(line) !== undefined);
+      const root = firstHeader < 0 ? lines : lines.slice(0, firstHeader);
+      const inline = root.some(line => /^\s*(?:mcp_servers|"mcp_servers"|'mcp_servers')\s*(?:\.[^=]*)?=\s*\{/.test(line));
       const fix = inline ? `convert the inline mcp_servers value to [mcp_servers.<name>] tables` : `rewrite the vmem entry by hand as a [mcp_servers.${SERVER_NAME}] table`;
       throw new Error(`${host.file}: the updated file would not parse (${reason}); ${fix}, then ${mode === "undo" ? `rerun \`vmem setup ${host.target} --undo\`` : "rerun setup"}`);
     }

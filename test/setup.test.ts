@@ -287,3 +287,12 @@ test("an undo whose restored file would not parse names the undo rerun (#133)", 
   expect(readFileSync(file, "utf8")).toBe(installed);
   expect(existsSync(receipt)).toBe(true);
 });
+
+test("inline-table advice applies only to a root mcp_servers value, not one under another table (#133)", () => {
+  const f = fixture(), file = f.files.codex!;
+  mkdirSync(join(file, ".."), { recursive: true });
+  writeFileSync(file, `[mcp_servers]\nvmem = { command = "/old", args = [] }\n\n[profiles.x]\nmcp_servers = { a = 1 }\n`);
+  const reason = f.setup("codex", "dry-run").actions[0]!.reason!;
+  expect(reason).toContain("rewrite the vmem entry by hand");
+  expect(reason).not.toContain("convert the inline");
+});
