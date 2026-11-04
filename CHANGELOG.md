@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Docs: the README says an older agent-console loads the plugin but the panel fails with a TypeError on `host.ui`, fixed by upgrading agent-console, and the spec fixture README says the files need only be tracked, with a commit required only for verification-stamp cases (#142).
+
 - The org sync inbox alert counts only paths `vmem sync` would stage (notes/, reports/, log), with a rename counted once. Other dirty paths are named in the detail but not counted, and a vault with no usable upstream drops the "ahead of upstream" clause. A git call that times out or is killed now logs the signal (`git status failed: timed out (SIGTERM) under the 1 s budget`) and the next step, instead of an empty cause (#138).
 
 - Spec schema fixtures validate every error/warning class in separate default-budget tests and skip unused commit/HEAD setup, avoiding the aggregate macOS timeout. Git inspection failures now name the termination signal and 10-second inspection budget, including shorter parent/test timeouts (#137).
