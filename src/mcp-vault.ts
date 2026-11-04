@@ -14,7 +14,7 @@ import { applyWrite } from "./writer.ts";
 import { notePath } from "./write-operations.ts";
 import type { LogEvent } from "./log-types.ts";
 import { LOG_EVENT_SCHEMA } from "./log-format.ts";
-import type { WriteOp, WriteReceipt, WriteRequest } from "./write-types.ts";
+import type { PatchEdit, WriteOp, WriteReceipt, WriteRequest } from "./write-types.ts";
 import type { McpHandler, McpTool } from "./mcp.ts";
 
 const string = (maxLength: number, minLength = 1) => ({ type: "string", minLength, maxLength });
@@ -49,7 +49,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_check", "Validate a prospective note text without writing.", object({ vault, path: string(200), text: string(262144, 0) }, ["text"])),
     tool("vmem_log_tail", "Read the newest vault log lines, optionally filtered.", object({ vault, n: integer(1, 200), type: { type: "string", enum: LOG_TYPES }, grep: string(256) })),
     tool("vmem_create", "Create a validated note. Requires a vault with write=mcp.", object({ vault, stem: string(200), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), source: { type: ["string", "array"], minLength: 1, maxLength: 512, minItems: 1, maxItems: 32, items: string(512) }, confidence: string(32), status: string(32), created: string(32, 0), extra: { type: "object", maxProperties: 32, additionalProperties: scalar }, log: logEvent }, ["stem", "type", "domain", "description"]), "write"),
-    tool("vmem_patch", "Replace one exact string in a note.", object({ vault, path: note, oldString: string(8192), newString: string(8192, 0), expectedSha: sha, log: logEvent }, ["path", "oldString", "newString"]), "write"),
+    tool("vmem_patch", "Replace exact strings in a note: one oldString/newString pair, or edits (1..32 pairs, each matching once in the original text, non-overlapping) applied all-or-nothing with one receipt and one log event.", object({ vault, path: note, oldString: string(8192), newString: string(8192, 0), edits: { type: "array", minItems: 1, maxItems: 32, items: object({ oldString: string(8192), newString: string(8192, 0) }, ["oldString", "newString"]) }, expectedSha: sha, log: logEvent }, ["path"]), "write"),
     tool("vmem_append", "Append markdown to a section of a note.", object({ vault, path: note, section: string(120), markdown: string(16384), expectedSha: sha, log: logEvent }, ["path", "section", "markdown"]), "write"),
     tool("vmem_set_frontmatter", "Set or unset frontmatter keys of a note.", object({ vault, path: note, set: { type: "object", maxProperties: 32, additionalProperties: scalar }, unset: { type: "array", maxItems: 32, items: string(64) }, expectedSha: sha, log: logEvent }, ["path"]), "write"),
     tool("vmem_link", "Add a typed relation link between two notes (bidirectional by default).", object({ vault, from: note, to: note, relation: { type: "string", enum: RELATIONS }, context: string(500), bidirectional: { type: "boolean" }, log: logEvent }, ["from", "to", "relation"]), "write"),
@@ -160,7 +160,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
       if (Array.isArray(args.topics)) frontmatter.topics = (args.topics as string[]).map(v => v.startsWith("[[") ? v : `[[${v}]]`);
       return write(args, { op: "create", path: str(args.stem)!, frontmatter, ...(str(args.body) !== undefined ? { body: str(args.body) } : {}) });
     },
-    vmem_patch: args => write(args, { op: "patch", path: str(args.path)!, oldString: str(args.oldString)!, newString: str(args.newString)!, expectedSha: str(args.expectedSha) }),
+    vmem_patch: args => write(args, { op: "patch", path: str(args.path)!, ...(args.oldString !== undefined ? { oldString: str(args.oldString) } : {}), ...(args.newString !== undefined ? { newString: str(args.newString) } : {}), ...(args.edits !== undefined ? { edits: args.edits as PatchEdit[] } : {}), expectedSha: str(args.expectedSha) }),
     vmem_append: args => write(args, { op: "append", path: str(args.path)!, section: str(args.section)!, markdown: str(args.markdown)!, expectedSha: str(args.expectedSha) }),
     vmem_set_frontmatter: args => write(args, { op: "frontmatter", path: str(args.path)!, set: (args.set as Record<string, unknown> | undefined) ?? {}, ...(args.unset ? { unset: args.unset as string[] } : {}), expectedSha: str(args.expectedSha) }),
     vmem_link: args => write(args, { op: "link", from: str(args.from)!, to: str(args.to)!, relation: args.relation as Extract<WriteOp, { op: "link" }>["relation"], ...(str(args.context) ? { context: str(args.context) } : {}), bidirectional: args.bidirectional !== false }),

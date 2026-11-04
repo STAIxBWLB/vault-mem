@@ -20,7 +20,7 @@ export const COMMANDS = [
   { name: "specs add", usage: "specs add <id> <absolute-path> [--write mcp|cli|none] [--pii allow|deny] [--json]", mutates: true },
   { name: "specs remove", usage: "specs remove <id> [--confirm] [--json]", mutates: "confirm" },
   { name: "new", usage: "new <vault> <stem> --type TYPE --domain DOMAIN --topics a,b --description TEXT [--title TEXT] [--source TEXT|JSON] [--confidence TEXT] [--status TEXT] [--body file|-] [--extra JSON] [--log JSON] [--dry-run] [--json]", mutates: true },
-  { name: "patch", usage: "patch <vault> <note> --old TEXT --new TEXT [--expected-sha SHA] [--log JSON] [--dry-run] [--json]", mutates: true },
+  { name: "patch", usage: "patch <vault> <note> [--old TEXT --new TEXT] [--edits file|-] [--expected-sha SHA] [--log JSON] [--dry-run] [--json]", mutates: true },
   { name: "append", usage: "append <vault> <note> --section SECTION --markdown TEXT [--expected-sha SHA] [--log JSON] [--dry-run] [--json]", mutates: true },
   { name: "frontmatter", usage: "frontmatter <vault> <note> [--set JSON] [--unset key,key] [--expected-sha SHA] [--log JSON] [--dry-run] [--json]", mutates: true },
   { name: "link", usage: "link <vault> <from> <to> --relation R [--context TEXT] [--one-way] [--log JSON] [--dry-run] [--json]", mutates: true },
