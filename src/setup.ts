@@ -77,12 +77,19 @@ const record = (value: unknown, label: string): Record<string, unknown> => {
 
 // TOML: edit only the `[mcp_servers.vmem]` table (and its subtables) textually so unrelated bytes stay identical.
 const tomlHeader = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/;
+/** A dotted TOML key as its parts: bare, "basic" or 'literal', with spaces around dots; undefined when malformed. */
+function tomlKey(name: string): string[] | undefined {
+  const part = /\s*(?:([A-Za-z0-9_-]+)|"((?:[^"\\]|\\.)*)"|'([^']*)')\s*(?:\.|$)/y, parts: string[] = [];
+  while (part.lastIndex < name.length) {
+    const m = part.exec(name);
+    if (!m) return undefined;
+    try { parts.push(m[1] ?? m[3] ?? JSON.parse(`"${m[2]}"`)); } catch { return undefined; }
+  }
+  return parts;
+}
 /** Every table owned by the entry (`[mcp_servers.vmem]` and any `[mcp_servers.vmem.*]`), wherever it appears. */
 function tomlSpans(lines: string[]): [number, number][] {
-  const own = (name: string) => {
-    const key = name.replace(/\s*\.\s*/g, ".").replace(/"vmem"/g, SERVER_NAME);
-    return key === `mcp_servers.${SERVER_NAME}` || key.startsWith(`mcp_servers.${SERVER_NAME}.`);
-  };
+  const own = (name: string) => { const key = tomlKey(name); return key?.[0] === "mcp_servers" && key[1] === SERVER_NAME; };
   const spans: [number, number][] = [];
   let start = -1;
   for (let i = 0; i <= lines.length; i++) {
@@ -234,8 +241,9 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
       }
       if (isDeepStrictEqual(current, entry)) { action.change = "unchanged"; continue; }
       action.change = current === undefined ? "add" : "replace";
+      // The dry run renders and parses the planned file too, so a refusal shows in the preview.
+      const next = putEntry(host, text, entry);
       if (mode === "apply") {
-        const next = putEntry(host, text, entry);
         // Keep the original prior value across repeated applies.
         const prior: Receipt = receipt ?? { version: 1, target: name, file: host.file, existed: text !== null, keyExisted: hasKey(host, text), prior: current ?? null, ...(host.format === "toml" && current !== undefined ? { priorToml: tomlBlock(text) } : {}), installed: entry };
         // The receipt is durable before the host file changes; a failed host write rolls the receipt back.

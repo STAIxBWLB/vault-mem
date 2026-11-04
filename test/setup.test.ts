@@ -206,3 +206,30 @@ test("setup registers the PATH bun when it is the same binary, else the real run
     expect(stableRuntime(process.execPath, "bun")).toBe(process.execPath);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("quoted and spaced TOML headers of the entry are replaced in place and undo restores their bytes (#116)", () => {
+  const f = fixture(), file = f.files.codex!;
+  mkdirSync(join(file, ".."), { recursive: true });
+  for (const [head, sub] of [[`["mcp_servers".vmem]`, `["mcp_servers".vmem.env]`], [`[mcp_servers."vmem"]`, `[mcp_servers."vmem".env]`], [`[ mcp_servers . vmem ]`, `[ mcp_servers . vmem . env ]`]]) {
+    const source = `model = "gpt"\n\n${head}\ncommand = "/old"\nargs = []\n${sub}\nA = "1"\n\n[other]\nkeep = 1\n`;
+    writeFileSync(file, source);
+    expect(f.setup("codex", "dry-run").actions[0]!.change).toBe("replace");
+    expect(f.setup("codex", "apply").actions[0]!.change).toBe("replace");
+    expect(readFileSync(file, "utf8")).toBe(`model = "gpt"\n\n[mcp_servers.vmem]\ncommand = "/opt/bun/bin/bun"\nargs = ["--smol", "/opt/vmem/bin/vmem.js", "mcp"]\n\n[other]\nkeep = 1\n`);
+    expect(f.setup("codex", "undo").actions[0]!.change).toBe("restore");
+    expect(readFileSync(file, "utf8")).toBe(source);
+  }
+});
+
+test("a planned TOML file that does not parse is refused by the dry run and by apply alike (#116)", () => {
+  const f = fixture(), file = f.files.codex!;
+  const source = `[mcp_servers]\nvmem = { command = "/old", args = [] }\n`;
+  mkdirSync(join(file, ".."), { recursive: true }); writeFileSync(file, source);
+  for (const mode of ["dry-run", "apply"] as const) {
+    const action = f.setup("codex", mode).actions[0]!;
+    expect(action.change).toBe("refused");
+    expect(action.reason).toContain("TOML");
+  }
+  expect(readFileSync(file, "utf8")).toBe(source);
+  expect(existsSync(join(f.state, "setup"))).toBe(false);
+});
