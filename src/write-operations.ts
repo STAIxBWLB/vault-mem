@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeSource } from "./source.ts";
 import { parseFrontmatter, emitFrontmatter } from "./frontmatter.ts";
-import { normalizeTarget, proseLines, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
+import { LINK_RELATIONS, normalizeTarget, proseLines, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
 import type { PatchEdit, PlannedChange, WriteIssue, WriteOp } from "./write-types.ts";
 export class WriteRefusal extends Error {
   constructor(readonly issues: WriteIssue[]) { super(issues[0]?.message ?? "write refused"); }
@@ -124,6 +124,19 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
   const planned = new Map<string, PlannedChange>();
   const set = (path: string, after: string | null) => {
     const before = notes.get(path) ?? (operation.op === "report" ? reportBefore ?? null : null);
+    if (after !== null && operation.op !== "report") {
+      try {
+        const previousText = operation.op === "move" && path === notePath(operation.to)
+          ? needed(notes, moveSourcePath(operation.from, notes)) : before;
+        const doc = parseFrontmatter(after), previous = previousText === null ? undefined : parseFrontmatter(previousText).data;
+        // Normalize newly assigned identifiers; edits and moves leave untouched legacy metadata byte-identical.
+        if (doc.data.type === "reference" && typeof doc.data.doi === "string" &&
+          (previous?.type !== "reference" || previous.doi !== doc.data.doi ||
+            (operation.op === "frontmatter" && Object.hasOwn(operation.set, "doi")))) {
+          after = emitFrontmatter(doc, { doi: doc.data.doi.toLowerCase() });
+        }
+      } catch { /* Invalid YAML is reported by validation, without obscuring its named issue. */ }
+    }
     if (after !== before) planned.set(path, { path, before, after });
   };
   const existing = (value: string) => { const path = notePath(value); return { path, source: needed(notes, path) }; };
@@ -192,7 +205,7 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
     }
     case "link": {
       const from = existing(operation.from), to = existing(operation.to);
-      if (!["supports", "contradicts", "extends", "applies-to", "context-for"].includes(operation.relation)) refuse("V01", "invalid relation");
+      if (!(LINK_RELATIONS as readonly string[]).includes(operation.relation)) refuse("V01", "invalid relation");
       if (operation.context !== undefined && (typeof operation.context !== "string" || /[\r\n]/.test(operation.context) || operation.context.length > 500)) refuse("V01", "link context must be one line <=500 characters");
       if (from.path === to.path) refuse("V01", "link endpoints must differ");
       const line = (path: string) => `- [[${path.slice(6, -3)}]] (${operation.relation})${operation.context ? `: ${operation.context}` : ""}`;

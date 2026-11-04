@@ -77,12 +77,28 @@ const record = (value: unknown, label: string): Record<string, unknown> => {
 
 // TOML: edit only the `[mcp_servers.vmem]` table (and its subtables) textually so unrelated bytes stay identical.
 const tomlHeader = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/;
+/** A dotted TOML key as its parts: bare, "basic" or 'literal', with spaces around dots; undefined when malformed. */
+function tomlKey(name: string): string[] | undefined {
+  const part = /\s*(?:([A-Za-z0-9_-]+)|"((?:[^"\\]|\\.)*)"|'([^']*)')\s*(?:\.|$)/y, parts: string[] = [];
+  while (part.lastIndex < name.length) {
+    const m = part.exec(name);
+    if (!m) return undefined;
+    try { parts.push(m[1] ?? m[3] ?? tomlUnescape(m[2]!)); } catch { return undefined; }
+  }
+  return parts;
+}
+const TOML_ESCAPES: Record<string, string> = { b: "\b", t: "\t", n: "\n", f: "\f", r: "\r", e: "\x1b", '"': '"', "\\": "\\" };
+/** A TOML basic-string body decoded: `\uXXXX`, `\UXXXXXXXX`, `\xHH` and the short escapes; any other escape throws. */
+function tomlUnescape(body: string): string {
+  return body.replace(/\\(?:u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|x([0-9A-Fa-f]{2})|(.))/g, (_, u, U, x, c) => {
+    if (u ?? U ?? x) return String.fromCodePoint(parseInt(u ?? U ?? x, 16));
+    if (c in TOML_ESCAPES) return TOML_ESCAPES[c]!;
+    throw new Error("invalid TOML escape");
+  });
+}
 /** Every table owned by the entry (`[mcp_servers.vmem]` and any `[mcp_servers.vmem.*]`), wherever it appears. */
 function tomlSpans(lines: string[]): [number, number][] {
-  const own = (name: string) => {
-    const key = name.replace(/\s*\.\s*/g, ".").replace(/"vmem"/g, SERVER_NAME);
-    return key === `mcp_servers.${SERVER_NAME}` || key.startsWith(`mcp_servers.${SERVER_NAME}.`);
-  };
+  const own = (name: string) => { const key = tomlKey(name); return key?.[0] === "mcp_servers" && key[1] === SERVER_NAME; };
   const spans: [number, number][] = [];
   let start = -1;
   for (let i = 0; i <= lines.length; i++) {
@@ -140,7 +156,11 @@ function putEntry(host: HostFile, text: string | null, value: unknown, rawToml?:
     }
     while (lines.length && lines[lines.length - 1] === "") lines.pop();
     const out = lines.length ? lines.join(newline) + newline : "";
-    Bun.TOML.parse(out); // never publish a file the host cannot parse
+    // Never publish a file the host cannot parse.
+    try { Bun.TOML.parse(out); }
+    catch (error) {
+      throw new Error(`${host.file}: the updated file would not parse (${error instanceof Error ? error.message : "TOML parse error"}); rewrite the vmem entry by hand as a [mcp_servers.${SERVER_NAME}] table, then rerun setup`);
+    }
     return out;
   }
   const doc = text === null ? {} : record(JSON.parse(text), host.file);
@@ -234,8 +254,9 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
       }
       if (isDeepStrictEqual(current, entry)) { action.change = "unchanged"; continue; }
       action.change = current === undefined ? "add" : "replace";
+      // The dry run renders and parses the planned file too, so a refusal shows in the preview.
+      const next = putEntry(host, text, entry);
       if (mode === "apply") {
-        const next = putEntry(host, text, entry);
         // Keep the original prior value across repeated applies.
         const prior: Receipt = receipt ?? { version: 1, target: name, file: host.file, existed: text !== null, keyExisted: hasKey(host, text), prior: current ?? null, ...(host.format === "toml" && current !== undefined ? { priorToml: tomlBlock(text) } : {}), installed: entry };
         // The receipt is durable before the host file changes; a failed host write rolls the receipt back.
