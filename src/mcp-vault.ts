@@ -8,6 +8,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import type { VaultSpec } from "./config.ts";
 import { loadRegistry, registryStatus } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
+import { listVaultFiles, readVaultFile } from "./vault-files.ts";
 import { appendLog, readLog } from "./vault-log.ts";
 import { applyWrite } from "./writer.ts";
 import { notePath } from "./write-operations.ts";
@@ -29,7 +30,7 @@ const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLeng
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote", "vmem_skills_mine", ...SPEC_COMMANDS.map(item => item.name)] as const;
+  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Tool definitions for a fixed vault set: `vault` is an enum of the registered ids. */
 export function vaultTools(ids: readonly string[], orgIds: readonly string[] = []): McpTool[] {
@@ -64,6 +65,9 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
       object({ path: note, to: orgVault, topics: { type: "array", maxItems: 32, items: string(200) }, again: { type: "boolean" }, ...twoStep }, ["path", "to"]), "confirm"),
     tool("vmem_skills_mine", "Read-only skill-candidate mining over amem curated entries, amem capture rows and vault notes: dictionary matching, deterministic communities and novelty scoring. Returns counts, masked candidates and a markdown report; writes nothing.",
       object({ vault, days: integer(1, 3650), project: string(400), allProjects: { type: "boolean" }, vocab: string(4096), skills: { type: "array", maxItems: 16, items: string(4096) }, minSize: integer(1, 10000), minNovelty: { type: "number", minimum: 0, maximum: 1 } })),
+    tool("vmem_read_file", "Read one UTF-8 file outside notes/: ops/, reports/, self/, templates/, AGENTS.md or README.md. Same bounds and paging as vmem_read (maxBytes, offset, nextOffset); notes/ use vmem_read, the log vmem_log_tail. Never locks or writes.", object({ vault, path: string(1024), maxBytes: integer(1, 65536), offset: integer(0, MAX_NOTE_BYTES) }, ["path"])),
+    tool("vmem_list_files", "List one directory level under ops/, reports/, self/ or templates/ (up to 500 entries; dot, linked and denied entries omitted). Never locks or writes.", object({ vault, dir: string(1024) }, ["dir"])),
+    tool("vmem_report", "Write a screened report file under reports/ or ops/ (the MCP form of `vmem report`): same path rules, screening, write policy (write=mcp), receipt and EXTRACT log event; log overrides it, for example a LINT or GRAPH event. dryRun changes nothing.", object({ vault, path: string(200), body: string(65536, 0), dryRun: { type: "boolean" }, log: logEvent }, ["path", "body"]), "write"),
   ];
 }
 type Issue = { code: string; severity: "error"; message: string };
@@ -122,6 +126,9 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
         ...(Array.isArray(args.skills) ? { skills: args.skills as string[] } : {}), ...(typeof args.days === "number" ? { days: args.days } : {}),
         ...(typeof args.minSize === "number" ? { minSize: args.minSize } : {}), ...(typeof args.minNovelty === "number" ? { minNovelty: args.minNovelty } : {}) });
     },
+    vmem_read_file: args => readVaultFile(pick(args), loadRegistry(home).denyPaths ?? [], str(args.path)!, (args.maxBytes as number | undefined) ?? 16384, args.offset as number | undefined),
+    vmem_list_files: args => listVaultFiles(pick(args), loadRegistry(home).denyPaths ?? [], str(args.dir)!),
+    vmem_report: args => write(args, { op: "report", path: str(args.path)!, text: str(args.body)! }, args.dryRun === true ? { dryRun: true } : {}),
     vmem_lint: args => args.write === true ? writeAnalysisReports(home,{vault:pick(args).id,kind:"lint",channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env) : lintVault(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),
     vmem_graph_build: args => writeAnalysisReports(home,{vault:pick(args).id,kind:"graph",workspace:args.workspace === true,channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env),
     vmem_graph_neighbors: args => graphNeighbors(buildGraph(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),str(args.path)!, (args.hops as 1|2|undefined) ?? 1, (args.limit as number|undefined) ?? 50),
