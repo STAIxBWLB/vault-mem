@@ -76,7 +76,25 @@ const record = (value: unknown, label: string): Record<string, unknown> => {
 };
 
 // TOML: edit only the `[mcp_servers.vmem]` table (and its subtables) textually so unrelated bytes stay identical.
-const tomlHeader = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/;
+/**
+ * The key of a `[table]` or `[[array]]` header line, or undefined for any other line. Quote-aware like `tomlKey`:
+ * a `]` inside a "basic" or 'literal' quoted part does not end the header; a trailing `# comment` is allowed.
+ */
+function tomlHeaderName(line: string): string | undefined {
+  const m = /^\s*(\[\[?)/.exec(line);
+  if (!m) return undefined;
+  const close = m[1] === "[[" ? "]]" : "]";
+  let i = m[0].length, quote: '"' | "'" | undefined;
+  for (; i < line.length; i++) {
+    const c = line[i]!;
+    if (quote) { if (c === "\\" && quote === '"') i++; else if (c === quote) quote = undefined; continue; }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === "]") break;
+  }
+  if (quote || !line.startsWith(close, i)) return undefined;
+  const name = line.slice(m[0].length, i).trim();
+  return name && /^\s*(?:#.*)?$/.test(line.slice(i + close.length)) ? name : undefined;
+}
 /** A dotted TOML key as its parts: bare, "basic" or 'literal', with spaces around dots; undefined when malformed. */
 function tomlKey(name: string): string[] | undefined {
   const part = /\s*(?:([A-Za-z0-9_-]+)|"((?:[^"\\]|\\.)*)"|'([^']*)')\s*(?:\.|$)/y, parts: string[] = [];
@@ -102,14 +120,14 @@ function tomlSpans(lines: string[]): [number, number][] {
   const spans: [number, number][] = [];
   let start = -1;
   for (let i = 0; i <= lines.length; i++) {
-    const header = i < lines.length ? tomlHeader.exec(lines[i]!) : null;
-    if (i < lines.length && !header) continue;
+    const header = i < lines.length ? tomlHeaderName(lines[i]!) : undefined;
+    if (i < lines.length && header === undefined) continue;
     if (start >= 0) {
       let stop = i;
       while (stop > start && lines[stop - 1]!.trim() === "") stop--;
       spans.push([start, stop]); start = -1;
     }
-    if (header && own(header[1]!)) start = i;
+    if (header !== undefined && own(header)) start = i;
   }
   return spans;
 }
@@ -130,7 +148,7 @@ function tomlBlock(text: string | null): string[] | undefined {
   return spans.length ? spans.flatMap(([start, stop]) => lines.slice(start, stop)) : undefined;
 }
 /** Replace the vmem entry. TOML takes either an entry value or the exact prior block lines to restore. */
-function putEntry(host: HostFile, text: string | null, value: unknown, rawToml?: string[], keepKey = false): string | null {
+function putEntry(host: HostFile, text: string | null, value: unknown, rawToml?: string[], keepKey = false, mode: "apply" | "undo" = "apply"): string | null {
   if (host.format === "toml") {
     const source = text ?? "", newline = source.includes("\r\n") ? "\r\n" : "\n";
     const lines = source.length ? source.split(/\r?\n/) : [];
@@ -159,7 +177,11 @@ function putEntry(host: HostFile, text: string | null, value: unknown, rawToml?:
     // Never publish a file the host cannot parse.
     try { Bun.TOML.parse(out); }
     catch (error) {
-      throw new Error(`${host.file}: the updated file would not parse (${error instanceof Error ? error.message : "TOML parse error"}); rewrite the vmem entry by hand as a [mcp_servers.${SERVER_NAME}] table, then rerun setup`);
+      const reason = error instanceof Error ? error.message : "TOML parse error";
+      // A root `mcp_servers = { ... }` cannot take an appended [mcp_servers.vmem] table: there is no entry to rewrite.
+      const inline = lines.some(line => /^\s*(?:mcp_servers|"mcp_servers"|'mcp_servers')\s*=\s*\{/.test(line));
+      const fix = inline ? `convert the inline mcp_servers value to [mcp_servers.<name>] tables` : `rewrite the vmem entry by hand as a [mcp_servers.${SERVER_NAME}] table`;
+      throw new Error(`${host.file}: the updated file would not parse (${reason}); ${fix}, then ${mode === "undo" ? `rerun \`vmem setup ${host.target} --undo\`` : "rerun setup"}`);
     }
     return out;
   }
@@ -244,7 +266,7 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
         if (current === undefined) { action.change = "none"; action.reason = "vmem entry already absent; nothing restored"; unlinkSync(receiptPath); continue; }
         action.change = receipt.prior === undefined || receipt.prior === null ? "remove" : "restore";
         {
-          let next = current === undefined ? text : putEntry(host, text, receipt.prior ?? undefined, receipt.priorToml, receipt.keyExisted === true);
+          let next = current === undefined ? text : putEntry(host, text, receipt.prior ?? undefined, receipt.priorToml, receipt.keyExisted === true, "undo");
           // A file setup created is removed again only when nothing else was added to it.
           if (!receipt.existed && next !== null && readEntry(host, next) === undefined && isDeepStrictEqual(host.format === "toml" ? Bun.TOML.parse(next) : JSON.parse(next), {})) next = null;
           if (next !== text && (next !== null || text !== null)) atomicWrite(host.file, next);
