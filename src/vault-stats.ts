@@ -4,6 +4,7 @@ import { loadRegistry } from "./registry.ts";
 import { VaultIndex } from "./vault-index.ts";
 import { readLog } from "./vault-log.ts";
 import type { WriteIssue } from "./write-types.ts";
+import type { VaultSpec } from "./config.ts";
 
 export const STATS_DEFAULT_DAYS = 30;
 export const STATS_MAX_DAYS = 3650;
@@ -21,11 +22,13 @@ export interface VaultStats {
  * Read-only vault statistics over the derived index (refreshed like every read tool) and the log streamed by `readLog`:
  * no vault file or log is written and no vault or log lock is taken.
  */
-export function vaultStats(home: string, id: string, options: { days?: number; now?: Date } = {}): VaultStats {
+export function vaultStats(home: string, id: string, options: { days?: number; now?: Date; expectedVault?: VaultSpec } = {}): VaultStats {
   const days = options.days ?? STATS_DEFAULT_DAYS, now = options.now ?? new Date();
   if (!Number.isInteger(days) || days < 1 || days > STATS_MAX_DAYS) throw new Error(`stats: days must be an integer 1..${STATS_MAX_DAYS}; omit it for the ${STATS_DEFAULT_DAYS}-day default`);
   const registry = loadRegistry(home), vault = registry.vaults.find(v => v.id === id);
   if (!vault) throw Object.assign(new Error("stats: unknown vault id; run vmem vaults list for the registered ids"), { code: "V04" });
+  // An MCP server reads the vault set fixed at startup; a re-registered id would otherwise count a different vault.
+  if (options.expectedVault && JSON.stringify(options.expectedVault) !== JSON.stringify(vault)) throw new Error("stats: the vault registration changed since the MCP server started; restart the MCP server");
   // Local midnight that opens a window of n calendar days ending today.
   const start = (n: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - (n - 1));
   const index = new VaultIndex(home, vault, registry.vaults.map(v => v.path));

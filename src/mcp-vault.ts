@@ -143,7 +143,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
       catch (error) { return { path, ...refusal("V04", error instanceof Error ? error.message : "unreadable") }; }
     }) })),
     vmem_list: args => read(args, index => index.list(str(args.prefix) ?? "", (args.limit as number | undefined) ?? 100, str(args.cursor))),
-    vmem_stats: args => vaultStats(home, pick(args).id, { ...(typeof args.days === "number" ? { days: args.days } : {}) }),
+    vmem_stats: args => vaultStats(home, pick(args).id, { expectedVault: pick(args), ...(typeof args.days === "number" ? { days: args.days } : {}) }),
     vmem_links: args => read(args, index => {
       const direction = str(args.direction) ?? "both", limit = (args.limit as number | undefined) ?? 50;
       const out = direction === "in" ? [] : index.links(str(args.path)!, limit);

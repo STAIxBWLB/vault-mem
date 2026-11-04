@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { run } from "../src/cli.ts";
-import { addVault } from "../src/registry.ts";
+import { addVault, removeVault } from "../src/registry.ts";
 import { serveMcp } from "../src/mcp.ts";
 import { createVaultMcp } from "../src/mcp-vault.ts";
 import { VaultIndex } from "../src/vault-index.ts";
@@ -138,4 +138,15 @@ test("#62 status drops the stage field; stats is in help and the manifest as rea
   expect(JSON.parse(run(["status", "--json"], { VMEM_HOME: f.home }).text)).not.toHaveProperty("stage");
   expect(run(["stats", "--help"]).text).toBe("Usage: vmem stats <vault> [--days 1..3650] [--json]");
   expect(JSON.parse(run(["manifest", "--json"]).text).mcp.tools).toContainEqual({ name: "vmem_stats", readOnly: true });
+});
+
+test("#62 vmem_stats is bound to the vault set fixed at MCP startup", async () => {
+  const f = fixture(), other = join(f.root, "other");
+  writeFileSync(join(f.notes, "one.md"), note("insight", "research"));
+  mkdirSync(join(other, "notes"), { recursive: true });
+  const server = createVaultMcp(f.home, { VMEM_HOME: f.home });
+  expect(await server.handlers.vmem_stats!({ vault: "mine" })).toMatchObject({ notes: { total: 1 } });
+  removeVault(f.home, "mine", true);
+  addVault(f.home, { id: "mine", path: other, kind: "personal", write: "mcp" });
+  expect(await server.handlers.vmem_stats!({ vault: "mine" })).toMatchObject({ refused: true, issues: [{ message: expect.stringContaining("restart the MCP server") }] });
 });
