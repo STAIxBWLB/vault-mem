@@ -11,6 +11,19 @@ export interface VaultSpec {
   pii?: "allow" | "deny" | PiiSpec;
   remote?: string;
   registry?: string;
+  domains?: string[];
+}
+/** Canonical built-ins; vault declarations add ids without replacing these. */
+export const BUILTIN_DOMAINS: readonly string[] = Object.freeze(["research", "projects", "teaching", "operations", "people", "ai-practice"]);
+export function effectiveDomains(vault: Pick<VaultSpec, "domains">): string[] {
+  return [...new Set([...BUILTIN_DOMAINS, ...(vault.domains ?? [])])];
+}
+/** A named, actionable domain refusal shared by writers and promotion targets. */
+export function domainProblem(value: unknown, vault: VaultSpec): string | undefined {
+  const domains = effectiveDomains(vault);
+  if (typeof value === "string" && domains.includes(value)) return undefined;
+  const name = typeof value === "string" && /^[a-z][a-z0-9-]{0,31}(?![\s\S])/.test(value) ? `domain ${value}` : "invalid or missing domain";
+  return `${name} is not declared for vault ${vault.id}; choose ${domains.join(", ")} or add the id to this vault's domains in ${CONFIG_FILE}`;
 }
 export type PiiAction = "allow" | "warn" | "deny";
 export const PII_SURFACES = ["notes", "log", "promotion"] as const;
@@ -23,9 +36,9 @@ export interface PiiSpec { email?: PiiCell; phone?: PiiCell; custom?: PiiCell; p
  * The config format this build writes. A build that adds a key bumps it. A config whose `version` is newer
  * than this build is read tolerantly: unknown keys are kept as they are and written back unchanged, so an
  * older vmem can share a config with a newer one. At or below this version unknown keys stay errors (typos).
- * An absent `version` means 1. Registry writes add format 2 only when `specs` is present; vault-only configs keep their existing version field.
+ * An absent `version` means 1. Registry writes add format 2 when `specs` is present and format 3 when vault `domains` is present; otherwise they keep the existing version field.
  */
-export const CONFIG_VERSION = 2;
+export const CONFIG_VERSION = 3;
 export interface SpecSourceSpec { id: string; path: string; write: "mcp" | "cli" | "none"; pii: "allow" | "deny" }
 export interface VmemConfig { version?: number; home?: string; vaults: VaultSpec[]; specs?: SpecSourceSpec[]; denyPaths?: string[]; piiPatterns?: string[] }
 const controls = /[\x00-\x1f\x7f]/;
@@ -115,7 +128,7 @@ export function unenforceablePii(vault: VaultSpec): string | undefined {
   return members.length ? `vault ${vault.id}: PII policy has members this vmem cannot enforce (${members.slice(0, 8).join(", ")}); write with the newer vmem that wrote the policy` : undefined;
 }
 export function parseVault(value: unknown, tolerant = false): VaultSpec {
-  const keys = ["id", "path", "kind", "write", "pii", "remote", "registry"], v = object(value, keys, "vault", tolerant);
+  const keys = ["id", "path", "kind", "write", "pii", "remote", "registry", "domains"], v = object(value, keys, "vault", tolerant);
   const id = string(v.id, "vault.id");
   if (!/^[a-z][a-z0-9-]{0,31}$/.test(id)) throw new Error("vault.id: invalid id");
   if (v.kind !== "personal" && v.kind !== "org") throw new Error("vault.kind: expected personal or org");
@@ -124,6 +137,12 @@ export function parseVault(value: unknown, tolerant = false): VaultSpec {
   if (v.pii !== undefined) result.pii = parsePii(v.pii, tolerant);
   if (v.remote !== undefined) result.remote = string(v.remote, "vault.remote");
   if (v.registry !== undefined) result.registry = absolute(v.registry, "vault.registry");
+  if (v.domains !== undefined) {
+    if (!Array.isArray(v.domains) || v.domains.length > 16 || v.domains.some(id => typeof id !== "string" || !/^[a-z][a-z0-9-]{0,31}(?![\s\S])/.test(id))) {
+      throw new Error("vault.domains: expected at most 16 ids matching [a-z][a-z0-9-]{0,31}; fix domains in vmem.config.json");
+    }
+    result.domains = [...v.domains];
+  }
   return result;
 }
 /** Spec sources have their own registry shape; they are not vaults. */

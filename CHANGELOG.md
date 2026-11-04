@@ -6,6 +6,8 @@
 
 - `vmem graph build` keeps the relation of `- [[x]] (relation)` lines from `vmem link --relation` as `rel` on the `wiki_link` edge, and `vmem graph neighbors --relation` / `vmem_graph_neighbors` `relation` follow only edges of one relation (`wiki_link` for untyped links); an unknown relation is refused. Node and edge sets are unchanged (#74).
 
+- Vault entries accept up to 16 extra domain ids; writers, lint and promotion use the selected target set alongside the six built-ins, and status/list report the effective domains. Malformed declarations fail closed; registry writes with domains use config format 3 (#72).
+
 - Reference notes accept typed citekey, DOI, arXiv id, authors, year and venue metadata with offline syntax checks, lowercase DOI assignments and vault-wide citekey uniqueness. Search includes reference DOI/citekey text; the first run rebuilds the index once in a separate schema3 derived cache without modifying existing notes (#73).
 
 - `vmem setup codex` replaces a vmem entry whose table header uses quoted or spaced keys (`["mcp_servers".vmem]`, `[mcp_servers."vmem"]`, `[ mcp_servers . vmem ]`) and its subtables in place instead of adding a second table and refusing. The dry run now renders and parses the planned file, so a refusal shows in the preview as it does on apply (#116).
