@@ -13,7 +13,7 @@
 | Clean installed CLI/MCP | Fresh consumer install of packed tarball, exact installed byte comparison, CLI version/help/create/search, MCP read/tools and stale-fingerprint refusal | Bun and npm tarball installations passed |
 | Frontmatter round-trip | Four release fixture notes, original comments/folded descriptions/Unicode retained byte-identically | Provider fixture passed |
 | Incremental index vs rebuild | Baseline/create/edit/rename/delete compare notes, FTS and links | Provider fixture passed |
-| Two Python parity runs | [External parity record](evidence/external-parity.json), same code/input hashes and two zero-diff rounds | Synthetic passed; private corpus passed (two zero-diff lint/graph rounds against the unchanged references, evidence kept private) |
+| Two Python parity runs | [External parity record](evidence/external-parity.json), same code/input hashes and two zero-diff rounds | 0.5.0 synthetic passed; historical private corpus passed (two zero-diff lint/graph rounds against the unchanged references, evidence kept private), not rerun for 0.5.0 |
 | Obsidian properties and links | Obsidian 1.12.7 on an isolated synthetic fixture plus vmem-written notes: no invalid-property badge; properties, aliases, folded descriptions, headings, embeds, heading navigation, backlinks and graph view read back. An alias-only link mismatch was found and fixed by resolving links by path only (#29) | Native fixture passed |
 | Consumer graph loading | [Consumer record](evidence/consumer.json), actual Maru enrichGraph module loads emitted fixture and overlays communities | Module readback passed; UI unverified |
 | Agent/non-TTY and stale preview | Existing CLI/MCP regression suite plus clean installed package smoke | Candidate suite required |
