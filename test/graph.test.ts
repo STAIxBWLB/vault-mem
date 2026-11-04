@@ -212,3 +212,11 @@ test("typed link relations ride on wiki_link edges and filter neighbours (#74)",
   expect(graphNeighbors(graph, "a", 1, 500).nodes).toHaveLength(8);
   expect(() => graphNeighbors(graph, "a", 1, 500, "refutes")).toThrow("unknown relation");
 });
+
+test("typed relation lookup stays linear on one long line of links (#74)", () => {
+  const long = "[[b]] ".repeat(40000) + "\n- [[b]] (supports): x\n" + "- [[c]] ".repeat(20000);
+  const started = performance.now();
+  const graph = buildGraph(snapshot({ a: note(long), b: note(""), c: note("") }));
+  expect(performance.now() - started).toBeLessThan(1500);
+  expect(graph.edges.map(edge => [edge.target, edge.rel])).toEqual([["b", "supports"], ["c", undefined]]);
+});

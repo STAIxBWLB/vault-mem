@@ -340,8 +340,11 @@ export function labelCommunities(ids: readonly string[], edges: readonly (readon
 export const LINK_RELATIONS = ["supports", "contradicts", "extends", "applies-to", "context-for"] as const;
 /** The typed relation of a `- [[x]] (relation)` list line, or undefined for any other wiki link. */
 function linkRelation(body: string, index: number, length: number): string | undefined {
-  const start = body.lastIndexOf("\n", index - 1) + 1;
-  if (!/^\s*- $/.test(body.slice(start, index))) return undefined;
+  // Only `- [[` can be typed; check the two characters before the link before scanning back to the line start,
+  // so a long line of plain links stays linear. The scan back then crosses only whitespace.
+  if (index < 2 || body[index - 1] !== " " || body[index - 2] !== "-") return undefined;
+  let start = index - 2;
+  while (start > 0 && body[start - 1] !== "\n") { if (!/\s/.test(body[start - 1]!)) return undefined; start--; }
   const after = /^ \(([a-z-]+)\)(?::|\s*(?:\n|$))/.exec(body.slice(index + length, index + length + 40));
   return after && (LINK_RELATIONS as readonly string[]).includes(after[1]!) ? after[1] : undefined;
 }
