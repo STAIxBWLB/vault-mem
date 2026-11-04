@@ -2,8 +2,6 @@
 export default (host) => {
   // Every element comes from the console panel kit (host.ui); this file defines no DOM helper of its own.
   const ui = host.ui, h = ui.h;
-  const err = (text) => ui.notice(text, "err");
-  const btn = (label, onclick, cls = "btn") => h("button", { type: "button", class: cls, onclick, text: label });
   const root = h("div", { class: "vmem" });
   host.mount.append(root);
   let panel = "overview", params = {};
@@ -34,12 +32,12 @@ export default (host) => {
     },
     notes(s) {
       const list = s.notes ?? [];
-      return [searchForm(s.q), s.error ? err(s.error) : null,
+      return [searchForm(s.q), s.error ? ui.notice(s.error, "err") : null,
         ui.rows(list, (n) => ui.row({ title: n.title || n.path, sub: [n.type, n.domain, n.description].filter(Boolean).join(" · "), onOpen: () => openNote(n.path) }))
           ?? ui.empty(s.q ? "No notes match" : "No notes", s.q ? "Try fewer words; terms are combined with AND." : undefined)];
     },
     note(s) {
-      if (s.error) return [err(s.error)];
+      if (s.error) return [ui.notice(s.error, "err")];
       const n = s.note;
       if (!n) return [ui.empty("No note selected", "Open a note from Search or the palette.")];
       const fm = n.frontmatter ?? {};
@@ -49,7 +47,7 @@ export default (host) => {
       const out = s.links?.out ?? [], back = s.links?.in ?? [], dead = s.links?.dead ?? [];
       const links = [...out.map((l) => ({ path: l.resolved, label: `→ ${l.resolved}` })), ...back.map((l) => ({ path: l.source, label: `← ${l.source}` })), ...dead.map((l) => ({ label: `✕ ${l.target}` }))];
       const actions = [
-        btn("Delete…", () => host.action({ action: "delete", path: n.path, ...vaultParam() }), "btn danger"),
+        ui.button("Delete…", () => host.action({ action: "delete", path: n.path, ...vaultParam() }), { tone: "danger" }),
         h("form", { class: "vmem-inline", onsubmit: (e) => { e.preventDefault(); if (moveInput.value.trim()) host.action({ action: "move", from: n.path, to: moveInput.value.trim(), ...vaultParam() }); } },
           moveInput, h("button", { type: "submit", class: "btn", text: "Move…" })),
       ];
@@ -64,7 +62,7 @@ export default (host) => {
         ...(fm.status ? { state: { text: fm.status, ...(fm.status === "superseded" ? { tone: "warn" } : {}) } } : {}),
         actions, ...(fm.description ? { summary: fm.description } : {}),
         sections: [
-          { title: "Body", open: true, body: h("div", {}, h("pre", { class: "vmem-body", text: n.body ?? "" }), n.truncated ? err("Truncated; open the file for the rest.") : null) },
+          { title: "Body", open: true, body: h("div", {}, h("pre", { class: "vmem-body", text: n.body ?? "" }), n.truncated ? ui.notice("Truncated; open the file for the rest.", "warn") : null) },
           { title: `Links (${out.length} out, ${back.length} in${dead.length ? `, ${dead.length} dead` : ""})`,
             body: ui.rows(links, (l) => ui.row({ title: l.label, ...(l.path ? { onOpen: () => openNote(l.path) } : {}) })) ?? ui.empty("No links") },
         ],
@@ -86,9 +84,9 @@ export default (host) => {
           const meta = Object.fromEntries(Object.entries(values).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
           host.action({ action: "promote-from-amem", id: picked.id, project: picked.project, ...meta, ...vaultParam() });
         })) : null;
-      return [s.unavailable ? err(s.unavailable) : null, form,
+      return [s.unavailable ? ui.notice(s.unavailable, "err") : null, form,
         ui.rows(all, (c) => ui.row({ title: c.title || c.kind, sub: `${c.kind} · ${c.project} · ${new Date(c.at).toLocaleString()}`, onOpen: () => go("promote", { id: c.id, project: c.project }),
-          ...(s.selected === c.id ? { chip: { text: "selected", tone: "ok" } } : { verbs: [btn("Select", () => go("promote", { id: c.id, project: c.project }))] }) }))
+          ...(s.selected === c.id ? { chip: { text: "selected", tone: "ok" } } : { verbs: [ui.button("Select", () => go("promote", { id: c.id, project: c.project }))] }) }))
           ?? ui.empty("No promotion candidates", "Durable agent memories appear here when agent-mem marks them for the vault.")];
     },
     lint(s) {
@@ -99,7 +97,7 @@ export default (host) => {
     },
     log(s) {
       const r = s.rows ?? [];
-      return [s.error ? err(s.error) : null,
+      return [s.error ? ui.notice(s.error, "err") : null,
         ui.rows(r, (x) => {
           const p = x.dest ?? x.source;
           return ui.row({ title: x.raw ?? `${x.type}  ${x.source}${x.dest ? ` → ${x.dest}` : ""}`, sub: x.raw ? "unparsed line" : `${x.at} · ${x.project} · ${x.note}${x.agent ? " · agent" : ""}`,

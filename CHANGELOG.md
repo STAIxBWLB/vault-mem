@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The console panel uses the kit's `ui.button` and `ui.notice(text, "err")`, which screen readers announce assertively, instead of its own button and error helpers; the truncated-body note is a polite warning. `@staix/agent-console` moves to 4c4c1e0 (#122).
+
 - The console panel builds every view from the agent-console panel kit (`host.ui`): lists use `ui.rows`/`ui.row`, so `j`/`k`/`Enter` work on them, and a note opens in `ui.detail`. The panel CSS uses only the kit's public classes and `--acon-*` tokens, and the `@staix/agent-console` devDependency moves to 5af4dcc, which has `ConsoleUi` (#57).
 
 - Every CLI command prints text for people by default, following agent-hub's conventions: tables, field blocks, LEVEL/CHECK/FINDING checks with a verdict, one result line per write, and the exact confirm or next-page command after a preview or a cut-off read. Help is grouped into sections with a description per command, and `vmem help <command>` prints one command. `--color=auto|always|never` works everywhere and honors `NO_COLOR` and `TERM=dumb`. **Breaking for scripts:** the default output was pretty JSON and is now text, so pass `--json`, which prints the same compact JSON as before (#114).

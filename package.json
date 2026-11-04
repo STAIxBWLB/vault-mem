@@ -15,7 +15,7 @@
     "@staix/agent-mem": "0.17.0"
   },
   "devDependencies": {
-    "@staix/agent-console": "github:STAIxBWLB/agent-console#5af4dcc",
+    "@staix/agent-console": "github:STAIxBWLB/agent-console#4c4c1e0",
     "@types/bun": "^1.3.0",
     "typescript": "^5.8.0"
   },
