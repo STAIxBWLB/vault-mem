@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "kind": "external Python synthetic fixture parity",
-  "privateCorpus": "passed: two zero-diff lint/graph rounds against the same references on the authorized private corpus; evidence kept private",
+  "privateCorpus": "Not rerun for 0.5.0; historical authorized private-corpus parity passed two zero-diff lint/graph rounds against these references, with evidence kept private.",
   "references": {
     "lintSha256": "1b38d417aef8e3ea395da36e9c58dc2fa0d33bdb65fd2ea50a771a6f5dfa2ad6",
     "graphSha256": "5ff417ae8e129c208034516b7db8250473312ddeca669af0ba68931e4fd87aa8"
@@ -9,8 +9,8 @@
   "inputsSha256": {
     "src/frontmatter.ts": "fbf2e6a79ec2b9c5bab02cbe6fb538b84cf32890b4f9faa6993fcc6b121994c2",
     "src/analysis-yaml.ts": "355c308ac11a7a71051c51409ee6e7437a491e07cb1910d2f0a0b80b32c4e2d7",
-    "src/vault-lint.ts": "47dc3e2be5ef351f553eb7cbc73577ab8c605b9a4c4d88e69de55434745fca15",
-    "src/vault-graph.ts": "58d7279daa5b4432dc5df258a87dca1e87132c2299a1cc480ae1b88b07d6ea99",
+    "src/vault-lint.ts": "c8df4137d2aa54f7da826a7da59c7cae92fabf7d364c211d7ed58fee7090299d",
+    "src/vault-graph.ts": "8b0314ebf8d6cc952a8d4b0e10badad8b01260853090619f1e06ceabe170cb91",
     "test/fixtures/analysis-corpus.ts": "200232cf87fc8c77027eb8e1e1f08543d1c365556968978e732bcec48b52b5b2",
     "test/fixtures/analysis/lint-oracle.json": "d3e4cb1c009b4be44c2b6323425e54d2f0af3797c4a992bf589b47f0073c4628",
     "test/fixtures/analysis/graph-oracle.json": "2416f03f3bf4052af5320bac46264c7985f4e4c90ce7ab92151ebdb95f3a4b89",
@@ -33,5 +33,21 @@
     }
   ],
   "referencesRetired": false,
-  "candidate": "4a5ec32"
+  "candidate": "9b0004907323ba8254b693743b470409e903b042",
+  "measuredAt": "2026-11-04T09:34:20.412Z",
+  "runtimeDigest": "cae3e69a650973ba23e7df7151e4d9297402deafef5ef8ad9fbd9dea08b6e43b",
+  "fixtureDigest": "c018376b88b57d84ebba5484dd285b80acfc4c0f60ac7728dcd124ea54edc83c",
+  "frontmatter": {
+    "files": 4,
+    "roundTrip": "byte-identical"
+  },
+  "incrementalIndex": {
+    "matchesCleanRebuild": [
+      "baseline",
+      "create",
+      "edit",
+      "rename",
+      "delete"
+    ]
+  }
 }
