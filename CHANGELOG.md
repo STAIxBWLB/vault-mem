@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Tests: the core fixture copies use NFC names, so a macOS working copy that holds `café.md` under an NFD name no longer fails `bun run check`. A new test pins the path contract: an NFD-named note keeps its on-disk name in `search`, `show` and `links` and resolves from NFC targets, as the README now states (#147).
+
 ## [0.5.0] - 2026-11-04
 
 - Git timeouts and signals are named accurately: `timed out after 60 s` for `vmem sync` and `1 s` for the console check (from Bun's `exitedDueToTimeout`), else `killed by <signal>`, each with its own next step (`check git -C <vault> status, then rerun vmem sync`, the same for `vmem doctor`, or `inspect the vault Git state in System`). `vmem sync` FETCH and PUSH issues with an empty stderr now say why and name a next step. The console sync alert names the staged paths from the same list sync stages (#143).
