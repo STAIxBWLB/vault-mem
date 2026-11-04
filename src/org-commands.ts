@@ -1,6 +1,7 @@
 import { promoteToOrg } from "./org-promote.ts";
 import { syncVault } from "./sync.ts";
 import { PLAIN, type TextOptions } from "./text-output.ts";
+import { renderOrgPromote, renderSync } from "./write-output.ts";
 
 function parse(command: string, args: string[], values: string[], booleans: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
@@ -23,10 +24,10 @@ export function runOrgCommand(command: string, args: string[], home: string, env
     const result = promoteToOrg(home, { from: positional[0]!, note: positional[1]!, to: value("--to")!, again: flags["--again"] === true, confirm: flags["--confirm"] === true,
       ...(value("--topics") ? { topics: value("--topics")!.split(",").map(t => t.trim()).filter(Boolean) } : {}),
       ...(value("--fingerprint") ? { fingerprint: value("--fingerprint") } : {}), ...(value("--log-project") ? { logProject: value("--log-project") } : {}), channel: "cli" }, { env });
-    return { text: JSON.stringify(result, null, flags["--json"] ? undefined : 2), code: result.ok ? 0 : 1 };
+    return { text: flags["--json"] ? JSON.stringify(result) : renderOrgPromote(result, text, { argv: [command, ...args], positional }), code: result.ok ? 0 : 1 };
   }
   const { flags, positional, value } = parse(command, args, ["--fingerprint", "--message"], ["--confirm", "--json"]);
   if (positional.length !== 1) throw new Error("sync: requires vault id");
   const result = syncVault(home, { vault: positional[0]!, confirm: flags["--confirm"] === true, ...(value("--fingerprint") ? { fingerprint: value("--fingerprint") } : {}), ...(value("--message") ? { message: value("--message") } : {}) }, { env });
-  return { text: JSON.stringify(result, null, flags["--json"] ? undefined : 2), code: result.ok ? 0 : 1 };
+  return { text: flags["--json"] ? JSON.stringify(result) : renderSync(result, text, { argv: [command, ...args], positional }), code: result.ok ? 0 : 1 };
 }

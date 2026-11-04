@@ -117,7 +117,7 @@ test("writer receipt separates committed note success from missing/unflushed log
   const override = fixture();
   // A screened override refuses the whole write before the note changes (#60).
   const screened = applyWrite(override.home, { vault: "test", operation, log: { ...event, note: `sk-${"x".repeat(24)}` } }, { env: {} }); expect(screened).toMatchObject({ ok: false, applied: false }); expect(screened.issues.some(issue => issue.code === "V06")).toBe(true); expect(existsSync(override.file)).toBe(false); expect(readFileSync(join(override.notes, "old.md"), "utf8")).toContain("Original text.");
-  const cliFailure = fixture(); mkdirSync(cliFailure.file); const cli = run(["patch", "test", "old", "--old", "Original text.", "--new", "Persisted text."], cliFailure.env); expect(cli.code).toBe(1); expect(JSON.parse(cli.text)).toMatchObject({ ok: true, applied: true, logged: false });
+  const cliFailure = fixture(); mkdirSync(cliFailure.file); const cli = run(["patch", "test", "old", "--old", "Original text.", "--new", "Persisted text.", "--json"], cliFailure.env); expect(cli.code).toBe(1); expect(JSON.parse(cli.text)).toMatchObject({ ok: true, applied: true, logged: false });
 });
 
 test("rotation/removal cannot claim current log persistence, and partial rollback preserves foreign tail bytes", () => {

@@ -143,7 +143,7 @@ test("CLI exposes all writers with closed options and check is a no-write path",
   expect(run(["frontmatter", "test", "cli-new", "--set", '{"confidence":"likely"}'], f.env).code).toBe(0);
   expect(run(["link", "test", "cli-new", "next", "--relation", "extends", "--one-way"], f.env).code).toBe(0);
   expect(run(["supersede", "test", "cli-new", "next"], f.env).code).toBe(0);
-  const preview = JSON.parse(run(["move", "test", "cli-new", "cli-moved"], f.env).text);
+  const preview = JSON.parse(run(["move", "test", "cli-new", "cli-moved", "--json"], f.env).text);
   expect(run(["move", "test", "cli-new", "cli-moved", "--confirm", "--fingerprint", preview.fingerprint], f.env).code).toBe(0);
   expect(run(["tidy", "test", "--connections"], f.env).code).toBe(0);
   expect(run(["report", "test", "reports/result.md", "--body", source], f.env).code).toBe(0);

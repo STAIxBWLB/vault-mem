@@ -7,6 +7,7 @@ import { canonicalPath, isDenied } from "./platform.ts";
 import { MAX_WRITE_BYTES } from "./writer.ts";
 import { listPromotionCandidates, promoteFromAmem, type PromoteRequest } from "./promote.ts";
 import { PLAIN, type TextOptions } from "./text-output.ts";
+import { renderCandidates, renderPromote } from "./write-output.ts";
 
 const VALUES = ["--project", "--limit", "--stem", "--type", "--domain", "--topics", "--description", "--title", "--body", "--link-to", "--log-project", "--fingerprint"];
 const BOOLEANS = ["--all-projects", "--edit", "--confirm", "--json"];
@@ -48,7 +49,7 @@ export async function runPromoteCommand(args: string[], home: string, env: NodeJ
     flags[arg] = value;
   }
   const value = (name: string) => typeof flags[name] === "string" ? flags[name] as string : undefined;
-  const format = (result: unknown) => JSON.stringify(result, null, flags["--json"] ? undefined : 2);
+  const json = flags["--json"] === true, ctx = { argv: ["promote-from-amem", ...args], positional };
   if (positional.length < 1 || positional.length > 2) throw new Error("promote-from-amem: requires vault id and optional mem id");
   const [vault, rawId] = positional as [string, string | undefined];
   if (!loadRegistry(home).vaults.some(v => v.id === vault)) throw new Error("promote-from-amem: unknown vault id");
@@ -56,7 +57,7 @@ export async function runPromoteCommand(args: string[], home: string, env: NodeJ
     if (flags["--all-projects"] && value("--project")) throw new Error("choose either --all-projects or --project");
     const limit = value("--limit") === undefined ? undefined : /^[0-9]+$/.test(value("--limit")!) ? Number(value("--limit")) : NaN;
     const list = await listPromotionCandidates({ env, allProjects: flags["--all-projects"] === true, ...(value("--project") ? { project: value("--project") } : {}), ...(limit !== undefined ? { limit } : {}), piiPatterns: loadRegistry(home).piiPatterns });
-    return { text: format(list), code: 0 };
+    return { text: json ? JSON.stringify(list) : renderCandidates(list, text, ctx), code: 0 };
   }
   if (flags["--all-projects"]) throw new Error("--all-projects lists candidates only");
   const request: PromoteRequest = { vault, id: rawId.replace(/^mem:/, ""), channel: "cli", confirm: flags["--confirm"] === true };
@@ -74,5 +75,5 @@ export async function runPromoteCommand(args: string[], home: string, env: NodeJ
   }
   const result = await promoteFromAmem(home, request, options);
   const edited = flags["--edit"] && request.body !== undefined && value("--body") === undefined;
-  return { text: format(edited ? { ...result, hint: "edited text is only previewed: save it and confirm with --body <file> and this fingerprint" } : result), code: result.ok ? 0 : 1 };
+  return { text: json ? JSON.stringify(edited ? { ...result, hint: "edited text is only previewed: save it and confirm with --body <file> and this fingerprint" } : result) : renderPromote(result, text, ctx, !!edited), code: result.ok ? 0 : 1 };
 }

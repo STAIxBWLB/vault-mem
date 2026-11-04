@@ -59,8 +59,8 @@ async function mcpWrite(f: ReturnType<typeof fixture>, op: typeof OPS[number], l
   return mcp(f.home, op.tool, { ...op.args, ...confirm, ...(log ? { log } : {}) });
 }
 function cliWrite(f: ReturnType<typeof fixture>, op: typeof OPS[number], extra: string[] = []) {
-  const confirm = op.twoStep ? ["--confirm", "--fingerprint", JSON.parse(run(op.cli, f.env).text).fingerprint] : [];
-  return run([...op.cli, ...confirm, ...extra], f.env);
+  const confirm = op.twoStep ? ["--confirm", "--fingerprint", JSON.parse(run([...op.cli, "--json"], f.env).text).fingerprint] : [];
+  return run([...op.cli, ...confirm, ...extra, "--json"], f.env);
 }
 
 for (const op of OPS) {
@@ -100,7 +100,7 @@ test("--log JSON errors name the cause and the expected shape, and check takes n
   expect(() => run([...patch, "--log", "{not json"], f.env)).toThrow('--log: invalid JSON; expected {"type", "project", "source", "note"[, "dest"]}');
   expect(() => run([...patch, "--log", JSON.stringify({ ...given, extra: "x" })], f.env)).toThrow("--log: unknown argument: extra; expected");
   expect(() => run([...patch, "--log", JSON.stringify({ type: "LEARN", project: "-", source: "x" })], f.env)).toThrow("--log.note: required; expected");
-  const refused = JSON.parse(run([...patch, "--log", JSON.stringify(invalid[0])], f.env).text);
+  const refused = JSON.parse(run([...patch, "--log", JSON.stringify(invalid[0]), "--json"], f.env).text);
   expect(refused.issues[0].message).toContain("log event refused, nothing written: project is absent from the configured registry");
   expect(() => run(["check", "test", "-", "--log", JSON.stringify(given)], f.env)).toThrow("check: unknown or repeated option: --log");
   expect(disk(f.vault)).toEqual(before);
