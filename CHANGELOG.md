@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Search, `vmem_search`, spec grep and writer duplicate hints match a Hangul or other CJK term of 2+ characters inside particle and compound forms (`사업단` finds `사업단은`, `사업단장`, `해외사업단`) through a side FTS5 bigram table. Latin terms keep token matching and their ranking; standalone-word and title/description hits rank before substring-only body hits. The index file name gains a schema version (`-links2-schema2.sqlite`), so the first run builds a new index once and older vmem versions keep their own file (#59).
 - `vmem manifest --json` lists read-only MCP tools as `{name, readOnly: true}` (taken from each tool's `readOnlyHint`), so installers can approve new read tools without a hard-coded list; other tools stay plain names. The release workflow states N-1 per minor line; patch releases carry no N-1 line (#106).
 
 - Add MCP `vmem_read_file` and `vmem_list_files`, bounded read-only access to `ops/`, `reports/`, `self/`, `templates/`, `AGENTS.md` and `README.md` with `vmem_read` paging and limits; `notes/`, `log`, dot paths, symlinked components, non-UTF-8 and over-limit files are refused with the tool to use instead. Add `vmem_report`, the MCP form of `vmem report` with the same receipt and log event (#61).

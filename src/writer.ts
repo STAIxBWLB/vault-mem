@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { hostname } from "node:os";
 import { Database } from "bun:sqlite";
 import { loadRegistry, syncDirectory } from "./registry.ts";
-import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
+import { VaultIndex, MAX_NOTE_BYTES, GRAMS_COLUMNS, gramPhrase, grams, splitTerms } from "./vault-index.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { moveSourcePath, notePath, planOperation, refuse, WriteRefusal } from "./write-operations.ts";
@@ -102,14 +102,20 @@ function duplicateWarnings(request: WriteRequest, notes: Map<string, string>, ch
   // Disposable FTS preserves dry-run's no-disk-write contract, including on a fresh home.
   const db = new Database(":memory:");
   try {
-    db.run("CREATE VIRTUAL TABLE candidates USING fts5(path UNINDEXED,title,description,body,tokenize='unicode61')");
-    const insert = db.query("INSERT INTO candidates VALUES (?,?,?,?)");
+    db.run(`CREATE VIRTUAL TABLE candidates USING fts5(path UNINDEXED,title,description,body,tokenize='unicode61');
+      CREATE VIRTUAL TABLE grams USING fts5(${GRAMS_COLUMNS},tokenize='unicode61');`);
+    const insert = db.query("INSERT INTO candidates VALUES (?,?,?,?)"), insertGrams = db.query("INSERT INTO grams VALUES (?,?,?,?)");
     for (const [path, source] of notes) {
       let value: ReturnType<typeof parseFrontmatter>;
       try { value = parseFrontmatter(source); } catch { continue; } // Unrelated legacy YAML is not a duplicate candidate.
-      insert.run(path, typeof value.data.title === "string" ? value.data.title : path, typeof value.data.description === "string" ? value.data.description : "", value.body);
+      const title = typeof value.data.title === "string" ? value.data.title : path, description = typeof value.data.description === "string" ? value.data.description : "";
+      insert.run(path, title, description, value.body); insertGrams.run(path, grams(title), grams(description), grams(value.body));
     }
-    const hits = db.query<{ path: string; score: number }, [string]>("SELECT path,bm25(candidates,0,5,2,1) AS score FROM candidates WHERE candidates MATCH ? ORDER BY score,path LIMIT 3").all(terms.map(term => `"${term}"`).join(" AND "));
+    // Same term split as VaultIndex.search: CJK terms match substrings through the bigram table.
+    const { tokens, runs } = splitTerms(terms);
+    const hits = runs.length
+      ? db.query<{ path: string; score: number }, string[]>(`SELECT path,bm25(grams,0,5,2,1) AS score FROM grams WHERE grams MATCH ? ${tokens.length ? "AND path IN (SELECT path FROM candidates WHERE candidates MATCH ?)" : ""} ORDER BY score,path LIMIT 3`).all(runs.map(gramPhrase).join(" AND "), ...(tokens.length ? [tokens.join(" AND ")] : []))
+      : db.query<{ path: string; score: number }, [string]>("SELECT path,bm25(candidates,0,5,2,1) AS score FROM candidates WHERE candidates MATCH ? ORDER BY score,path LIMIT 3").all(tokens.join(" AND "));
     return hits.filter(hit => hit.score <= -0.000001).map(hit => ({ code: "V08", severity: "warning", path: hit.path, message: "possible duplicate: FTS title terms match an existing note" }));
   } finally { db.close(); }
 }

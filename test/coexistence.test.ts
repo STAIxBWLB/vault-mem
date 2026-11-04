@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { addVault, loadRegistry, removeVault, setVaultPii } from "../src/registry.ts";
 import { appendLog, readLog } from "../src/vault-log.ts";
 import { CONFIG_FILE, CONFIG_VERSION } from "../src/config.ts";
-import { VaultIndex, LINK_RESOLUTION } from "../src/vault-index.ts";
+import { VaultIndex, LINK_RESOLUTION, INDEX_SCHEMA } from "../src/vault-index.ts";
 import { VMEM_TOOL_NAMES, vaultTools } from "../src/mcp-vault.ts";
 import { specTools } from "../src/mcp-spec.ts";
 import { COMMANDS } from "../src/commands-table.ts";
@@ -121,9 +121,9 @@ test("AC3: the index file is named per link-resolution version, so versions alte
   const f = fixture(), spec = loadRegistry(f.home).vaults[0]!;
   const first = new VaultIndex(f.home, spec);
   try { expect(first.scan().changed).toBe(3); } finally { first.close(); }
-  expect(readdirSync(join(f.home, "indexes"))).toEqual([expect.stringMatching(new RegExp(`^[0-9a-f]{64}-links${LINK_RESOLUTION}\\.sqlite$`))]);
+  expect(readdirSync(join(f.home, "indexes"))).toEqual([expect.stringMatching(new RegExp(`^[0-9a-f]{64}-links${LINK_RESOLUTION}-schema${INDEX_SCHEMA}\\.sqlite$`))]);
   // 0.2.4 keeps its unversioned `<digest>.sqlite`; writing one beside ours leaves our index warm.
-  const name = readdirSync(join(f.home, "indexes"))[0]!, legacy = new Database(join(f.home, "indexes", name.replace(/-links\d+/, "")));
+  const name = readdirSync(join(f.home, "indexes"))[0]!, legacy = new Database(join(f.home, "indexes", name.replace(/-links.*\.sqlite$/, ".sqlite")));
   legacy.run("PRAGMA user_version = 1"); legacy.close();
   const second = new VaultIndex(f.home, spec);
   try { expect(second.scan()).toMatchObject({ notes: 3, changed: 0, removed: 0 }); } finally { second.close(); }

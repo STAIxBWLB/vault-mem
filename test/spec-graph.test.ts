@@ -8,7 +8,7 @@ import type { SpecSourceSpec } from "../src/config.ts";
 import { memoryGitArgv, memoryGitEnv } from "../src/platform.ts";
 import { discoverSpecs, resolveSpecWorktree, SpecIndex } from "../src/spec-source.ts";
 import { buildSpecGraph, specSlice } from "../src/spec-graph.ts";
-import { LINK_RESOLUTION, MAX_NOTE_BYTES, VaultIndex } from "../src/vault-index.ts";
+import { INDEX_SCHEMA, LINK_RESOLUTION, MAX_NOTE_BYTES, VaultIndex } from "../src/vault-index.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -156,8 +156,8 @@ test("spec adapter cache cannot collide with a vault cache at the same root and 
     expect(kind).toBe("personal");
     vault.scan(); specs.scan();
     const digest = createHash("sha256").update(repo).digest("hex");
-    expect(basename(vault.file)).toBe(`${digest}-links${LINK_RESOLUTION}.sqlite`);
-    expect(basename(specs.file)).toBe(`spec-${digest}-links${LINK_RESOLUTION}.sqlite`);
+    expect(basename(vault.file)).toBe(`${digest}-links${LINK_RESOLUTION}-schema${INDEX_SCHEMA}.sqlite`);
+    expect(basename(specs.file)).toBe(`spec-${digest}-links${LINK_RESOLUTION}-schema${INDEX_SCHEMA}.sqlite`);
     expect(vault.search("Searchword")[0]?.path).toBe("example.md");
     expect(specs.search("Searchword")[0]).toMatchObject({ id: "example", path: "notes/example.md" });
     const internal = join(repo, "internal-cache");

@@ -16,7 +16,40 @@ export const MAX_RESULTS = 500;
  * share the unversioned `<digest>.sqlite`; the first run of a newer version builds its own file once.
  */
 export const LINK_RESOLUTION = 2;
-const indexName = (root: string) => `${digest(root)}-links${LINK_RESOLUTION}.sqlite`;
+/** Bump when tables or FTS columns change. Named per value like LINK_RESOLUTION. 2 = CJK bigram table. */
+export const INDEX_SCHEMA = 2;
+const indexName = (root: string) => `${digest(root)}-links${LINK_RESOLUTION}-schema${INDEX_SCHEMA}.sqlite`;
+/**
+ * unicode61 keeps each Hangul/CJK run as one token, so `사업단` misses `사업단은`. A side table holds the
+ * overlapping bigrams of every CJK run of 2+ characters, runs split by a `0` token; a CJK query term then matches
+ * one bigram (2 characters) or a phrase of consecutive bigrams, which is exact substring matching. A separate
+ * table keeps bm25 of the unicode61 table, whose document length spans all columns, unchanged for Latin queries.
+ */
+export const GRAMS_COLUMNS = "path UNINDEXED, title, description, body";
+const CJK = "\\p{sc=Hangul}\\p{sc=Han}\\p{sc=Hiragana}\\p{sc=Katakana}";
+const CJK_RUN = new RegExp(`[${CJK}]{2,}`, "gu"), CJK_TERM = new RegExp(`^[${CJK}]{2,}$`, "u");
+function bigrams(run: string): string[] {
+  const chars = [...run];
+  return chars.slice(1).map((char, i) => chars[i]! + char);
+}
+export function grams(text: string): string {
+  return [...text.normalize("NFC").matchAll(CJK_RUN)].map(([run]) => `${bigrams(run).join(" ")} 0`).join(" ");
+}
+export const gramPhrase = (run: string) => `"${bigrams(run).join(" ")}"`;
+/**
+ * Literal AND terms: users cannot inject FTS operators, columns or SQL. A term whose letters and digits form one
+ * CJK run of 2+ characters (`runs`) matches as a substring through the bigram table; any other term (`tokens`,
+ * quoted) keeps unicode61 token matching.
+ */
+export function splitTerms(words: string[]): { tokens: string[]; runs: string[] } {
+  const tokens: string[] = [], runs: string[] = [];
+  for (const term of words) {
+    const letters = term.normalize("NFC").match(/[\p{L}\p{N}]+/gu);
+    if (letters?.length === 1 && CJK_TERM.test(letters[0]!)) runs.push(letters[0]!);
+    else tokens.push(`"${term.replaceAll('"', '""')}"`);
+  }
+  return { tokens, runs };
+}
 export const MAX_READ_BYTES = 64 * 1024;
 export interface IndexedNote extends LinkNote { hash: string; description: string; type: string; domain: string }
 export interface NoteReadResult {
@@ -165,6 +198,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
         title TEXT NOT NULL, description TEXT NOT NULL, body TEXT NOT NULL,
         type TEXT NOT NULL, domain TEXT NOT NULL, aliases TEXT NOT NULL, source TEXT NOT NULL);
         CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(path UNINDEXED, title, description, body, tokenize='unicode61');
+        CREATE VIRTUAL TABLE IF NOT EXISTS grams USING fts5(${GRAMS_COLUMNS}, tokenize='unicode61');
         CREATE TABLE IF NOT EXISTS analysis_notes (path TEXT PRIMARY KEY, source TEXT NOT NULL, hash TEXT NOT NULL, metadata TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS links (source TEXT NOT NULL, ordinal INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source, ordinal));`);
       // Dry runs reuse the derived cache via a readonly connection, then refresh only changed notes in memory.
@@ -182,7 +216,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
               if (size.count > 10000 || size.bytes > 64 * 1024 * 1024) throw new Error("analysis: cached snapshot exceeds bound");
               for (const row of disk.query<Omit<StoredNote,"aliases"> & {aliases:string}, []>("SELECT * FROM notes").all()) {
                 this.db.query("INSERT INTO notes VALUES (?,?,?,?,?,?,?,?,?,?)").run(row.path,row.hash,row.metadata,row.title,row.description,row.body,row.type,row.domain,row.aliases,row.source);
-                this.db.query("INSERT INTO fts VALUES (?,?,?,?)").run(row.path,row.title,row.description,row.body);
+                this.indexText(row.path, row.title, row.description, row.body);
               }
               for (const row of disk.query<{source:string;ordinal:number;data:string}, []>("SELECT * FROM links").all()) this.db.query("INSERT INTO links VALUES (?,?,?)").run(row.source,row.ordinal,row.data);
               this.db.run(`PRAGMA user_version = ${Number(disk.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0)}`);
@@ -202,6 +236,15 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     }
   }
   close(): void { this.db.close(); }
+  // ponytail: grams stores its bigram text (about 2.3x the CJK bytes); contentless with stable rowids would save it.
+  private indexText(path: string, title: string, description: string, body: string): void {
+    this.db.query("INSERT INTO fts VALUES (?,?,?,?)").run(path, title, description, body);
+    this.db.query("INSERT INTO grams VALUES (?,?,?,?)").run(path, grams(title), grams(description), grams(body));
+  }
+  private unindex(path: string): void {
+    this.db.query("DELETE FROM fts WHERE path=?").run(path);
+    this.db.query("DELETE FROM grams WHERE path=?").run(path);
+  }
   private stored(): LinkNote[] {
     return this.db.query<Omit<LinkNote, "aliases"> & { aliases: string }, []>("SELECT path,title,aliases,body FROM notes ORDER BY path").all().map(row => ({ ...row, aliases: JSON.parse(row.aliases) as string[] }));
   }
@@ -215,7 +258,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
       if (!this.adapter && (realpathSync(this.root) !== this.root || realpathSync(notesDir) !== notesDir || !lstatSync(notesDir).isDirectory())) throw new Error(`vault ${this.vault.id}: path or notes directory changed`);
       const indexed = this.adapter ? new Set(this.db.query<{path:string}, []>("SELECT path FROM notes").all().map(row => row.path)) : undefined;
       const previous = new Map(this.db.query<{ path: string; hash: string; metadata: string }, []>(this.adapter ? "SELECT path,hash,metadata FROM analysis_notes" : options.captureInvalidFrontmatter ? "SELECT path,hash,metadata FROM notes UNION SELECT path,hash,metadata FROM analysis_notes" : "SELECT path,hash,metadata FROM notes").all().map(note => [note.path, note]));
-      if (rebuild) this.db.run("DELETE FROM fts");
+      if (rebuild) this.db.run("DELETE FROM fts; DELETE FROM grams;");
       const live = new Set<string>(), present = new Set<string>();
       let changed = 0, analysisBytes = 0;
       const skipped: string[] = [], touched = new Set<string>(), keys = new Set<string>();
@@ -298,15 +341,16 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
         }
         const { data, body } = document;
         touch(path);
+        const title = text(data.title) || path.slice(0, -3), description = text(data.description);
         this.db.query("INSERT OR REPLACE INTO notes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(path, hash, stamp,
-          text(data.title) || path.slice(0, -3), text(data.description), body, text(data.type), text(data.domain), JSON.stringify(aliases(data.aliases ?? data.alias)), source);
-        this.db.query("DELETE FROM fts WHERE path=?").run(path);
-        this.db.query("INSERT INTO fts(path,title,description,body) SELECT path,title,description,body FROM notes WHERE path=?").run(path);
+          title, description, body, text(data.type), text(data.domain), JSON.stringify(aliases(data.aliases ?? data.alias)), source);
+        this.unindex(path);
+        this.indexText(path, title, description, body);
         changed++;
       }
       for (const row of this.db.query<{path:string}, []>("SELECT path FROM analysis_notes").all()) if (!present.has(row.path)) this.db.query("DELETE FROM analysis_notes WHERE path=?").run(row.path);
       let removed = 0;
-      for (const path of indexed ?? previous.keys()) if (!live.has(path)) { touch(path); this.db.query("DELETE FROM notes WHERE path=?").run(path); this.db.query("DELETE FROM fts WHERE path=?").run(path); removed++; }
+      for (const path of indexed ?? previous.keys()) if (!live.has(path)) { touch(path); this.db.query("DELETE FROM notes WHERE path=?").run(path); this.unindex(path); removed++; }
       if (this.adapter) {
         // Spec links are resolved by frontmatter id in buildSpecGraph, never by vault paths.
         this.db.run("DELETE FROM links");
@@ -345,13 +389,22 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
   search(query: string, options: SearchOptions = {}, snapshot?: ReadonlyMap<string, string>, snapshotOffset = 0, allSnapshotRows = false): SearchResult[] {
     const limit = resultLimit(options.limit);
     if (!query.trim() || Buffer.byteLength(query) > 1024) throw new Error("search: query must contain 1..1024 bytes");
-    // Literal AND terms: users cannot inject FTS operators, columns or SQL.
-    const terms = query.trim().split(/\s+/).map(term => `"${term.replaceAll('"', '""')}"`).join(" AND ");
+    const { tokens, runs } = splitTerms(query.trim().split(/\s+/));
     const hashColumn = snapshot ? ",n.hash AS sourceHash" : "";
-    return this.db.query<SearchResult & { sourceHash?: string }, [string, string | null, string | null, string | null, string | null, number]>(`SELECT n.path, n.title, substr(n.description,1,512) AS description, n.type, n.domain,
+    const filters = [options.type ?? null, options.type ?? null, options.domain ?? null, options.domain ?? null, snapshot ? 10000 : limit];
+    // Latin-only queries run the unicode61 query unchanged. With a CJK term the bigram table drives the match, and a
+    // note where every CJK term is a standalone word or sits in the title/description ranks before substring-only hits.
+    const strong = runs.map(() => "(n.path IN (SELECT path FROM fts WHERE fts MATCH ?) OR n.path IN (SELECT path FROM grams WHERE grams MATCH ?))").join(" AND ");
+    const rows = !runs.length
+      ? this.db.query<SearchResult & { sourceHash?: string }, (string | number | null)[]>(`SELECT n.path, n.title, substr(n.description,1,512) AS description, n.type, n.domain,
       bm25(fts,0,5,2,1) AS score, snippet(fts,3,'','',' ... ',32) AS snippet${hashColumn} FROM fts JOIN notes n ON n.path=fts.path
-      WHERE fts MATCH ? AND (? IS NULL OR n.type=?) AND (? IS NULL OR n.domain=?) ORDER BY score,n.path LIMIT ?`).all(terms, options.type ?? null, options.type ?? null, options.domain ?? null, options.domain ?? null, snapshot ? 10000 : limit)
-      .filter(row => !snapshot || snapshot.get(row.path) === row.sourceHash)
+      WHERE fts MATCH ? AND (? IS NULL OR n.type=?) AND (? IS NULL OR n.domain=?) ORDER BY score,n.path LIMIT ?`).all(tokens.join(" AND "), ...filters)
+      : this.db.query<SearchResult & { sourceHash?: string }, (string | number | null)[]>(`SELECT n.path, n.title, substr(n.description,1,512) AS description, n.type, n.domain,
+      bm25(grams,0,5,2,1) AS score, substr(n.body, max(1, instr(n.body, ?) - 48), 160) AS snippet${hashColumn} FROM grams JOIN notes n ON n.path=grams.path
+      WHERE grams MATCH ? ${tokens.length ? "AND n.path IN (SELECT path FROM fts WHERE fts MATCH ?)" : ""} AND (? IS NULL OR n.type=?) AND (? IS NULL OR n.domain=?)
+      ORDER BY NOT (${strong}),score,n.path LIMIT ?`).all(runs[0]!, runs.map(gramPhrase).join(" AND "), ...(tokens.length ? [tokens.join(" AND ")] : []), ...filters.slice(0, 4),
+        ...runs.flatMap(run => [`"${run}"`, `{title description} : ${gramPhrase(run)}`]), filters[4]!);
+    return rows.filter(row => !snapshot || snapshot.get(row.path) === row.sourceHash)
       .slice(snapshot ? snapshotOffset : 0, (snapshot ? snapshotOffset : 0) + (snapshot && allSnapshotRows ? 10000 : limit))
       .map(({ sourceHash: _, ...row }) => ({ ...row, title: boundedText(row.title, 512).content, snippet: boundedText(row.snippet, 1024).content, type: boundedText(row.type, 256).content, domain: boundedText(row.domain, 256).content }));
   }
