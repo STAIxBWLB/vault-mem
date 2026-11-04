@@ -2,7 +2,7 @@
 
 This small synthetic contract belongs to vault-mem #91. Consumers may copy the fixture without a runtime dependency on vault-mem. Each directory is a separate repository tree; do not combine cases into one tree.
 
-Initialize a temporary Git repository for each directory, add and commit its files, then discover/validate it. `expected.json` lists the unique error and warning codes expected from each case. Repeated issues for different files may share a code. The parent-cycle case necessarily also violates the rank rule. The missing-type and unknown-type cases also demonstrate the orphan warning.
+Initialize a temporary Git repository for each directory, add its files, then discover/validate it. Validation needs the files tracked (`git add` is enough). A commit is optional unless a case checks verification stamps against history. The in-process schema contract test only stages the files (since #140); the spec CLI tests still commit them. `expected.json` lists the unique error and warning codes expected from each case. Repeated issues for different files may share a code. The parent-cycle case necessarily also violates the rank rule. The missing-type and unknown-type cases also demonstrate the orphan warning.
 
 The `valid` case uses skipped rank levels, native relative pathspec lists, and plain/wiki id links with labels/headings. Missing verification stamps are allowed. Dynamic commit ancestry, dirty-tree freshness and `requireFresh` behavior are tested separately in temporary histories; fixture SHAs are deliberately invalid or unavailable.
 
