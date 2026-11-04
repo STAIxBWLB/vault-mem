@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runAnalysisCommand } from "../src/analysis-commands.ts";
 
+const REPO = realpathSync(join(import.meta.dir, ".."));
+const vmem = (args: string[], env: Record<string, string | undefined>) => Bun.spawnSync([process.execPath, "bin/vmem.js", ...args], { cwd: REPO, env });
+
 const home = "/nonexistent/vmem-home-121";
 test("lint and graph build name the option they refuse and where it applies (#121)", () => {
   for (const [option, value] of [["--hops", "2"], ["--limit", "5"], ["--relation", "supports"]] as const) {
@@ -21,7 +24,7 @@ test("lint and graph build name the option they refuse and where it applies (#12
 });
 
 test("a refused option exits 1 through the CLI with the named message (#121)", () => {
-  const r = Bun.spawnSync(["bun", "bin/vmem.js", "graph", "build", "v", "--relation", "supports"], { env: { ...process.env, VMEM_HOME: home } });
+  const r = vmem(["graph", "build", "v", "--relation", "supports"], { ...process.env, VMEM_HOME: home });
   expect(r.exitCode).toBe(1);
   expect(r.stderr.toString()).toContain("graph build: --relation applies only to graph neighbors");
 });
@@ -34,9 +37,9 @@ test("graph neighbors refuses --dry-run, exits 1 and writes nothing (#127)", () 
     writeFileSync(join(vault, "notes", "a.md"), "---\ntype: insight\n---\n[[b]]\n");
     writeFileSync(join(vault, "notes", "b.md"), "---\ntype: insight\n---\n");
     const env = { ...process.env, VMEM_HOME: vmemHome };
-    expect(Bun.spawnSync(["bun", "bin/vmem.js", "vaults", "add", "v", vault, "--kind", "personal", "--write", "cli"], { env }).exitCode).toBe(0);
+    expect(vmem(["vaults", "add", "v", vault, "--kind", "personal", "--write", "cli"], env).exitCode).toBe(0);
     const before = readdirSync(vault, { recursive: true }).map(String).sort();
-    const r = Bun.spawnSync(["bun", "bin/vmem.js", "graph", "neighbors", "v", "a", "--dry-run"], { env });
+    const r = vmem(["graph", "neighbors", "v", "a", "--dry-run"], env);
     expect(r.exitCode).toBe(1);
     expect(r.stderr.toString()).toContain("graph neighbors: --dry-run applies only to lint --write and graph build");
     expect(readdirSync(vault, { recursive: true }).map(String).sort()).toEqual(before);
