@@ -92,7 +92,7 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
     if (fm.status === "superseded") superseded++;
     if (!TYPES.includes(String(fm.type))) findings.L02.push(prefix + `\`type: ${py(fm.type)}\` 허용값 아님 (${TYPES.join(" | ")})`);
     if (fm.domain !== undefined && (typeof fm.domain !== "string" || !(snapshot.domains ?? BUILTIN_DOMAINS).includes(fm.domain))) {
-      findings.L02.push(prefix + `domain ${py(fm.domain)} is not declared for this vault; choose an effective domain or add the id to its domains in vmem.config.json`);
+      findings.L02.push(prefix + `\`domain: ${py(fm.domain)}\` 허용값 아님 (${(snapshot.domains ?? BUILTIN_DOMAINS).join(" | ")}); vmem.config.json의 이 vault \`domains\`에 id 추가 가능`);
     }
     if (fm.type === "moc") { if (!truth(fm.description)) findings.L02.push(prefix + "`type: moc` 노트는 `description` 필수"); }
     else if (!truth(fm.topics)) findings.L02.push(prefix + "`topics` 없음/빈 배열");
