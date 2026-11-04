@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AnalysisSnapshot } from "../src/analysis-types.ts";
+import { buildGraph } from "../src/vault-graph.ts";
 import type { VaultSpec, VmemConfig } from "../src/config.ts";
-import { buildWorkspaceGraph, type WorkspaceSnapshot } from "../src/workspace-graph.ts";
+import { buildWorkspaceGraph, workspaceParityEdgeKey, type WorkspaceSnapshot } from "../src/workspace-graph.ts";
 import { WORK_MAX_ENTRIES, WORK_MAX_FILE_BYTES, WORK_MAX_FILES, WORK_MAX_TOTAL_BYTES, workspaceInput } from "../src/workspace-input.ts";
 import { addVault } from "../src/registry.ts";
 import { analysisInput } from "../src/analysis-input.ts";
@@ -260,4 +261,15 @@ test("workspace build dry-run is read-only and writes only workspace graph plus 
   expect(lines).toHaveLength(1); expect(lines[0]).toContain("  GRAPH  "); expect(lines[0]).toContain("reports/workspace-graph.json");
   expect(existsSync(join(f.vault, "reports", "vault-graph.json"))).toBe(false);
   expect(analysisInput(f.home, "test").snapshot.notes).toHaveLength(1);
+});
+
+test("typed vault links keep their parity key and lose rel under a higher-priority work edge (#74)", () => {
+  expect(workspaceParityEdgeKey({ relation: "wiki_link", rel: "supports" })).toBe(workspaceParityEdgeKey({ relation: "wiki_link" }));
+  expect(workspaceParityEdgeKey({ relation: "related", rel: "supports" })).toBe("related||supports");
+  const base = snapshot();
+  const typed = { ...base, notes: base.notes.map(n => n.path === "a.md" ? { ...n, source: n.source.replace("[[h]]\n", "- [[h]] (supports): x\n").replace(/\[\[h\]\]$/, "- [[h]] (supports): x") } : n) };
+  const a = buildWorkspaceGraph(typed, work()).graph.edges.find(e => [e.source, e.target].sort().join() === "a,h")!;
+  expect(buildGraph(typed).edges.find(e => e.source === "a" && e.target === "h")?.rel).toBe("supports");
+  expect(a.relation).toBe("supersedes");
+  expect(a.rel).toBeUndefined();
 });

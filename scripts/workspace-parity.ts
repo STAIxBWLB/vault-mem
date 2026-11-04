@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { analysisInput } from "../src/analysis-input.ts";
 import { resolveHome } from "../src/home.ts";
 import { sourceWorkspaceRoot } from "../src/source.ts";
-import { buildWorkspaceGraph } from "../src/workspace-graph.ts";
+import { buildWorkspaceGraph, workspaceParityEdgeKey } from "../src/workspace-graph.ts";
 import { workspaceInput } from "../src/workspace-input.ts";
 
 const args = process.argv.slice(2), value = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
@@ -39,8 +39,7 @@ try {
 
 const pyEdges = (py.links ?? py.edges ?? []) as Record<string, unknown>[];
 const pair = (e: Record<string, unknown>) => [String(e.source), String(e.target)].sort().join("\u0000");
-const ATTRS = ["relation", "field", "rel"] as const;
-const edgeKey = (e: Record<string, unknown>) => ATTRS.map(a => e[a] === undefined ? "" : String(e[a])).join("|");
+const edgeKey = workspaceParityEdgeKey;
 const NODE_ATTRS = ["type", "domain", "label", "source_file", "description"] as const;
 const nodeKey = (n: Record<string, unknown>) => NODE_ATTRS.map(a => n[a] === undefined || n[a] === null ? "" : String(n[a])).join("|");
 

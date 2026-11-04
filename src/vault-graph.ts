@@ -1,4 +1,6 @@
 import type { AnalysisSnapshot } from "./analysis-types.ts";
+import { LINK_RELATIONS } from "./links.ts";
+export { LINK_RELATIONS };
 import { AnalysisYamlUnsupported, parseAnalysisYaml, scalarText, yamlTruthy } from "./analysis-yaml.ts";
 
 export interface GraphNode {
@@ -336,8 +338,6 @@ export const codePointCompare = compare;
 export function labelCommunities(ids: readonly string[], edges: readonly (readonly [string, string])[]): Map<string, number> {
   return leidenCommunities(ids, edges).membership;
 }
-/** Relations `vmem link --relation` writes as `- [[x]] (relation): context`. */
-export const LINK_RELATIONS = ["supports", "contradicts", "extends", "applies-to", "context-for"] as const;
 /** The typed relation of a `- [[x]] (relation)` list line, or undefined for any other wiki link. */
 function linkRelation(body: string, index: number, length: number): string | undefined {
   // Only `- [[` can be typed; check the two characters before the link before scanning back to the line start,
