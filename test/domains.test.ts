@@ -38,8 +38,8 @@ function extendTeam(home: string) {
 test("config adds <=16 vault-pattern ids without replacing built-ins; malformed and unknown keys fail closed", () => {
   const vault = { id: "mine", path: "/synthetic/vault", kind: "personal", write: "mcp" };
   expect(parseVault(vault)).toEqual(vault);
-  expect(effectiveDomains(parseVault(vault))).toEqual(BUILTIN_DOMAINS);
-  expect(effectiveDomains(parseVault({ ...vault, domains: [] }))).toEqual(BUILTIN_DOMAINS);
+  expect(effectiveDomains(parseVault(vault))).toEqual([...BUILTIN_DOMAINS]);
+  expect(effectiveDomains(parseVault({ ...vault, domains: [] }))).toEqual([...BUILTIN_DOMAINS]);
   const sixteen = Array.from({ length: 16 }, (_, i) => `extra-${i}`);
   expect(parseVault({ ...vault, domains: sixteen }).domains).toEqual(sixteen);
   expect(effectiveDomains(parseVault({ ...vault, domains: ["finance", "research", "finance"] }))).toEqual([...BUILTIN_DOMAINS, "finance"]);
@@ -59,7 +59,7 @@ test("format stamp, read bounds, status/list/MCP domains and human list remain c
   const status = JSON.parse(run(["status", "--json"], f.env).text);
   const list = JSON.parse(run(["vaults", "list", "--json"], f.env).text);
   expect(status.vaults[0].domains).toEqual(expected); expect(list[0].domains).toEqual(expected);
-  expect(list[1].domains).toEqual(BUILTIN_DOMAINS);
+  expect(list[1].domains).toEqual([...BUILTIN_DOMAINS]);
   const human = run(["vaults", "list", "--color=never"], f.env).text;
   expect(human).toContain("DOMAINS"); expect(human).toContain("finance");
   const mcp = createVaultMcp(f.home), result = await mcp.handlers.vmem_status!({}) as { vaults: { domains: string[] }[] };
