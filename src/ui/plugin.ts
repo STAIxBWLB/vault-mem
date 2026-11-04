@@ -11,6 +11,7 @@ import { validArguments } from "../mcp.ts";
 import { listPromotionCandidates } from "../promote.ts";
 import { loadRegistry } from "../registry.ts";
 import { lintVault } from "../vault-lint.ts";
+import { readLogSince } from "../vault-log.ts";
 import type { LintCode } from "../analysis-types.ts";
 
 const asset = (name: string) => readFileSync(new URL(name, import.meta.url), "utf8");
@@ -227,8 +228,10 @@ export const plugin: ConsolePlugin = {
           case "log": {
             const vault = vaultOf(args);
             if (!vault) return { rows: [] };
-            const r = await call("vmem_log_tail", { vault: vault.id, n: 100, ...(str(args.type) ? { type: args.type } : {}) });
-            return { vault: vault.id, rows: (Array.isArray(r.lines) ? r.lines as string[] : []).map(parseLogLine).reverse(), ...(r.ok === false ? { error: firstIssue(r) } : {}) };
+            // A string `after` is the `cursor` of the previous answer: only newer rows come back, or the latest with `reset: true`.
+            // The shell's own poll sends a numeric `after` and adopts only a numeric cursor, so it keeps reading the latest rows.
+            const r = readLogSince(home, { vault: vault.id, limit: 100, ...(str(args.type) ? { type: str(args.type) } : {}), ...(str(args.after) ? { after: str(args.after) } : {}) });
+            return { vault: vault.id, rows: r.lines.map(parseLogLine).reverse(), cursor: r.cursor, ...(r.reset ? { reset: true } : {}), ...(r.ok ? {} : { error: firstIssue(r as unknown as Args) }) };
           }
           default: return { error: `unknown panel ${input.panel}` };
         }

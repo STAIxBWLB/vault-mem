@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The console `log` snapshot returns an opaque `cursor`; passing it back as `after` returns only the rows appended since, identical lines included, and a rewritten, truncated or far-behind log answers with the latest rows and `reset: true`. Each poll reads at most 1 MiB forward or a 256 KiB tail. The Log panel keeps re-reading the latest rows, because the shell's poll already refreshes it and skips unchanged data (#48).
+
 - The console panel uses the kit's `ui.button` and `ui.notice(text, "err")`, which screen readers announce assertively, instead of its own button and error helpers; the truncated-body note is a polite warning. `@staix/agent-console` moves to 4c4c1e0 (#122).
 
 - The console panel builds every view from the agent-console panel kit (`host.ui`): lists use `ui.rows`/`ui.row`, so `j`/`k`/`Enter` work on them, and a note opens in `ui.detail`. The panel CSS uses only the kit's public classes and `--acon-*` tokens, and the `@staix/agent-console` devDependency moves to 5af4dcc, which has `ConsoleUi` (#57).
