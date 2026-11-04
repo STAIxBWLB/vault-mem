@@ -101,7 +101,7 @@ function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLA
         const checks: Record<string, { ok: boolean; issue?: string }> = {};
         if (vault.remote) {
           try {
-            const checked = originCheck(vault.path, vault.remote, env);
+            const checked = originCheck(vault.path, vault.remote, env, "doctor");
             checks.remote = { ok: checked.ok, ...(checked.issue ? { issue: checked.issue } : {}) };
           } catch (error) { checks.remote = { ok: false, issue: error instanceof Error ? error.message : "git failed" }; }
         }

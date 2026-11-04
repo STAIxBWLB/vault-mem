@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addVault } from "../src/registry.ts";
 import { promoteToOrg, screenForOrg, dropUnresolvedLinks } from "../src/org-promote.ts";
-import { syncVault, sameRemote } from "../src/sync.ts";
+import { originCheck, syncVault, sameRemote } from "../src/sync.ts";
 import { readLog } from "../src/vault-log.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { run } from "../src/cli.ts";
@@ -446,5 +446,6 @@ test("vmem sync names a fetch or push timeout or signal with an empty stderr, an
     const r = syncVault(f.home, { vault: "team" }, { env: f.env });
     expect(JSON.stringify(r.issues)).toContain("timed out after 60 s; check `git -C <vault> status`, then rerun vmem sync");
     expect(JSON.stringify(r.issues)).not.toContain(f.org);
+    expect(() => originCheck(f.org, "unused", f.env, "doctor")).toThrow("timed out after 60 s; check `git -C <vault> status`, then rerun vmem doctor");
   } finally { spawn.mockRestore(); }
 });

@@ -55,7 +55,7 @@ function failureCause(result: SpawnResult, budgetMs: number): string {
   if (result.exitCode === null) return `killed by ${result.signalCode ?? "a signal"}`;
   return result.stderr.toString().trim().split("\n").at(-1)?.slice(0, 300) || "error";
 }
-const NEXT_STEP = { console: "inspect the vault Git state in System and retry", sync: "check `git -C <vault> status`, then rerun vmem sync" } as const;
+const NEXT_STEP = { console: "inspect the vault Git state in System and retry", sync: "check `git -C <vault> status`, then rerun vmem sync", doctor: "check `git -C <vault> status`, then rerun vmem doctor" } as const;
 function gitIn(cwd: string, env: NodeJS.ProcessEnv, deadline?: number, context: keyof typeof NEXT_STEP = "sync"): Git {
   return (args, options = {}) => {
     const timeout = deadline === undefined ? GIT_TIMEOUT_MS : deadline - Date.now();
@@ -82,8 +82,8 @@ function applicableRewrites(lines: (args: string[]) => string[], urls: string[])
   });
 }
 /** Local-only origin validation shared by doctor and sync; never fetches or pushes. */
-export function originCheck(root: string, remote: string, env: NodeJS.ProcessEnv = process.env): { ok: boolean; origin: string | null; fetchUrls: string[]; pushUrls: string[]; issue?: string } {
-  const git = gitIn(root, env);
+export function originCheck(root: string, remote: string, env: NodeJS.ProcessEnv = process.env, context: "sync" | "doctor" = "sync"): { ok: boolean; origin: string | null; fetchUrls: string[]; pushUrls: string[]; issue?: string } {
+  const git = gitIn(root, env, undefined, context);
   if (realpathSync(git(["rev-parse", "--show-toplevel"]).stdout.trim()) !== root) throw new Error("vault path is not the root of its git repository");
   const origin = git(["remote", "get-url", "origin"], { allowFail: true });
   const originUrl = origin.status === 0 ? origin.stdout.trim() : null;
