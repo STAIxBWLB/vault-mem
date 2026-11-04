@@ -95,6 +95,11 @@ function aliases(value: unknown): string[] {
 function metadata(stat: NonNullable<ReturnType<typeof lstatSync>>): string {
   return [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
 }
+/** The mtime (epoch ms) stored in a `metadata()` stamp, or null when the stamp has another shape. */
+function stampMtime(stamp: string): number | null {
+  const value = Number(stamp.split(":")[3]);
+  return stamp.split(":").length === 5 && Number.isFinite(value) ? value : null;
+}
 /** Adapter file I/O gets path-specific guidance without rewriting unrelated Git or binding errors. */
 function specFileIO<T>(path: string, action: string, operation: () => T): T {
   try { return operation(); }
@@ -450,13 +455,51 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     }
     return { path, hash: note.hash, ...readPage(Buffer.from(note.prefix), maxBytes, start, note.bytes), ...metadata, ...headingMetadata(sections) };
   }
-  /** Indexed notes (paths relative to notes/) ordered by path, optionally filtered by a literal stem prefix. */
-  list(prefix = "", limit = 50): { path: string; title: string; type: string; domain: string; description: string }[] {
+  /**
+   * Indexed notes (paths relative to notes/) ordered by path, optionally filtered by a literal stem prefix.
+   * `cursor` is the previous page's `nextCursor` (its last path, exclusive); `total` counts the filtered set.
+   */
+  list(prefix = "", limit = 50, cursor?: string): { notes: { path: string; title: string; type: string; domain: string; description: string; mtime: string | null }[]; total: number; nextCursor?: string } {
     if (Buffer.byteLength(prefix) > 1024) throw new Error("prefix: expected <=1024 bytes");
-    const key = prefix.replace(/^notes\//i, "");
-    return this.db.query<{ path: string; title: string; type: string; domain: string; description: string }, [number, string, number]>(
-      "SELECT path,title,type,domain,substr(description,1,512) AS description FROM notes WHERE substr(path,1,?)=? ORDER BY path LIMIT ?"
-    ).all(key.length, key, resultLimit(limit)).map(row => ({ ...row, title: boundedText(row.title, 512).content, type: boundedText(row.type, 256).content, domain: boundedText(row.domain, 256).content, description: boundedText(row.description, 512).content }));
+    const key = prefix.replace(/^notes\//i, ""), max = resultLimit(limit);
+    if (cursor !== undefined && (!cursor || Buffer.byteLength(cursor) > 1024 || !cursor.startsWith(key))) throw new Error("cursor: expected the nextCursor of a previous page listed with the same prefix; list again without cursor to restart");
+    const rows = this.db.query<{ path: string; title: string; type: string; domain: string; description: string; metadata: string }, [number, string, string, number]>(
+      "SELECT path,title,type,domain,substr(description,1,512) AS description,metadata FROM notes WHERE substr(path,1,?)=? AND path>? ORDER BY path LIMIT ?"
+    ).all(key.length, key, cursor ?? "", max + 1);
+    const total = this.db.query<{ count: number }, [number, string]>("SELECT count(*) AS count FROM notes WHERE substr(path,1,?)=?").get(key.length, key)!.count;
+    const notes = rows.slice(0, max).map(({ metadata: stamp, ...row }) => {
+      const mtime = stampMtime(stamp);
+      return { ...row, title: boundedText(row.title, 512).content, type: boundedText(row.type, 256).content, domain: boundedText(row.domain, 256).content, description: boundedText(row.description, 512).content, mtime: mtime === null ? null : new Date(mtime).toISOString() };
+    });
+    return { notes, total, ...(rows.length > max ? { nextCursor: notes.at(-1)!.path } : {}) };
+  }
+  /**
+   * Note counts by type, domain and frontmatter `status` ("(none)" when empty), and how many notes have an mtime at or
+   * after each cutoff (epoch ms). Streams rows; returns no note text.
+   */
+  noteStats(cutoffs: readonly number[]): { total: number; byType: Record<string, number>; byDomain: Record<string, number>; byStatus: Record<string, number>; modified: number[] } {
+    const add = (map: Map<string, number>, value: string, count = 1) => { const key = value ? boundedText(value, 256).content : "(none)"; map.set(key, (map.get(key) ?? 0) + count); };
+    const sorted = (map: Map<string, number>) => Object.fromEntries([...map].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+    const grouped = (column: "type" | "domain") => {
+      const map = new Map<string, number>();
+      for (const row of this.db.query<{ value: string; count: number }, []>(`SELECT ${column} AS value, count(*) AS count FROM notes GROUP BY ${column}`).all()) add(map, row.value, row.count);
+      return sorted(map);
+    };
+    // Status is not a column: stream each stored source once, parsing only its frontmatter.
+    const byStatus = new Map<string, number>(), modified = cutoffs.map(() => 0);
+    let total = 0;
+    const rows = this.db.prepare<{ metadata: string; source: string }, []>("SELECT metadata,source FROM notes");
+    try {
+      for (const row of rows.iterate()) {
+        total++;
+        let status: unknown;
+        try { status = parseFrontmatter(row.source).data.status; } catch { /* counted as (none) */ }
+        add(byStatus, text(status));
+        const mtime = stampMtime(row.metadata);
+        cutoffs.forEach((cutoff, i) => { if (mtime !== null && mtime >= cutoff) modified[i]!++; });
+      }
+    } finally { rows.finalize(); }
+    return { total, byType: grouped("type"), byDomain: grouped("domain"), byStatus: sorted(byStatus), modified };
   }
   /** Links that resolve to the target note, ordered by source. */
   backlinks(target: string, limit = 50): ResolvedLink[] {

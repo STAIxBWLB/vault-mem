@@ -10,6 +10,7 @@ import { loadRegistry, registryStatus } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
 import { listVaultFiles, readVaultFile } from "./vault-files.ts";
 import { appendLog, readLog } from "./vault-log.ts";
+import { STATS_MAX_DAYS, vaultStats } from "./vault-stats.ts";
 import { applyWrite } from "./writer.ts";
 import { notePath } from "./write-operations.ts";
 import type { LogEvent } from "./log-types.ts";
@@ -31,7 +32,7 @@ const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLeng
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", ...SPEC_COMMANDS.map(item => item.name)] as const;
+  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_stats", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Tool definitions for a fixed vault set: `vault` is an enum of the registered ids. */
 export function vaultTools(ids: readonly string[], orgIds: readonly string[] = []): McpTool[] {
@@ -43,7 +44,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_search", "Full-text (BM25) search over indexed notes. Literal AND terms.", object({ query: string(1000), vault, limit: integer(1, 50), type: string(64), domain: string(64) }, ["query"])),
     tool("vmem_read", "Read one note by stem, alias or notes/ path: frontmatter, body, sha256. Bounded by maxBytes; section selects an exact H2, offset pages UTF-8 byte ranges, and truncated reads list H2 headings/nextOffset.", object({ path: note, vault, maxBytes: integer(1, 65536), section: string(1024), offset: integer(0, MAX_NOTE_BYTES) }, ["path"])),
     tool("vmem_read_many", "Read up to 20 notes (8 KiB each).", object({ paths: { type: "array", minItems: 1, maxItems: 20, items: note }, vault }, ["paths"])),
-    tool("vmem_list", "List indexed notes under notes/, optionally by stem prefix.", object({ vault, prefix: string(256, 0), limit: integer(1, 500) })),
+    tool("vmem_list", "List indexed notes under notes/ in path order, optionally by stem prefix, with each note's mtime and the filtered total. Pass the returned nextCursor as cursor for the next page.", object({ vault, prefix: string(256, 0), limit: integer(1, 500), cursor: string(1024) })),
     tool("vmem_links", "Outgoing links (with resolution) and/or incoming backlinks of a note.", object({ path: note, vault, direction: { type: "string", enum: ["out", "in", "both"] }, limit: integer(1, 200) }, ["path"])),
     tool("vmem_mocs", "MOC notes with incoming link counts.", object({ vault })),
     tool("vmem_check", "Validate a prospective note text without writing.", object({ vault, path: string(200), text: string(262144, 0) }, ["text"])),
@@ -69,6 +70,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_read_file", "Read one UTF-8 file outside notes/: ops/, reports/, self/, templates/, AGENTS.md or README.md. Same bounds and paging as vmem_read (maxBytes, offset, nextOffset); notes/ use vmem_read, the log vmem_log_tail. Never locks or writes.", object({ vault, path: string(1024), maxBytes: integer(1, 65536), offset: integer(0, MAX_NOTE_BYTES) }, ["path"])),
     tool("vmem_list_files", "List one directory level under ops/, reports/, self/ or templates/ (up to 500 entries; dot, linked and denied entries omitted). Never locks or writes.", object({ vault, dir: string(1024) }, ["dir"])),
     tool("vmem_report", "Write a screened report file under reports/ or ops/ (the MCP form of `vmem report`): same path rules, screening, write policy (write=mcp), receipt and EXTRACT log event; log overrides it, for example a LINT or GRAPH event. dryRun changes nothing.", object({ vault, path: string(200), body: string(65536, 0), dryRun: { type: "boolean" }, log: logEvent }, ["path", "body"]), "write"),
+    tool("vmem_stats", "Read-only vault statistics: note counts by type, domain and status, notes modified in the last 7 and 30 days, and log event counts by type over the last `days` (default 30). Writes no vault file or log and takes no vault or log lock.", object({ vault, days: integer(1, STATS_MAX_DAYS) })),
   ];
 }
 type Issue = { code: string; severity: "error"; message: string };
@@ -140,7 +142,8 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
       try { const r = index.show(path, 8192); return document(r); }
       catch (error) { return { path, ...refusal("V04", error instanceof Error ? error.message : "unreadable") }; }
     }) })),
-    vmem_list: args => read(args, index => ({ notes: index.list(str(args.prefix) ?? "", (args.limit as number | undefined) ?? 100) })),
+    vmem_list: args => read(args, index => index.list(str(args.prefix) ?? "", (args.limit as number | undefined) ?? 100, str(args.cursor))),
+    vmem_stats: args => vaultStats(home, pick(args).id, { expectedVault: pick(args), ...(typeof args.days === "number" ? { days: args.days } : {}) }),
     vmem_links: args => read(args, index => {
       const direction = str(args.direction) ?? "both", limit = (args.limit as number | undefined) ?? 50;
       const out = direction === "in" ? [] : index.links(str(args.path)!, limit);

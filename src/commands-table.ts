@@ -40,6 +40,7 @@ export const COMMANDS = [
   { name: "setup", usage: "setup <claude|codex|kimi|pi|qwen|jcode|agy|all> [--root PATH] [--apply|--undo] [--json]", mutates: "apply" },
   { name: "manifest", usage: "manifest [--json]", mutates: false },
   { name: "completion", usage: "completion <bash|zsh|fish>", mutates: false },
+  { name: "stats", usage: "stats <vault> [--days 1..3650] [--json]", mutates: false },
 ] as const;
 const RELATIONS = ["supports", "contradicts", "extends", "applies-to", "context-for"] as const;
 const LOG_EVENT_TYPES = ["INGEST", "ROUTE", "EXTRACT", "CONNECT", "DIGEST", "LEARN", "LINT", "TASK", "GRAPH", "SYNC", "RETHINK", "SOURCE"] as const;

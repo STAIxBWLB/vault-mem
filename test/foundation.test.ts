@@ -138,7 +138,7 @@ describe("CLI", () => {
     const env = { ...process.env, VMEM_HOME: join(root(), "home"), CLAUDECODE: "1" };
     const result = Bun.spawnSync([process.execPath, "bin/vmem.js", "status", "--json"], { env, stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(result.stdout.toString()).stage).toBe("foundation");
+    expect(JSON.parse(result.stdout.toString())).toMatchObject({ healthy: true, vaults: [] });
     const node = Bun.spawnSync(["node", "bin/vmem.js", "--version"], { env, stdout: "pipe", stderr: "pipe" });
     expect(node.exitCode).toBe(1);
     expect(node.stderr.toString()).toContain("Bun >=1.4.2");
