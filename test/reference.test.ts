@@ -2,6 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
+import { serveMcp } from "../src/mcp.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { addVault } from "../src/registry.ts";
 import { validateWrite } from "../src/write-validation.ts";
@@ -47,9 +49,9 @@ test("reference metadata accepts all keys, boundaries and old/new arXiv identifi
 
 test("each malformed bibliographic value returns a named V01; all keys are reference-only", () => {
   const invalid: Record<string, unknown[]> = {
-    citekey: ["", "x".repeat(65), "a b", "key.", 2],
-    doi: ["", "https://doi.org/10.1234/example", "10.123/example", "10.1234567890/example", "10.1234/", "10.1234/a b", "10.1234/a\nb", 42],
-    arxiv_id: ["", "2600.12345", "2613.12345", "2601.1234", "2601.123456", "2601.12345v0", "hep-th/9913001", "hep-th/990100", 2],
+    citekey: ["", "x".repeat(65), "a b", "key.", "valid\n", 2],
+    doi: ["", "https://doi.org/10.1234/example", "10.123/example", "10.1234567890/example", "10.1234/", "10.1234/a b", "10.1234/a\nb", "10.1234/a\n", 42],
+    arxiv_id: ["", "2600.12345", "2613.12345", "2601.1234", "2601.123456", "2601.12345v0", "hep-th/9913001", "hep-th/990100", "2601.12345\n", 2],
     authors: ["Fixture", [], Array(101).fill("Fixture"), [1], [null]],
     year: [999, 2101, 2026.5, "2026", null], venue: ["", "가".repeat(201), 2, null],
   };
@@ -115,4 +117,29 @@ test("MCP type-filtered search finds DOI and citekey after incremental, memory a
   const withMetadata = lintVault({ ...base, notes: [{ path: "paper.md", source }, { path: "research.md", source: moc }] });
   const plain = source.replace(/^(?:citekey|doi|arxiv_id|authors|year|venue):.*\n/gm, "");
   expect(withMetadata).toEqual(lintVault({ ...base, notes: [{ path: "paper.md", source: plain }, { path: "research.md", source: moc }] }));
+});
+
+
+test("JSON-RPC create and frontmatter accept 100 authors without raising other array bounds", async () => {
+  const f = fixture(), server = createVaultMcp(f.home), input = new PassThrough(), output = new PassThrough();
+  let result = ""; output.on("data", chunk => { result += chunk.toString(); });
+  const done = serveMcp({ tools: server.tools, handlers: server.handlers, input, output });
+  const authors = Array.from({ length: 100 }, (_, i) => `Fixture Author ${i}`);
+  const frames = [
+    { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fixture", version: "1" } } },
+    { jsonrpc: "2.0", method: "notifications/initialized" },
+    { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "vmem_create", arguments: { vault: "test", stem: "paper", ...metadata, body, extra: { ...bibliographic, authors } } } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vmem_set_frontmatter", arguments: { vault: "test", path: "paper", set: { authors: [...authors].reverse() } } } },
+    { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "vmem_set_frontmatter", arguments: { vault: "test", path: "paper", set: { tags: Array(65).fill("fixture") } } } },
+  ];
+  for (const frame of frames) input.write(JSON.stringify(frame) + "\n");
+  input.end(); await done;
+  const responses = result.trim().split("\n").map(line => JSON.parse(line));
+  for (const id of [1, 2]) {
+    const response = responses.find(row => row.id === id);
+    expect(response.error).toBeUndefined();
+    expect(JSON.parse(response.result.content[0].text).ok).toBe(true);
+  }
+  expect(responses.find(row => row.id === 3).error.code).toBe(-32602);
+  expect(parseFrontmatter(readFileSync(join(f.notes, "paper.md"), "utf8")).data.authors).toEqual([...authors].reverse());
 });

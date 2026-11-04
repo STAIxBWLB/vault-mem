@@ -161,9 +161,9 @@ function schema(note: ParsedNote): SchemaIssue[] {
   }
   if(data.source!==undefined)try{sourceReferences(data.source);}catch{add("source","source must contain workspace-relative paths, mem ids or URLs");}
   if (data.type === "reference") {
-    if (data.citekey !== undefined && (typeof data.citekey !== "string" || !/^[A-Za-z0-9_:-]{1,64}$/.test(data.citekey))) add("citekey", "citekey must match [A-Za-z0-9_:-]{1,64}");
-    if (data.doi !== undefined && (typeof data.doi !== "string" || !/^10\.[0-9]{4,9}\/[^\s\p{C}]+$/u.test(data.doi))) add("doi", "doi must be 10.<4..9 digit registrant>/<nonempty suffix>, without whitespace or control characters");
-    if (data.arxiv_id !== undefined && (typeof data.arxiv_id !== "string" || !/^(?:[0-9]{2}(?:0[1-9]|1[0-2])\.[0-9]{5}|[a-z]+(?:[.-][A-Za-z]+)*\/[0-9]{2}(?:0[1-9]|1[0-2])[0-9]{3})(?:v[1-9][0-9]*)?$/.test(data.arxiv_id))) add("arxiv_id", "arxiv_id must be YYMM.NNNNN or archive/YYMMNNN, optionally followed by vN (N >= 1)");
+    if (data.citekey !== undefined && (typeof data.citekey !== "string" || !/^[A-Za-z0-9_:-]{1,64}(?![\s\S])/.test(data.citekey))) add("citekey", "citekey must match [A-Za-z0-9_:-]{1,64}");
+    if (data.doi !== undefined && (typeof data.doi !== "string" || !/^10\.[0-9]{4,9}\/[^\s\p{C}]+(?![\s\S])/u.test(data.doi))) add("doi", "doi must be 10.<4..9 digit registrant>/<nonempty suffix>, without whitespace or control characters");
+    if (data.arxiv_id !== undefined && (typeof data.arxiv_id !== "string" || !/^(?:[0-9]{2}(?:0[1-9]|1[0-2])\.[0-9]{5}|[a-z]+(?:[.-][A-Za-z]+)*\/[0-9]{2}(?:0[1-9]|1[0-2])[0-9]{3})(?:v[1-9][0-9]*)?(?![\s\S])/.test(data.arxiv_id))) add("arxiv_id", "arxiv_id must be YYMM.NNNNN or archive/YYMMNNN, optionally followed by vN (N >= 1)");
     if (data.authors !== undefined && (!Array.isArray(data.authors) || data.authors.length < 1 || data.authors.length > 100 || data.authors.some(author => typeof author !== "string"))) add("authors", "authors must be a list of 1..100 strings");
     if (data.year !== undefined && (typeof data.year !== "number" || !Number.isInteger(data.year) || data.year < 1000 || data.year > 2100)) add("year", "year must be an integer from 1000 to 2100");
     if (data.venue !== undefined && (typeof data.venue !== "string" || [...data.venue].length < 1 || [...data.venue].length > 200)) add("venue", "venue must contain 1..200 Unicode characters");
