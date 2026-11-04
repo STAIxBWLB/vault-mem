@@ -326,15 +326,22 @@ export function readLogSince(home: string, options: { vault: string; after?: str
     const lastNl = bytes.lastIndexOf(0x0a), end = lastNl >= from ? lastNl + 1 : from;
     if (end < bytes.length) result.warnings.push("incomplete final log line not yet read");
     const decoder = new TextDecoder("utf-8", { fatal: true });
-    for (const raw of decoder.decode(bytes.subarray(from, end)).split("\n").slice(0, -1)) {
-      const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    // A poll from a valid cursor delivers the oldest `limit` new rows and stops its cursor after the last one, so the
+    // next poll continues there; a first call or a reset shows the newest rows and moves the cursor to the end.
+    const incremental = options.after !== undefined && !result.reset;
+    let cursorAt = start + end;
+    for (let at = from; at < end;) {
+      const nl = bytes.indexOf(0x0a, at), next = nl + 1;
+      const raw = decoder.decode(bytes.subarray(at, nl)), line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+      at = next;
       if (!line.trim() || line.trimStart().startsWith("#")) continue;
       if (Buffer.byteLength(line) > MAX_READ_LINE_BYTES) { if (!result.warnings.includes("historical log line over 4096 bytes omitted")) result.warnings.push("historical log line over 4096 bytes omitted"); continue; }
       const type = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+(\S+)/.exec(line)?.[1];
-      if (!options.type || options.type === type) result.lines.push(line);
+      if (options.type && options.type !== type) continue;
+      if (incremental && result.lines.length === limit) { cursorAt = start + bytes.lastIndexOf(0x0a, at - 2) + 1; result.warnings.push(`more rows follow; poll again with the returned cursor`); break; }
+      result.lines.push(line);
     }
     if (result.lines.length > limit) { result.lines = result.lines.slice(-limit); result.warnings.push(`only the newest ${limit} rows returned`); }
-    const cursorAt = start + end;
     result.cursor = encodeCursor(cursorAt, anchor(cursorAt));
     result.ok = true;
   } catch (caught) {

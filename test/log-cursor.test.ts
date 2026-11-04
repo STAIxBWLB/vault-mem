@@ -99,3 +99,23 @@ test("a pending line longer than the tail window keeps the cursor on a line star
   appendFileSync(log, "\n" + line(2));
   expect(readLogSince(home, { vault: "v", after: c.cursor }).lines).toEqual([line(2).trimEnd()]);
 });
+
+test("more than `limit` new rows between polls arrive over several polls, in order, none skipped (#48)", () => {
+  writeFileSync(log, line(0));
+  const a = readLogSince(home, { vault: "v" });
+  const batch = Array.from({ length: 101 }, (_, i) => `2026-11-04 11:00  INGEST  synthetic  notes/m${i}.md  — event ${i}\n`);
+  appendFileSync(log, batch.join(""));
+  const b = readLogSince(home, { vault: "v", after: a.cursor });
+  expect(b.reset).toBe(false); expect(b.lines).toHaveLength(100);
+  expect(b.lines[0]).toBe(batch[0]!.trimEnd()); expect(b.lines[99]).toBe(batch[99]!.trimEnd());
+  const c = readLogSince(home, { vault: "v", after: b.cursor });
+  expect(c.reset).toBe(false); expect(c.lines).toEqual([batch[100]!.trimEnd()]);
+  expect([...b.lines, ...c.lines]).toEqual(batch.map(l => l.trimEnd()));
+  expect(readLogSince(home, { vault: "v", after: c.cursor }).lines).toEqual([]);
+  // With a type filter, skipped non-matching lines before the stop point are not re-read as rows.
+  const d = readLogSince(home, { vault: "v" });
+  appendFileSync(log, Array.from({ length: 3 }, (_, i) => `2026-11-04 12:00  ROUTE  synthetic  notes/r${i}.md  — r ${i}\n` + line(i, "LINT")).join(""));
+  const e = readLogSince(home, { vault: "v", after: d.cursor, type: "LINT", limit: 2 });
+  const g = readLogSince(home, { vault: "v", after: e.cursor, type: "LINT", limit: 2 });
+  expect([...e.lines, ...g.lines]).toEqual([0, 1, 2].map(i => line(i, "LINT").trimEnd()));
+});
