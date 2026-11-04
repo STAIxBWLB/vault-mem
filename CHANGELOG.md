@@ -4,6 +4,8 @@
 
 - Spec schema fixtures validate every error/warning class in separate default-budget tests and skip unused commit/HEAD setup, avoiding the aggregate macOS timeout. Git inspection failures now name the termination signal and 10-second inspection budget, including shorter parent/test timeouts (#137).
 
+- The console panel's "shown" and "selected" chips use the neutral tone, because they mark a selection and not a state. Two unused panel CSS rules are removed, and the README states that the panel needs agent-console 0.1.0 or later (#129).
+
 - The console `log` snapshot returns an opaque string `cursor`; passing it back as `since` returns only the rows appended since, oldest first up to 100 per poll with `more: true` when rows remain, identical lines included. A rewritten, truncated or far-behind log answers with the latest rows and `reset: true`. The cursor travels as `since` because the console reserves the numeric `after`. Each poll reads a 256 KiB tail or at most 1 MiB forward, plus a back-scan of at most 1 MiB when the tail sits inside one long line. The Log panel keeps re-reading the latest rows, because the shell's poll already refreshes it and skips unchanged data (#48).
 
 - **Behaviour change:** citekey uniqueness now ignores ASCII case while preserving the stored case; retained legacy duplicates warn only on unrelated edits. Reference metadata enforces year-specific arXiv widths, names how to fix reference-only keys, and skips redundant DOI-normalization parsing without changing output (#134).

@@ -23,7 +23,7 @@ export default (host) => {
         searchForm(""),
         h("div", { class: "vmem-cards" },
           h("section", { class: "card" }, h("h2", { text: "Vaults" }),
-            ui.rows(vaults, (v) => ui.row({ title: v.id, sub: `${v.kind} · write ${v.write}${v.health && v.health !== "ok" ? ` · ${v.health}` : ""}`, onOpen: () => go("overview", { vault: v.id }), ...(v.id === s.vault ? { chip: { text: "shown", tone: "ok" } } : {}) }))),
+            ui.rows(vaults, (v) => ui.row({ title: v.id, sub: `${v.kind} · write ${v.write}${v.health && v.health !== "ok" ? ` · ${v.health}` : ""}`, onOpen: () => go("overview", { vault: v.id }), ...(v.id === s.vault ? { chip: { text: "shown", tone: "neutral" } } : {}) }))),
           h("section", { class: "card" }, h("h2", { text: `${s.noteCount ?? 0}${s.noteCountCapped ? "+" : ""} notes · maps` }),
             ui.rows((s.mocs ?? []).slice(0, 8), (m) => ui.row({ title: m.title || m.path, sub: `${m.count} links`, onOpen: () => openNote(m.path) })) ?? ui.empty("No maps yet")),
           h("section", { class: "card" }, h("h2", { text: "Recent log" }),
@@ -86,7 +86,7 @@ export default (host) => {
         })) : null;
       return [s.unavailable ? ui.notice(s.unavailable, "err") : null, form,
         ui.rows(all, (c) => ui.row({ title: c.title || c.kind, sub: `${c.kind} · ${c.project} · ${new Date(c.at).toLocaleString()}`, onOpen: () => go("promote", { id: c.id, project: c.project }),
-          ...(s.selected === c.id ? { chip: { text: "selected", tone: "ok" } } : { verbs: [ui.button("Select", () => go("promote", { id: c.id, project: c.project }))] }) }))
+          ...(s.selected === c.id ? { chip: { text: "selected", tone: "neutral" } } : { verbs: [ui.button("Select", () => go("promote", { id: c.id, project: c.project }))] }) }))
           ?? ui.empty("No promotion candidates", "Durable agent memories appear here when agent-mem marks them for the vault.")];
     },
     lint(s) {
