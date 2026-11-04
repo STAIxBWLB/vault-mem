@@ -6,6 +6,8 @@
 
 - Reference notes accept typed citekey, DOI, arXiv id, authors, year and venue metadata with offline syntax checks, lowercase DOI assignments and vault-wide citekey uniqueness. Search includes reference DOI/citekey text; the first run rebuilds the index once in a separate schema3 derived cache without modifying existing notes (#73).
 
+- `vmem setup codex` replaces a vmem entry whose table header uses quoted or spaced keys (`["mcp_servers".vmem]`, `[mcp_servers."vmem"]`, `[ mcp_servers . vmem ]`) and its subtables in place instead of adding a second table and refusing. The dry run now renders and parses the planned file, so a refusal shows in the preview as it does on apply (#116).
+
 - Every CLI command prints text for people by default, following agent-hub's conventions: tables, field blocks, LEVEL/CHECK/FINDING checks with a verdict, one result line per write, and the exact confirm or next-page command after a preview or a cut-off read. Help is grouped into sections with a description per command, and `vmem help <command>` prints one command. `--color=auto|always|never` works everywhere and honors `NO_COLOR` and `TERM=dumb`. **Breaking for scripts:** the default output was pretty JSON and is now text, so pass `--json`, which prints the same compact JSON as before (#114).
 
 ## [0.4.0] - 2026-11-04
