@@ -15,6 +15,7 @@ import { runSetup, type SetupMode } from "./setup.ts";
 import { resolveHome } from "./home.ts";
 import { addVault, addSpec, removeSpec, specStatus, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault, setVaultPii } from "./registry.ts";
 import { piiPolicy } from "./pii.ts";
+import { vaultStats } from "./vault-stats.ts";
 function parse(args: string[], allowed: string[], values: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -71,7 +72,7 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
   const group = args[0] === "vaults" || args[0] === "specs";
   const command = group ? `${args[0]} ${args[1] ?? ""}` : args[0];
   const tail = args.slice(group ? 2 : 1);
-  const options = command === "vaults add" ? ["--kind", "--write", "--pii", "--remote", "--registry"] : command === "vaults pii" ? ["--set"] : command === "specs add" ? ["--write", "--pii"] : [];
+  const options = command === "vaults add" ? ["--kind", "--write", "--pii", "--remote", "--registry"] : command === "vaults pii" ? ["--set"] : command === "specs add" ? ["--write", "--pii"] : command === "stats" ? ["--days"] : [];
   const { flags, positional } = parse(tail, ["--json", ...options, ...(command === "vaults remove" || command === "specs remove" || command === "vaults pii" || command === "recover" ? ["--confirm"] : [])], options);
   const home = resolveHome(env);
   let result: unknown, code = 0;
@@ -108,8 +109,17 @@ export function run(args: string[], env: NodeJS.ProcessEnv = process.env): { tex
       });
       const sources = command === "doctor" && config.specs !== undefined ? specStatus(home.home, env) : undefined;
       const healthy = vaults.every(v => v.healthy && (!v.checks || Object.values(v.checks).every(check => check.ok))) && (!sources || sources.every(source => source.healthy));
-      result = { ...home, version, stage: "foundation", healthy, vaults, ...(config.specs !== undefined ? { specs: sources ?? config.specs } : {}) };
+      result = { ...home, version, healthy, vaults, ...(config.specs !== undefined ? { specs: sources ?? config.specs } : {}) };
       if (command === "doctor" && !healthy) code = 1;
+      break;
+    }
+    case "stats": {
+      if (positional.length !== 1) throw new Error("stats: requires one vault id; use vmem stats <vault> [--days 1..3650]");
+      const days = flags["--days"];
+      if (days !== undefined && !/^[0-9]+$/.test(String(days))) throw new Error("stats: --days expects an integer 1..3650; omit it for the 30-day default");
+      const stats = vaultStats(home.home, positional[0]!, days === undefined ? {} : { days: Number(days) });
+      result = stats;
+      if (stats.log.issues.length) code = 1;
       break;
     }
     case "recover":

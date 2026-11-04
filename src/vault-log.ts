@@ -199,7 +199,7 @@ export function readLog(home: string, options: LogReadOptions): LogReadResult {
   const result: LogReadResult = { ok: false, lines: [], dataLines: null, warnings: [], issues: [] };
   let fd: number | undefined;
   try {
-    if (!options || typeof options !== "object" || typeof options.vault !== "string" || Object.keys(options).some(key => !["vault", "limit", "grep", "type"].includes(key))) refuse("L09", "invalid log read options");
+    if (!options || typeof options !== "object" || typeof options.vault !== "string" || Object.keys(options).some(key => !["vault", "limit", "grep", "type", "visit"].includes(key)) || (options.visit !== undefined && typeof options.visit !== "function")) refuse("L09", "invalid log read options");
     const limit = options.limit ?? 50;
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) refuse("L09", "log limit must be an integer 1..200");
     if (options.type !== undefined && !(LOG_TYPES as readonly string[]).includes(options.type)) refuse("L09", "unknown log type filter");
@@ -232,6 +232,7 @@ export function readLog(home: string, options: LogReadOptions): LogReadResult {
         } else {
           const line = pending.endsWith("\r") ? pending.slice(0, -1) : pending;
           const type = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+(\S+)/.exec(line)?.[1];
+          options.visit?.(line);
           if ((!options.type || options.type === type) && (!filter || filter(line))) {
             result.lines.push(line); resultBytes += Buffer.byteLength(JSON.stringify(line)) + 1;
             while (result.lines.length > limit || resultBytes > MAX_LOG_RESULT_BYTES) resultBytes -= Buffer.byteLength(JSON.stringify(result.lines.shift()!)) + 1;

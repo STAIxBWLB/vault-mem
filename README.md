@@ -146,6 +146,17 @@ Successful changed mutations default to EXTRACT, link to CONNECT, move to ROUTE,
 
 Readers never create a home, log or lock, and work with `write: none`. They skip blank/comment lines, return the last matching 1..200 records (default 50), accept an optional canonical TYPE and non-backtracking regex subset up to 256 characters (`|`, `^`, `$`, `.`, character classes, `\d`/`\s`/`\w` and their inverses, escaped literals, and atom `*`/`+`/`?`; groups, backreferences and brace quantifiers are refused), and scan a fixed descriptor-size snapshot. Streaming is capped at 32 MiB; individual historical lines over 4096 bytes and incomplete final lines are omitted with warnings, and the serialized line array stays within 128 KiB. Above 20000 data lines, the manual-archival warning is preserved. Read failure returns `dataLines: null` rather than claiming a count. Golden synthetic fixtures and concurrent/fault persistence tests cover the format and actual append state; no live vault log was read or modified for this increment.
 
+# Vault statistics
+
+```sh
+vmem stats personal --json             # log window: last 30 days
+vmem stats personal --days 7 --json
+```
+
+`vmem stats <vault>` and `vmem_stats` report note counts (total, by `type`, `domain` and frontmatter `status`; empty values count as `(none)`), notes whose indexed mtime falls in the last 7 and 30 local calendar days (today included), and log event counts by type dated on or after `log.since`, the first local date of the `--days` window (1..3650, default 30). Known types always appear, unknown ones count as `(other)`. The derived index cache is refreshed as by every read command and the log is streamed with the bounded log reader; no vault file or log is written and no vault or log lock is taken. When the log cannot be read, `log.total` and `log.byType` are null, `log.issues` names the cause and the CLI exits 1.
+
+`vmem_list` pages the whole vault: pass the returned `nextCursor` as `cursor` to get the next page in path order. The cursor is the previous page's last path (exclusive), so a note added or removed between pages does not repeat or skip the others; a cursor outside the `prefix` filter is refused.
+
 # MCP server
 
 `vmem mcp` serves newline-delimited JSON-RPC 2.0 (MCP tools, protocol 2025-06-18 and earlier) on stdio. stdout carries protocol messages only; it needs no TTY and runs in agent sessions. Requests are limited to 64 KiB per frame and results to 256 KiB (a larger result becomes a structured `LIMIT` refusal). Arguments are validated against each tool's bounded schema (`additionalProperties: false`, string/array/integer caps); invalid arguments or unknown tools return JSON-RPC `-32602`, unknown methods `-32601`, malformed frames `-32700`/`-32600`. At startup it loads every module a tool can run, the `@staix/agent-mem` root included, so a server keeps its own code and tool list when its install is replaced or a newer release is installed beside it; restart the host session to pick up the new release.
@@ -162,7 +173,7 @@ The vault set is read once at startup: every tool's `vault` property is an enum 
 | `vmem_search` | `query`<=1000, `vault`, `limit`<=50, `type`, `domain` |
 | `vmem_read` | `path` (stem, alias or `notes/` path), `vault`, `maxBytes`<=65536; returns `{path, frontmatter, body, sha256, truncated}` |
 | `vmem_read_many` | `paths`<=20 (8 KiB each), `vault` |
-| `vmem_list` | `vault`, `prefix`, `limit`<=500 |
+| `vmem_list` | `vault`, `prefix`, `limit`<=500, `cursor`; rows in path order with `mtime`, the filtered `total` and `nextCursor` while more remain |
 | `vmem_links` | `path`, `vault`, `direction` out/in/both, `limit`<=200; returns `{out, dead, in}` |
 | `vmem_mocs` | `vault`; MOC notes with incoming link counts |
 | `vmem_check` | `vault`, `path`, `text`<=256 KiB; validation only |
@@ -178,6 +189,7 @@ The vault set is read once at startup: every tool's `vault` property is an enum 
 | `vmem_delete` | `path`, `confirm`, `fingerprint` (two-step; the preview lists backlinks), `log` (on confirm) |
 | `vmem_promote` | `path` (in the personal vault), `to` (enum of org vaults), `topics[]`, `again`, `confirm`, `fingerprint` (two-step; never pushes) |
 | `vmem_skills_mine` | `vault`, `days`, `project`, `allProjects`, `vocab`, `skills[]`, `minSize`, `minNovelty` (read-only; see Skill mining) |
+| `vmem_stats` | `vault`, `days`<=3650 (default 30); read-only counts, see Vault statistics |
 | `vmem_promote_from_amem` | `id`, `project`, `stem`, `type`, `domain`, `topics[]`, `description`, `title`, `body`<=65536, `linkTo`, `confirm`, `fingerprint` (two-step) |
 | `vmem_read_file` | `path`, `vault`, `maxBytes`<=65536, `offset`<=2097152; returns `{path, sha256, truncated, body, offset?, nextOffset?}` (read-only; allowed roots below the table) |
 | `vmem_list_files` | `dir`, `vault`; one level, <=500 entries `{name, path, type, bytes?}` (read-only) |
