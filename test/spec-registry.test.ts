@@ -150,10 +150,10 @@ test("doctor flags unavailable and symlink-rebound source roots without suppress
 
 test("future-format fields survive shared registry writes and its version is never downgraded", () => {
   const f = fixture(), repo = f.repo("repo"); mkdirSync(f.home);
-  writeFileSync(join(f.home, CONFIG_FILE), JSON.stringify({ version: 3, vaults: [], specs: [{ id: "first", path: repo, futureSource: { marker: true } }], futureConfig: true }));
+  writeFileSync(join(f.home, CONFIG_FILE), JSON.stringify({ version: CONFIG_VERSION + 1, vaults: [], specs: [{ id: "first", path: repo, futureSource: { marker: true } }], futureConfig: true }));
   addSpec(f.home, { id: "second", path: f.repo("second") });
   removeSpec(f.home, "second", true);
-  expect(JSON.parse(f.config())).toMatchObject({ version: 3, futureConfig: true, specs: [{ futureSource: { marker: true }, write: "none", pii: "deny" }] });
+  expect(JSON.parse(f.config())).toMatchObject({ version: CONFIG_VERSION + 1, futureConfig: true, specs: [{ futureSource: { marker: true }, write: "none", pii: "deny" }] });
 });
 
 test("spec CLI uses the command table, rejects unknown flags and stays read-only when listing/previewing", () => {

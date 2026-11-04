@@ -10,7 +10,7 @@ import { isReadCommand, runReadCommand } from "./read-commands.ts";
 import { version } from "../package.json";
 import { COMMANDS, commandUsage, completionScript, help } from "./commands-table.ts";
 import { VMEM_TOOL_NAMES, vaultTools } from "./mcp-vault.ts";
-import { CONFIG_VERSION } from "./config.ts";
+import { CONFIG_VERSION, effectiveDomains } from "./config.ts";
 import { runSetup, type SetupMode } from "./setup.ts";
 import { resolveHome } from "./home.ts";
 import { addVault, addSpec, removeSpec, specStatus, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault, setVaultPii } from "./registry.ts";
@@ -169,7 +169,7 @@ function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLA
     }
     case "vaults list": {
       if (positional.length) throw new Error("vaults list: unexpected arguments");
-      const vaults = loadRegistry(home.home).vaults.map(v => ({ ...v, pii: effectivePii(v), piiPolicy: piiPolicy(v) }));
+      const vaults = loadRegistry(home.home).vaults.map(v => ({ ...v, domains: effectiveDomains(v), pii: effectivePii(v), piiPolicy: piiPolicy(v) }));
       result = vaults; render = () => renderVaultsList(vaults, text);
       break;
     }

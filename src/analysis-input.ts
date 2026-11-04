@@ -5,7 +5,7 @@ import { sourceWorkspaceRoot, missingSourceWarnings, sourceReferences } from "./
 import { parseAnalysisYaml } from "./analysis-yaml.ts";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { VaultSpec, VmemConfig } from "./config.ts";
+import { effectiveDomains, type VaultSpec, type VmemConfig } from "./config.ts";
 import type { AnalysisSnapshot } from "./analysis-types.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry } from "./registry.ts";
@@ -64,7 +64,7 @@ export function analysisInput(home: string, id: string, options: { today?: strin
       registryIds = (registry?.projects ?? []).filter(v => v && typeof v === "object").map(v => v.id).filter((v): v is string => typeof v === "string");
     }
   }
-  const inputs = { today, logPath, log: analysisRead(logPath, 32 * 1024 * 1024), registryIds, reports };
+  const inputs = { domains: effectiveDomains(vault), today, logPath, log: analysisRead(logPath, 32 * 1024 * 1024), registryIds, reports };
   const index = new VaultIndex(home,vault,config.vaults.map(v => v.path),{ memory: options.memory ?? true });
   try {
     index.scan(false,{captureInvalidFrontmatter:true});

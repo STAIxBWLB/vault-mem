@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, readdirSync, readlinkSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONFIG_FILE, CONFIG_VERSION, MAX_CONFIG_BYTES, parseConfig, readConfig } from "../src/config.ts";
+import { BUILTIN_DOMAINS, CONFIG_FILE, CONFIG_VERSION, MAX_CONFIG_BYTES, parseConfig, readConfig } from "../src/config.ts";
 import { resolveHome } from "../src/home.ts";
 import { addVault, loadRegistry, recoverRegistry, removeVault, syncDirectory } from "../src/registry.ts";
 import { run } from "../src/cli.ts";
@@ -221,7 +221,7 @@ describe("follow-ups", () => {
     const registry = join(root(), "reg");
     const added = JSON.parse(run(["vaults", "add", "org", vault, "--kind", "org", "--write", "none", "--pii", "allow", "--remote", "git@example.com:o/v.git", "--registry", registry, "--json"], { VMEM_HOME: home }).text);
     expect(added.vault).toMatchObject({ pii: "allow", remote: "git@example.com:o/v.git", registry });
-    expect(JSON.parse(run(["vaults", "list", "--json"], { VMEM_HOME: home }).text)).toEqual([{ id: "org", path: realpathSync(vault), kind: "org", write: "none", pii: "allow", remote: "git@example.com:o/v.git", registry, piiPolicy: { ...Object.fromEntries(["email", "phone", "custom"].map(c => [c, { notes: "allow", log: "allow", promotion: "allow" }])), patterns: [], allow: [] } }]);
+    expect(JSON.parse(run(["vaults", "list", "--json"], { VMEM_HOME: home }).text)).toEqual([{ id: "org", path: realpathSync(vault), kind: "org", write: "none", pii: "allow", domains: [...BUILTIN_DOMAINS], remote: "git@example.com:o/v.git", registry, piiPolicy: { ...Object.fromEntries(["email", "phone", "custom"].map(c => [c, { notes: "allow", log: "allow", promotion: "allow" }])), patterns: [], allow: [] } }]);
     const other = fixture();
     run(["vaults", "add", "team", other.vault, "--kind", "org", "--write", "cli"], { VMEM_HOME: home });
     expect(JSON.parse(run(["vaults", "list", "--json"], { VMEM_HOME: home }).text)[1].pii).toBe("deny");

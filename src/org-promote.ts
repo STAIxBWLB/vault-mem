@@ -1,3 +1,4 @@
+import { domainProblem } from "./config.ts";
 import { localDate } from "./local-date.ts";
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from "node:fs";
@@ -183,6 +184,8 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   const original = readSource(source, path);
   let parsed;
   try { parsed = parseFrontmatter(original); } catch { return fail(issue("V01", "source frontmatter is not parseable", path)); }
+  const domain = parsed.data.type === "moc" && parsed.data.domain === undefined ? undefined : domainProblem(parsed.data.domain, target);
+  if (domain) return fail(issue("V01", domain, path));
   const promotedTo = `${target.id}:${path}`;
   const prior = strings(parsed.data.promoted_to);
   if (prior.length && !request.again) return fail(issue("AGAIN", `already promoted to ${prior.join(", ")}; pass --again to promote again`, path));
