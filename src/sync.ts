@@ -19,7 +19,7 @@ export interface SyncResult {
   branch: string | null;
   /** Planned changed paths that will be staged and committed. */
   paths: string[];
-  /** Changed paths outside notes/, reports/ and log: never staged. */
+  /** Changed paths outside STAGE_PREFIXES and STAGE_FILES: never staged. */
   ignored: string[];
   ahead: number;
   behind: number;
@@ -46,7 +46,7 @@ export function sameRemote(a: string, b: string): boolean {
 }
 /** Time budget of the console's local sync check. */
 const GIT_TIMEOUT_BUDGET_MS = 1000;
-/** The paths `vmem sync` stages, as people read them: "notes/, reports/ and log". */
+/** The paths `vmem sync` stages (STAGE_PREFIXES, then STAGE_FILES), as people read them. */
 export const STAGED_DESCRIPTION = ((items: string[]) => items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items.join(""))([...STAGE_PREFIXES, ...STAGE_FILES]);
 type SpawnResult = { exitCode: number | null; signalCode?: string | number | null; exitedDueToTimeout?: boolean; stderr: { toString(): string } };
 /** Why a git call failed: its timeout or signal when it left no exit code, else the last stderr line. */
@@ -59,7 +59,7 @@ const NEXT_STEP = { console: "inspect the vault Git state in System and retry", 
 function gitIn(cwd: string, env: NodeJS.ProcessEnv, deadline?: number, context: keyof typeof NEXT_STEP = "sync"): Git {
   return (args, options = {}) => {
     const timeout = deadline === undefined ? GIT_TIMEOUT_MS : deadline - Date.now();
-    if (timeout <= 0) throw new Error(`git ${args[0]} not started: the ${deadline === undefined ? GIT_TIMEOUT_MS / 1000 : GIT_TIMEOUT_BUDGET_MS / 1000} s budget is used up; ${NEXT_STEP[context]}`);
+    if (timeout <= 0) throw new Error(`git ${args[0]} not started: the ${GIT_TIMEOUT_BUDGET_MS / 1000} s budget is used up; ${NEXT_STEP[context]}`);
     const argv = memoryGitArgv(["-C", cwd, ...args]);
     const result = Bun.spawnSync(argv, { env: memoryGitEnv({ ...env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }, { repositoryIsolation: true }), stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout });
     // A timeout or signal leaves no exit code and usually no stderr, so `cause` names it instead.
@@ -164,7 +164,7 @@ export function syncVault(home: string, request: { vault: string; confirm?: bool
     result.branch = branch.stdout.trim();
     if (git(["rev-parse", "--verify", "--quiet", "REBASE_HEAD"], { allowFail: true }).status === 0 || git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], { allowFail: true }).status === 0) return { ...result, issues: [issue("SYNC", "a rebase or merge is in progress; resolve it first")] };
     const fetch = git(["fetch", "--quiet", "--no-tags", "origin", result.branch], { allowFail: true });
-    if (fetch.status !== 0) return { ...result, issues: [issue("FETCH", `fetch failed: ${fetch.cause}`)] };
+    if (fetch.status !== 0) return { ...result, issues: [issue("FETCH", `fetch failed: ${fetch.cause}; check the network and credentials for origin, then rerun vmem sync`)] };
     const upstream = `origin/${result.branch}`;
     const hasUpstream = git(["rev-parse", "--verify", "--quiet", `refs/remotes/${upstream}`], { allowFail: true }).status === 0;
     if (hasUpstream) {
@@ -199,7 +199,7 @@ export function syncVault(home: string, request: { vault: string; confirm?: bool
     const pushNow = lines(["remote", "get-url", "--push", "--all", "origin"]);
     if (pushNow.some(url => !sameRemote(url, spec.remote!)) || applicableRewrites(lines, [spec.remote, ...fetchUrls, ...pushNow]).length) return { ...result, applied: Boolean(result.commit), pushed: false, issues: [issue("REMOTE", "push destination changed before push; nothing was pushed")] };
     const push = git(["push", "--quiet", "--porcelain", "origin", `HEAD:refs/heads/${result.branch}`], { allowFail: true });
-    if (push.status !== 0) return { ...result, applied: Boolean(result.commit), pushed: false, issues: [issue("PUSH", `push failed: ${push.cause}; the local commit was kept`)] };
+    if (push.status !== 0) return { ...result, applied: Boolean(result.commit), pushed: false, issues: [issue("PUSH", `push failed: ${push.cause}; the local commit was kept; check the network and push access for origin, then rerun vmem sync`)] };
     // Verify the remote really has our head before reporting success.
     git(["fetch", "--quiet", "--no-tags", "origin", result.branch]);
     const pushedHead = git(["rev-parse", upstream]).stdout.trim(), localHead = git(["rev-parse", "HEAD"]).stdout.trim();
