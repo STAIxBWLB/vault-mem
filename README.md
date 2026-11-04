@@ -243,7 +243,7 @@ vmem promote-from-amem personal mem:<id> --link-to existing-note  # link an exis
 
 ## Console plugin
 
-`vmem setup <target> --apply` also writes `$AGENTHUB_HOME/console/plugins/vmem.json` (default `~/.agenthub`; directory 0700, file 0600) with the absolute path and sha256 of `src/ui/plugin.ts`. `acon ui` then shows a Vault area. Re-run setup after upgrading vmem: acon refuses a module whose hash changed.
+`vmem setup <target> --apply` also writes `$AGENTHUB_HOME/console/plugins/vmem.json` (default `~/.agenthub`; directory 0700, file 0600) with the absolute path and sha256 of `src/ui/plugin.ts`. `acon ui` then shows a Vault area. The panel needs agent-console 0.1.0 or later, the first release with the `host.ui` panel kit and `ui.button`; an older acon fails to load it. Re-run setup after upgrading vmem: acon refuses a module whose hash changed.
 
 - Panels: Overview (vaults, maps, recent log), Search, Note (body, links, actions), Promote (agent-mem candidates), Lint (typed findings linked to notes) and Log (parsed rows).
 - Inbox: promotion candidates (group `candidate`), lint errors, a stale graph report and org-vault sync pending (group `alert`). Sync pending counts uncommitted paths plus local commits ahead of the upstream tracking ref; without an upstream it counts only uncommitted paths. It reads local Git state only (no fetch or credential prompt), caches each vault result or failure for 60 seconds, and opens Overview with that vault, with no one-key sync verb. The palette searches notes.
