@@ -36,7 +36,7 @@ function extendTeam(home: string) {
 }
 
 test("config adds <=16 vault-pattern ids without replacing built-ins; malformed and unknown keys fail closed", () => {
-  const vault = { id: "mine", path: "/synthetic/vault", kind: "personal", write: "mcp" };
+  const vault = { id: "mine", path: "/synthetic/vault", kind: "personal" as const, write: "mcp" as const };
   expect(parseVault(vault)).toEqual(vault);
   expect(effectiveDomains(parseVault(vault))).toEqual([...BUILTIN_DOMAINS]);
   expect(effectiveDomains(parseVault({ ...vault, domains: [] }))).toEqual([...BUILTIN_DOMAINS]);

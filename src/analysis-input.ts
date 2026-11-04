@@ -64,7 +64,7 @@ export function analysisInput(home: string, id: string, options: { today?: strin
       registryIds = (registry?.projects ?? []).filter(v => v && typeof v === "object").map(v => v.id).filter((v): v is string => typeof v === "string");
     }
   }
-  const inputs = { domains: effectiveDomains(vault), today, logPath, log: analysisRead(logPath, 32 * 1024 * 1024), registryIds, reports };
+  const inputs = { ...(vault.domains !== undefined ? { domains: effectiveDomains(vault) } : {}), today, logPath, log: analysisRead(logPath, 32 * 1024 * 1024), registryIds, reports };
   const index = new VaultIndex(home,vault,config.vaults.map(v => v.path),{ memory: options.memory ?? true });
   try {
     index.scan(false,{captureInvalidFrontmatter:true});
