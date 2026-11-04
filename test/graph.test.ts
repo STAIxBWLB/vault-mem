@@ -196,3 +196,19 @@ test("vault graph JSON is byte-identical across builds and records Leiden metada
   expect(report).toContain("- **Partitioner**: deterministic Leiden (modularity)");
   expect(report).toContain(`- **Modularity**: ${graph.graph.modularity.toFixed(4)}`);
 });
+
+test("typed link relations ride on wiki_link edges and filter neighbours (#74)", () => {
+  const body = ["## Relevant Notes", "- [[b]] (supports): why", "- [[c]] (contradicts)", "- [[d]] (extends): more", "- [[e]] (applies-to): x", "- [[f]] (context-for): y", "- [[g]] (unknown): z", "See [[h]] (supports) inline."].join("\n");
+  const ids = ["b", "c", "d", "e", "f", "g", "h"];
+  const graph = buildGraph(snapshot({ a: note(body), ...Object.fromEntries(ids.map(id => [id, note("")])) }));
+  const plain = buildGraph(snapshot({ a: note(ids.map(id => `[[${id}]]`).join(" ")), ...Object.fromEntries(ids.map(id => [id, note("")])) }));
+  expect(graph.edges.map(edge => [edge.target, edge.relation, edge.rel])).toEqual([
+    ["b", "wiki_link", "supports"], ["c", "wiki_link", "contradicts"], ["d", "wiki_link", "extends"], ["e", "wiki_link", "applies-to"],
+    ["f", "wiki_link", "context-for"], ["g", "wiki_link", undefined], ["h", "wiki_link", undefined]]);
+  expect(graph.nodes).toEqual(plain.nodes);
+  expect(graph.edges.map(({ rel, ...edge }) => edge)).toEqual(plain.edges);
+  expect(graphNeighbors(graph, "a", 1, 500, "contradicts").nodes.map(node => node.id)).toEqual(["a", "c"]);
+  expect(graphNeighbors(graph, "a", 1, 500, "wiki_link").nodes.map(node => node.id)).toEqual(["a", "g", "h"]);
+  expect(graphNeighbors(graph, "a", 1, 500).nodes).toHaveLength(8);
+  expect(() => graphNeighbors(graph, "a", 1, 500, "refutes")).toThrow("unknown relation");
+});

@@ -83,17 +83,17 @@ export function analysisWriteText(r: { ok: boolean; applied: boolean; summary: u
   return blocks(line, r.paths.map(p => `  ${clean(p)}`).join("\n"), counts, issueTable(issues, o), logged);
 }
 
-export function neighborsText(r: GraphNeighborhood, o: TextOptions, c: { vault: string; limit: number }): string {
+export function neighborsText(r: GraphNeighborhood, o: TextOptions, c: { vault: string; limit: number; relation?: string }): string {
   // Hops and relations follow from the returned edges: every selected node's nearer neighbour is selected too.
   const hops = new Map([[r.start, 0]]), queue = [r.start];
   for (let i = 0; i < queue.length; i++) for (const e of r.edges) {
     const other = e.source === queue[i] ? e.target : e.target === queue[i] ? e.source : undefined;
     if (other !== undefined && !hops.has(other)) { hops.set(other, hops.get(queue[i]!)! + 1); queue.push(other); }
   }
-  const relation = (id: string) => [...new Set(r.edges.filter(e => (e.source === id && hops.get(e.target) === hops.get(id)! - 1) || (e.target === id && hops.get(e.source) === hops.get(id)! - 1)).map(e => e.relation))].join(",");
+  const relation = (id: string) => [...new Set(r.edges.filter(e => (e.source === id && hops.get(e.target) === hops.get(id)! - 1) || (e.target === id && hops.get(e.source) === hops.get(id)! - 1)).map(e => e.relation === "wiki_link" ? e.rel ?? e.relation : e.relation))].join(",");
   const nodes = r.nodes.filter(n => n.id !== r.start).sort((a, b) => (hops.get(a.id) ?? 9) - (hops.get(b.id) ?? 9));
   const count = `${plural(nodes.length, "neighbour")} of ${clean(r.start)} within ${plural(r.hops, "hop")}`;
-  const more = r.truncated && c.limit < 500 ? nextCommand("next", command("graph", "neighbors", c.vault, r.start, "--hops", String(r.hops), "--limit", String(Math.min(500, c.limit * 2))), o) : undefined;
+  const more = r.truncated && c.limit < 500 ? nextCommand("next", command("graph", "neighbors", c.vault, r.start, "--hops", String(r.hops), "--limit", String(Math.min(500, c.limit * 2)), ...(c.relation ? ["--relation", c.relation] : [])), o) : undefined;
   if (!nodes.length) return [count, more].filter(Boolean).join("\n");
   return blocks(table(["NOTE", "HOPS", "RELATION", "TITLE"], nodes.map(n => [n.id, hops.get(n.id), relation(n.id), n.label]), o), [count, more].filter(Boolean).join("\n"));
 }

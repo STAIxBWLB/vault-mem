@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `vmem graph build` keeps the relation of `- [[x]] (relation)` lines from `vmem link --relation` as `rel` on the `wiki_link` edge, and `vmem graph neighbors --relation` / `vmem_graph_neighbors` `relation` follow only edges of one relation (`wiki_link` for untyped links); an unknown relation is refused. Node and edge sets are unchanged (#74).
+
 - Every CLI command prints text for people by default, following agent-hub's conventions: tables, field blocks, LEVEL/CHECK/FINDING checks with a verdict, one result line per write, and the exact confirm or next-page command after a preview or a cut-off read. Help is grouped into sections with a description per command, and `vmem help <command>` prints one command. `--color=auto|always|never` works everywhere and honors `NO_COLOR` and `TERM=dumb`. **Breaking for scripts:** the default output was pretty JSON and is now text, so pass `--json`, which prints the same compact JSON as before (#114).
 
 ## [0.4.0] - 2026-11-04

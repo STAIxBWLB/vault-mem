@@ -336,6 +336,15 @@ export const codePointCompare = compare;
 export function labelCommunities(ids: readonly string[], edges: readonly (readonly [string, string])[]): Map<string, number> {
   return leidenCommunities(ids, edges).membership;
 }
+/** Relations `vmem link --relation` writes as `- [[x]] (relation): context`. */
+export const LINK_RELATIONS = ["supports", "contradicts", "extends", "applies-to", "context-for"] as const;
+/** The typed relation of a `- [[x]] (relation)` list line, or undefined for any other wiki link. */
+function linkRelation(body: string, index: number, length: number): string | undefined {
+  const start = body.lastIndexOf("\n", index - 1) + 1;
+  if (!/^\s*- $/.test(body.slice(start, index))) return undefined;
+  const after = /^ \(([a-z-]+)\)(?::|\s*(?:\n|$))/.exec(body.slice(index + length, index + length + 40));
+  return after && (LINK_RELATIONS as readonly string[]).includes(after[1]!) ? after[1] : undefined;
+}
 /** Pure transformation of the derived-index snapshot, preserving the reference wiki graph semantics. */
 export function buildGraph(snapshot: AnalysisSnapshot): VaultGraph {
   if (snapshot.notes.length > MAX_NODES) throw new Error(`graph: exceeds ${MAX_NODES} notes`);
@@ -354,7 +363,9 @@ export function buildGraph(snapshot: AnalysisSnapshot): VaultGraph {
       const target = match[1]!.trim().toLowerCase().replaceAll(" ", "-");
       if (!stems.has(target)) continue;
       const [source, destination] = [id, target].sort(compare) as [string, string];
-      edges.set(JSON.stringify([source, destination]), { source, target: destination, relation: "wiki_link", confidence_tag: "EXTRACTED", confidence: 1 });
+      const key = JSON.stringify([source, destination]), rel = linkRelation(body, match.index, match[0].length), prior = edges.get(key);
+      const kept = prior?.rel ?? rel;
+      edges.set(key, { source, target: destination, relation: "wiki_link", ...(kept ? { rel: kept } : {}), confidence_tag: "EXTRACTED", confidence: 1 });
       if (edges.size > MAX_EDGES) throw new Error(`graph: exceeds ${MAX_EDGES} edges`);
     }
   }
@@ -365,9 +376,14 @@ export function buildGraph(snapshot: AnalysisSnapshot): VaultGraph {
   communities(graph);
   return graph;
 }
-export function graphNeighbors(graph: VaultGraph, start: string, hops: 1 | 2, limit: number): GraphNeighborhood {
+/** An edge's link relation: its typed `rel`, else the edge relation (`wiki_link` for a plain link). */
+export function edgeRelation(edge: GraphEdge): string { return edge.relation === "wiki_link" ? edge.rel ?? "wiki_link" : edge.relation; }
+export function graphNeighbors(graph: VaultGraph, start: string, hops: 1 | 2, limit: number, relation?: string): GraphNeighborhood {
   if (hops !== 1 && hops !== 2) throw new Error("graph neighbors: hops must be 1 or 2");
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error("graph neighbors: limit must be 1..500");
+  if (relation !== undefined && relation !== "wiki_link" && !(LINK_RELATIONS as readonly string[]).includes(relation))
+    throw new Error(`graph neighbors: unknown relation ${JSON.stringify(relation)}; use wiki_link or ${LINK_RELATIONS.join(", ")}`);
+  if (relation !== undefined) graph = { ...graph, edges: graph.edges.filter(edge => edgeRelation(edge) === relation) };
   const neighbors = adjacency(graph);
   if (!neighbors.has(start)) throw new Error("graph neighbors: unknown note");
   const distances = new Map([[start, 0]]), queue = [start];

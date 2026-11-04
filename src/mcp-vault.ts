@@ -1,7 +1,7 @@
 import { createSpecMcp } from "./mcp-spec.ts";
 import { SPEC_COMMANDS } from "./spec-command-table.ts";
 import { analysisInput } from "./analysis-input.ts";
-import { buildGraph, graphNeighbors } from "./vault-graph.ts";
+import { buildGraph, graphNeighbors, LINK_RELATIONS } from "./vault-graph.ts";
 import { lintVault } from "./vault-lint.ts";
 import { writeAnalysisReports } from "./analysis-reports.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
@@ -62,7 +62,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
       object({ vault, id: { type: "string", minLength: 32, maxLength: 36 }, stem: string(120), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), linkTo: note, project: string(400), ...twoStep }, ["id"]), "confirm"),
     tool("vmem_lint", "Lint a private derived snapshot; write=true writes a screened report.", object({ vault, write: { type: "boolean" }, dryRun: { type: "boolean" } }), "write"),
     tool("vmem_graph_build", "Build a deterministic graph and screened reports; dryRun changes nothing.", object({ vault, dryRun: { type: "boolean" }, workspace: { type: "boolean" } }), "write"),
-    tool("vmem_graph_neighbors", "Read a bounded graph neighborhood.", object({ vault, path: note, hops: integer(1,2), limit: integer(1,500) }, ["path"])),
+    tool("vmem_graph_neighbors", "Read a bounded graph neighborhood.", object({ vault, path: note, hops: integer(1,2), limit: integer(1,500), relation: { type: "string", enum: ["wiki_link", ...LINK_RELATIONS] } }, ["path"])),
     tool("vmem_promote", "Two-step promotion of a personal note into a local org vault clone (never pushes): without confirm returns the full transformed text, dropped links, screen result and fingerprint; confirm=true with that fingerprint writes the org note, source provenance and SYNC log lines. Publishing is the separate `vmem sync` CLI.",
       object({ path: note, to: orgVault, topics: { type: "array", maxItems: 32, items: string(200) }, again: { type: "boolean" }, ...twoStep }, ["path", "to"]), "confirm"),
     tool("vmem_skills_mine", "Read-only skill-candidate mining over amem curated entries, amem capture rows and vault notes: dictionary matching, deterministic communities and novelty scoring. Returns counts, masked candidates and a markdown report; writes nothing.",
@@ -134,7 +134,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_report: args => write(args, { op: "report", path: str(args.path)!, text: str(args.body)! }, args.dryRun === true ? { dryRun: true } : {}),
     vmem_lint: args => args.write === true ? writeAnalysisReports(home,{vault:pick(args).id,kind:"lint",channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env) : lintVault(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),
     vmem_graph_build: args => writeAnalysisReports(home,{vault:pick(args).id,kind:"graph",workspace:args.workspace === true,channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env),
-    vmem_graph_neighbors: args => graphNeighbors(buildGraph(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),str(args.path)!, (args.hops as 1|2|undefined) ?? 1, (args.limit as number|undefined) ?? 50),
+    vmem_graph_neighbors: args => graphNeighbors(buildGraph(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),str(args.path)!, (args.hops as 1|2|undefined) ?? 1, (args.limit as number|undefined) ?? 50, str(args.relation)),
     vmem_status: () => ({ defaultVault: defaultVault ?? null, vaults: registryStatus(home).filter(v => ids.includes(v.id)) }),
     vmem_search: args => read(args, index => ({ hits: index.search(str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }) })),
     vmem_read: args => read(args, index => { const r = index.show(str(args.path)!, (args.maxBytes as number | undefined) ?? 16384, str(args.section), args.offset as number | undefined); return document(r); }),
