@@ -156,7 +156,11 @@ function putEntry(host: HostFile, text: string | null, value: unknown, rawToml?:
     }
     while (lines.length && lines[lines.length - 1] === "") lines.pop();
     const out = lines.length ? lines.join(newline) + newline : "";
-    Bun.TOML.parse(out); // never publish a file the host cannot parse
+    // Never publish a file the host cannot parse.
+    try { Bun.TOML.parse(out); }
+    catch (error) {
+      throw new Error(`${host.file}: the updated file would not parse (${error instanceof Error ? error.message : "TOML parse error"}); rewrite the vmem entry by hand as a [mcp_servers.${SERVER_NAME}] table, then rerun setup`);
+    }
     return out;
   }
   const doc = text === null ? {} : record(JSON.parse(text), host.file);

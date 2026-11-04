@@ -229,6 +229,7 @@ test("a planned TOML file that does not parse is refused by the dry run and by a
     const action = f.setup("codex", mode).actions[0]!;
     expect(action.change).toBe("refused");
     expect(action.reason).toContain("TOML");
+    expect(action.reason).toContain("rewrite the vmem entry by hand as a [mcp_servers.vmem] table");
   }
   expect(readFileSync(file, "utf8")).toBe(source);
   expect(existsSync(join(f.state, "setup"))).toBe(false);
