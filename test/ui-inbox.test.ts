@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MemoryStore, migrate } from "@staix/agent-mem";
+import { MemoryStore, migrate, ensureShardDescriptor } from "@staix/agent-mem";
 import { addVault } from "../src/registry.ts";
 import { collectInboxSource } from "../src/ui/inbox-source.ts";
 import { analysisInput } from "../src/analysis-input.ts";
@@ -145,6 +145,8 @@ test("one real project with 300 candidates reports overflow, and row details sur
         title: `Synthetic durable lesson ${n}`, text: `Synthetic storage lesson ${n} keeps immutable identity stable across rebuilds.`, about: [], source: "person" });
     } finally { store.close(); }
     await migrate({ memoryDir, mode: "apply", generation: "c".repeat(32), authorizedPerson: true, tty: true });
+    // Cross-project reads discover projects from descriptors, including unsplit generation homes.
+    ensureShardDescriptor(memoryDir, "synthetic-inbox");
     process.env.AMEM_HOME = memoryDir;
     const candidates = await collectInboxSource(home, { kind: "candidates" });
     expect(candidates.items).toHaveLength(50); expect(candidates.more).toBe(1); expect(candidates.moreIsLowerBound).toBe(true);
