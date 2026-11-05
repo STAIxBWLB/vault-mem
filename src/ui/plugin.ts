@@ -122,7 +122,7 @@ export const plugin: ConsolePlugin = {
       return validArguments(out, schema ?? { type: "object" }) ? out : `invalid input for ${tool}`;
     };
 
-    // ponytail: lint reads every note, so inbox polls reuse one result per vault for 60 s; invalidate on writes if it lags.
+    // The Lint panel reuses its report for 60 s; inbox collection has its own off-thread cache.
     const lintCache = new Map<string, { at: number; report: ReturnType<typeof lintVault> }>();
     const lint = (id: string) => {
       const hit = lintCache.get(id);

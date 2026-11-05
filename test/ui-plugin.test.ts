@@ -13,6 +13,7 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-ui-")));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 process.env.VMEM_HOME = join(root, "state");
 process.env.AGENTHUB_HOME = join(root, "family");
+process.env.AMEM_HOME = join(root, "memory");
 const note = (title: string, body: string, type = "insight") => `---\ntitle: ${JSON.stringify(title)}\ndescription: Synthetic evidence for navigation.\ntype: ${type}\ndomain: research\ntopics: ["[[research]]"]\n---\n# ${title}\n\n${body}\n\n## Topics\n\n- [[research]]\n`;
 const make = (name: string) => {
   const notes = join(root, name, "notes"); mkdirSync(notes, { recursive: true });

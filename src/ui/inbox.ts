@@ -5,7 +5,7 @@ import type { InboxSource } from "./inbox-source.ts";
 
 const CACHE_MS = 60_000;
 const FIRST_WAIT_MS = 700;
-const SOURCE_MS = 5_000;
+const SOURCE_MS = 30_000;
 export type InboxRows = { items: InboxItem[]; more: number };
 
 /** Urgent rows precede candidates; newest candidates first. Never ship full lint reports or memory bodies. */
@@ -28,7 +28,7 @@ export function runInboxSource(home: string, source: InboxSource): { result: Pro
       void worker.terminate();
       if (error) reject(error); else resolve(rows!);
     };
-    const timer = setTimeout(() => finish(new Error(`inbox ${source.kind} timed out after 5 s`)), SOURCE_MS);
+    const timer = setTimeout(() => finish(new Error(`inbox ${source.kind} timed out after 30 s`)), SOURCE_MS);
     cancel = () => finish(new Error("inbox closed"));
     worker.once("message", (message: { result?: InboxRows; error?: string }) => finish(message.error ? new Error(message.error) : undefined, message.result));
     worker.once("error", error => finish(error instanceof Error ? error : new Error(String(error))));
