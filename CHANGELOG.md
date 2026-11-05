@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-05
+
 - Console inbox snapshots share a background refresh, keep prior rows through refreshes and source failures, and wait at most 700 ms cold before showing a refreshing row. Payloads are capped at 50 prioritized rows with bounded Unicode-safe title and detail. `moreIsLowerBound` identifies "at least N more" when agent-mem's per-project candidate limit prevents an exact total. Applied writes invalidate freshness without clearing triage; source workers refresh on a 60-second cache and have a 30-second termination budget (#149).
 
 - Tests: the core fixture copies use NFC names, so a macOS working copy that holds `café.md` under an NFD name no longer fails `bun run check`. A new test pins the path contract: an NFD-named note keeps its on-disk name in `search`, `show` and `links` and resolves from NFC targets, as the README now states (#147).
