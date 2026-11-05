@@ -6,18 +6,30 @@ import type { InboxSource } from "./inbox-source.ts";
 const CACHE_MS = 60_000;
 const FIRST_WAIT_MS = 700;
 const SOURCE_MS = 30_000;
-export type InboxRows = { items: InboxItem[]; more: number };
+// agent-mem has no total-count API; a saturated candidate source can only report a lower bound.
+export type InboxRows = { items: InboxItem[]; more: number; moreIsLowerBound?: boolean };
 
 /** Urgent rows precede candidates; newest candidates first. Never ship full lint reports or memory bodies. */
-export function boundInbox(items: InboxItem[], more = 0): InboxRows {
-  const rank = (i: InboxItem) => i.chip?.tone === "err" ? 0 : i.group === "alert" ? 1 : 2;
+export function boundInbox(items: InboxItem[], more = 0, moreIsLowerBound = false): InboxRows {
+  const rank = (i: InboxItem) => {
+    if (i.chip?.tone === "err") return 0;
+    if (i.group === "alert") return 1;
+    return 2;
+  };
+  const clip = (value: string, limit: number) => {
+    let out = "", count = 0;
+    for (const point of value) { if (count++ === limit) break; out += point; }
+    return out;
+  };
   const sorted = [...items].sort((a, b) => rank(a) - rank(b) || b.at.localeCompare(a.at) || a.id.localeCompare(b.id));
-  return { items: sorted.slice(0, 50).map(i => ({ ...i, title: i.title.slice(0, 160), ...(i.detail ? { detail: i.detail.slice(0, 240) } : {}) })),
-    more: more + Math.max(0, items.length - 50) };
+  return { items: sorted.slice(0, 50).map(i => ({ ...i, title: clip(i.title, 160), ...(i.detail ? { detail: clip(i.detail, 240) } : {}) })),
+    more: more + Math.max(0, items.length - 50), ...(moreIsLowerBound ? { moreIsLowerBound: true } : {}) };
 }
 
-/** Separate workers make even synchronous lint, SQLite and Git interruptible without blocking the console. */
+/** Workers isolate synchronous lint, SQLite and Git from requests. The deadline initiates termination;
+ * shutdown can still wait for a blocking native call, so the queue waits before starting another worker. */
 export function runInboxSource(home: string, source: InboxSource): { result: Promise<InboxRows>; cancel: () => void } {
+  const panel = { candidates: "Promote", lint: "Lint", sync: "Overview" }[source.kind];
   const worker = new Worker(new URL("./inbox-worker.ts", import.meta.url), { workerData: { home, source }, env: { ...process.env } });
   let cancel = () => {};
   const result = new Promise<InboxRows>((resolve, reject) => {
@@ -29,11 +41,11 @@ export function runInboxSource(home: string, source: InboxSource): { result: Pro
         if (error) reject(error); else resolve(rows!);
       }, failure => reject(failure));
     };
-    const timer = setTimeout(() => finish(new Error(`inbox ${source.kind} timed out after 30 s`)), SOURCE_MS);
+    const timer = setTimeout(() => finish(new Error(`inbox ${source.kind} timed out after 30 s; inspect ${panel} and System, then retry`)), SOURCE_MS);
     cancel = () => finish(new Error("inbox closed"));
     worker.once("message", (message: { result?: InboxRows; error?: string }) => finish(message.error ? new Error(message.error) : undefined, message.result));
     worker.once("error", error => finish(error instanceof Error ? error : new Error(String(error))));
-    worker.once("exit", code => finish(new Error(`inbox worker exited (${code})`)));
+    worker.once("exit", code => finish(new Error(`inbox worker exited (${code}); inspect System and restart the console provider`)));
   });
   return { result, cancel: () => cancel() };
 }
@@ -45,6 +57,13 @@ export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (mes
   const rows = new Map<number, InboxRows>(), firstSeen = new Map<string, string>();
   let cached: InboxRows | undefined, flight: Promise<void> | undefined, at = -Infinity, revision = 0, closed = false;
   let cancel: (() => void) | undefined;
+  const statusAt = new Date().toISOString();
+  const status = (unavailable: boolean): InboxRows => ({ items: [{
+    id: unavailable ? "inbox:unavailable" : "inbox:refresh", group: "alert", kind: "status",
+    title: unavailable ? "Vault inbox is unavailable" : "Vault inbox is refreshing",
+    detail: unavailable ? "Inspect System, then retry." : "The first collection is running; check again shortly.",
+    at: statusAt, verbs: [], link: { panel: "overview" },
+  }], more: 0 });
   function refresh() {
     if (closed || flight || Date.now() - at < CACHE_MS) return;
     const started = revision;
@@ -56,7 +75,7 @@ export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (mes
           const job = run(home, source); cancel = job.cancel;
           rows.set(index, await job.result);
         } catch (error) {
-          log(`vmem: ${source.kind === "sync" ? "sync pending" : source.kind}${"vault" in source ? ` ${source.vault.id}` : ""} failed: ${error instanceof Error ? error.message : String(error)}`);
+          if (!closed) log(`vmem: ${source.kind === "sync" ? "sync pending" : source.kind}${"vault" in source ? ` ${source.vault.id}` : ""} failed: ${error instanceof Error ? error.message : String(error)}`);
         } finally { cancel = undefined; }
       }
       if (closed) return;
@@ -66,7 +85,7 @@ export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (mes
       }
       const ids = new Set(all.map(i => i.id));
       for (const id of firstSeen.keys()) if (!ids.has(id)) firstSeen.delete(id);
-      cached = boundInbox(all, [...rows.values()].reduce((n, r) => n + r.more, 0));
+      cached = rows.size === 0 ? status(true) : boundInbox(all, [...rows.values()].reduce((n, r) => n + r.more, 0), [...rows.values()].some(r => r.moreIsLowerBound));
       // An action during collection makes the next poll refresh again, without erasing the last rows.
       at = started === revision ? Date.now() : -Infinity;
     })().finally(() => { flight = undefined; });
@@ -79,7 +98,7 @@ export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (mes
         await Promise.race([flight, new Promise<void>(resolve => { timer = setTimeout(resolve, FIRST_WAIT_MS); })]);
         clearTimeout(timer);
       }
-      return { ...(cached ?? { items: [], more: 0 }), ...(flight ? { refreshing: true } : {}) };
+      return { ...(cached ?? status(false)), ...(flight ? { refreshing: true } : {}) };
     },
     invalidate() { revision++; at = -Infinity; },
     async close() { closed = true; cancel?.(); await flight; },

@@ -1,4 +1,12 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { MemoryStore, migrate } from "@staix/agent-mem";
+import { addVault } from "../src/registry.ts";
+import { collectInboxSource } from "../src/ui/inbox-source.ts";
+import { analysisInput } from "../src/analysis-input.ts";
+import { lintVault } from "../src/vault-lint.ts";
 import type { InboxItem } from "@staix/agent-console/contract";
 import { boundInbox, createInboxSnapshot, runInboxSource, type InboxRows } from "../src/ui/inbox.ts";
 
@@ -24,7 +32,7 @@ test("cold p95 stays below 1 s while concurrent polls share one hung collection"
   const cache = createInboxSnapshot("fixture", [], () => {}, () => { runs++; return job; });
   const elapsed = await Promise.all(Array.from({ length: 20 }, async () => {
     const start = performance.now(), snapshot = await cache.snapshot();
-    expect(snapshot).toMatchObject({ items: [], more: 0, refreshing: true });
+    expect(snapshot).toMatchObject({ items: [{ id: "inbox:refresh", kind: "status" }], more: 0, refreshing: true });
     return performance.now() - start;
   }));
   elapsed.sort((a, b) => a - b);
@@ -91,3 +99,73 @@ test("a cached realistic-size candidate result answers repeated snapshots below 
   expect(durations[94]!).toBeLessThan(1000);
   await cache.close();
 });
+
+test("display clipping preserves astral code points at both limits", () => {
+  const item = { ...row(0), title: "a".repeat(159) + "😀tail", detail: "b".repeat(239) + "😀tail" };
+  const result = boundInbox([item]).items[0]!;
+  expect(result.title).toBe("a".repeat(159) + "😀"); expect(result.detail).toBe("b".repeat(239) + "😀");
+  expect([...result.title]).toHaveLength(160); expect([...result.detail!]).toHaveLength(240);
+});
+
+test("first-flight failure is visible and distinct from loading; shutdown is silent", async () => {
+  const logs: string[] = [];
+  const unavailable = createInboxSnapshot("fixture", [], message => logs.push(message), () => ({
+    result: Promise.reject(new Error("synthetic failure")), cancel() {},
+  }));
+  expect((await unavailable.snapshot()).items[0]!.id).toBe("inbox:unavailable");
+  expect(logs).toHaveLength(1); await unavailable.close();
+  let reject!: (error: Error) => void;
+  const active = createInboxSnapshot("fixture", [], message => logs.push(message), () => ({
+    result: new Promise<InboxRows>((_, fail) => { reject = fail; }), cancel() { reject(new Error("inbox closed")); },
+  }));
+  const cold = active.snapshot(); await active.close(); await cold;
+  expect(logs).toHaveLength(1);
+});
+
+test("candidate lower bounds survive composition and do not decrease as populations grow", () => {
+  const lowerBounds = [49, 50, 51, 300].map(total => {
+    const fetched = Array.from({ length: Math.min(total, 51) }, (_, n) => row(n));
+    const source = boundInbox(fetched, 0, fetched.length === 51);
+    const merged = boundInbox(source.items, source.more, source.moreIsLowerBound);
+    expect(merged.items).toHaveLength(Math.min(total, 50));
+    expect(merged.moreIsLowerBound === true).toBe(total >= 51);
+    return merged.more;
+  });
+  expect(lowerBounds).toEqual([0, 0, 1, 1]);
+});
+
+
+test("one real project with 300 candidates reports overflow, and row details survive collection", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-inbox-count-"))), memoryDir = join(root, "memory"), home = join(root, "state"), vault = join(root, "vault");
+  const previous = process.env.AMEM_HOME;
+  try {
+    const store = new MemoryStore({ memoryDir, deferPromotions: true });
+    try {
+      for (let n = 0; n < 300; n++) store.note({ op: "note", project: "synthetic-inbox", scope: "project", tier: "long", kind: "decision", peer: "person",
+        title: `Synthetic durable lesson ${n}`, text: `Synthetic storage lesson ${n} keeps immutable identity stable across rebuilds.`, about: [], source: "person" });
+    } finally { store.close(); }
+    await migrate({ memoryDir, mode: "apply", generation: "c".repeat(32), authorizedPerson: true, tty: true });
+    process.env.AMEM_HOME = memoryDir;
+    const candidates = await collectInboxSource(home, { kind: "candidates" });
+    expect(candidates.items).toHaveLength(50); expect(candidates.more).toBe(1); expect(candidates.moreIsLowerBound).toBe(true);
+    expect(candidates.items.every(item => item.detail === "decision memory to promote into a vault note")).toBe(true);
+    const cache = createInboxSnapshot(home, [], () => {});
+    try {
+      const result = await cache.snapshot();
+      const deadline = performance.now() + 4000;
+      let complete = result;
+      while (complete.refreshing && performance.now() < deadline) { await Bun.sleep(10); complete = await cache.snapshot(); }
+      expect(complete.refreshing).toBeUndefined(); expect(complete.more).toBe(1); expect(complete.moreIsLowerBound).toBe(true);
+    } finally { await cache.close(); }
+    mkdirSync(join(vault, "notes"), { recursive: true });
+    writeFileSync(join(vault, "notes", "Bad.md"), "---\ntype: insight\ndescription: Synthetic invalid filename.\n---\n# Synthetic\n");
+    const spec = addVault(home, { id: "mine", path: vault, kind: "personal", write: "mcp" });
+    const report = lintVault(analysisInput(home, "mine", { expectedVault: spec }).snapshot);
+    const lint = await collectInboxSource(home, { kind: "lint", vault: spec });
+    expect(lint.items.find(item => item.id === "lint:mine")!.detail).toBe([...report.summary].slice(0, 240).join(""));
+    expect(lint.items.find(item => item.id === "stale:mine")!.detail).toBe([...report.findings.L11![0]!].slice(0, 240).join(""));
+  } finally {
+    if (previous === undefined) delete process.env.AMEM_HOME; else process.env.AMEM_HOME = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 10_000);

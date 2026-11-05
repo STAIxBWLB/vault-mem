@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, symlinkSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ConsolePlugin, ConsoleProvider } from "@staix/agent-console/contract";
 import { registerConsoleConformance } from "@staix/agent-console/conformance";
 import { addVault } from "../src/registry.ts";
 import { consoleManifest } from "../src/setup.ts";
@@ -26,7 +27,22 @@ addVault(process.env.VMEM_HOME, { id: "team", path: make("team"), kind: "org", w
 addVault(process.env.VMEM_HOME, { id: "mine", path: make("mine"), kind: "personal", write: "mcp" });
 const mine = join(root, "mine", "notes");
 
-registerConsoleConformance(plugin, { destructive: [{ action: "delete", path: "beta" }, { action: "move", from: "alpha", to: "gamma" }] });
+async function completeInbox(provider: ConsoleProvider) {
+  const deadline = performance.now() + 4000;
+  let result = await provider.snapshot({ after: 0, panel: "inbox" });
+  while (result.refreshing && performance.now() < deadline) {
+    await Bun.sleep(10); result = await provider.snapshot({ after: 0, panel: "inbox" });
+  }
+  expect(result.refreshing).toBeUndefined();
+  // This fixture always has a stale-graph alert; loading/status-only rows cannot satisfy it.
+  expect((result.items as { kind: string }[]).some(item => item.kind === "lint")).toBe(true);
+  return result;
+}
+const settledPlugin: ConsolePlugin = { ...plugin, async open(ctx) {
+  const provider = await plugin.open(ctx);
+  return { ...provider, snapshot: input => input.panel === "inbox" ? completeInbox(provider) : provider.snapshot(input) };
+} };
+registerConsoleConformance(settledPlugin, { destructive: [{ action: "delete", path: "beta" }, { action: "move", from: "alpha", to: "gamma" }] });
 
 test("panels read the vault and the palette searches it", async () => {
   const p = await plugin.open({ home: process.env.AGENTHUB_HOME!, log: () => {} });
@@ -42,9 +58,9 @@ test("panels read the vault and the palette searches it", async () => {
   expect(await p.snapshot({ after: 0, panel: "overview", vault: "mine" })).toMatchObject({ vault: "mine", noteCount: 3 });
   expect(await p.snapshot({ after: 0, panel: "note", path: "missing" })).toMatchObject({ note: null });
   // Alerts keep the time they were first seen, so snooze and oldest-first order survive polls.
-  const first = (await p.snapshot({ after: 0, panel: "inbox" })).items as { id: string; at: string }[];
+  const first = (await completeInbox(p)).items as { id: string; at: string }[];
   await Bun.sleep(5);
-  const second = (await p.snapshot({ after: 0, panel: "inbox" })).items as { id: string; at: string }[];
+  const second = (await completeInbox(p)).items as { id: string; at: string }[];
   expect(first.length).toBeGreaterThan(0);
   expect(second.map(i => [i.id, i.at])).toEqual(first.map(i => [i.id, i.at]));
   expect(await p.snapshot({ after: 0, panel: "overview" })).toMatchObject({ noteCountCapped: false });
