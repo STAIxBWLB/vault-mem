@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addVault } from "../src/registry.ts";
 import { localSyncPending, STAGED_DESCRIPTION } from "../src/sync.ts";
+import { collectInboxSource } from "../src/ui/inbox-source.ts";
+import { loadRegistry } from "../src/registry.ts";
 import { plugin } from "../src/ui/plugin.ts";
 import type { ConsoleProvider, InboxItem } from "@staix/agent-console/contract";
 
@@ -38,10 +40,17 @@ async function fixture(options: { upstream?: boolean; broken?: boolean } = {}) {
   cleanups.push(() => { for (const key of Object.keys(env)) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; } });
   const logs: string[] = [];
   const provider = await plugin.open({ home: env.AGENTHUB_HOME, log: message => { logs.push(message); } });
+  cleanups.push(() => { void provider.close?.(); });
   return { root, home, org, personal, logs, provider };
 }
 async function syncItems(provider: ConsoleProvider) {
-  const result = await provider.snapshot({ panel: "inbox", after: 0 }) as { items: InboxItem[] };
+  let result = await provider.snapshot({ panel: "inbox", after: 0 }) as { items: InboxItem[]; refreshing?: boolean };
+  const deadline = performance.now() + 4000;
+  while (result.refreshing && performance.now() < deadline) {
+    await Bun.sleep(10);
+    result = await provider.snapshot({ panel: "inbox", after: 0 }) as typeof result;
+  }
+  expect(result.refreshing).toBeUndefined();
   return result.items.filter(item => item.kind === "sync");
 }
 
@@ -61,6 +70,8 @@ test("uncommitted paths produce a stable alert, without verbs, network commands,
   const [item] = await syncItems(f.provider);
   expect(item).toMatchObject({ id: "sync:team", group: "alert", kind: "sync", title: "1 unsynced change in team", verbs: [], link: { panel: "overview", params: { vault: "team" } } });
   expect(item!.at).toBeTruthy();
+  // Worker calls cannot be spied on from the parent; exercise the same source directly for argv safety.
+  await collectInboxSource(f.home, { kind: "sync", vault: loadRegistry(f.home).vaults.find(v => v.id === "team")! });
   const calls = spawn.mock.calls.filter(args => Array.isArray(args[0]) && (args[0] as string[]).includes(f.org));
   expect(calls.length).toBeGreaterThan(0);
   for (const args of calls) {
@@ -158,8 +169,7 @@ test("a timed-out or killed git call names the timeout or the signal, with the c
     : real(argv as never, options as never)) as never);
   cleanups.push(() => spawn.mockRestore());
   expect(() => localSyncPending(f.org)).toThrow("git status failed: timed out after 1 s; inspect the vault Git state in System and retry");
-  expect(await syncItems(f.provider)).toEqual([]);
-  expect(f.logs.some(line => line.includes("git status failed: timed out after 1 s"))).toBe(true);
+  await expect(collectInboxSource(f.home, { kind: "sync", vault: loadRegistry(f.home).vaults.find(v => v.id === "team")! })).rejects.toThrow("timed out after 1 s");
   fake = { exitCode: null, signalCode: "SIGKILL" };
   expect(() => localSyncPending(f.org)).toThrow("git status failed: killed by SIGKILL; inspect the vault Git state in System and retry");
 });
