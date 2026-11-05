@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addVault } from "../src/registry.ts";
 import { localSyncPending, STAGED_DESCRIPTION } from "../src/sync.ts";
+import { createInboxSnapshot } from "../src/ui/inbox.ts";
+import type { InboxSource } from "../src/ui/inbox-source.ts";
+import { collectInboxSource } from "../src/ui/inbox-source.ts";
+import { loadRegistry } from "../src/registry.ts";
 import { plugin } from "../src/ui/plugin.ts";
 import type { ConsoleProvider, InboxItem } from "@staix/agent-console/contract";
 
@@ -38,27 +42,46 @@ async function fixture(options: { upstream?: boolean; broken?: boolean } = {}) {
   cleanups.push(() => { for (const key of Object.keys(env)) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; } });
   const logs: string[] = [];
   const provider = await plugin.open({ home: env.AGENTHUB_HOME, log: message => { logs.push(message); } });
+  cleanups.push(() => { void provider.close?.(); });
   return { root, home, org, personal, logs, provider };
 }
-async function syncItems(provider: ConsoleProvider) {
-  const result = await provider.snapshot({ panel: "inbox", after: 0 }) as { items: InboxItem[] };
+async function syncItems(provider: Pick<ConsoleProvider, "snapshot">) {
+  let result = await provider.snapshot({ panel: "inbox", after: 0 }) as { items: InboxItem[]; refreshing?: boolean };
+  const deadline = performance.now() + 4000;
+  while (result.refreshing && performance.now() < deadline) {
+    await Bun.sleep(10);
+    result = await provider.snapshot({ panel: "inbox", after: 0 }) as typeof result;
+  }
+  expect(result.refreshing).toBeUndefined();
   return result.items.filter(item => item.kind === "sync");
+}
+
+// Observe the worker-launch boundary; parent spawnSync spies cannot observe real worker threads.
+function trackedInbox(f: Awaited<ReturnType<typeof fixture>>) {
+  const runs: InboxSource[] = [];
+  const cache = createInboxSnapshot(f.home, loadRegistry(f.home).vaults, message => f.logs.push(message), (home, source) => {
+    runs.push(source);
+    return { result: collectInboxSource(home, source), cancel() {} };
+  });
+  cleanups.push(() => { void cache.close(); });
+  return { cache, runs };
 }
 
 test("clean org vault has no sync alert; dirty personal vault is not scanned for sync", async () => {
   const f = await fixture(); writeFileSync(join(f.personal, "private.txt"), "Synthetic personal change.\n");
-  const spawn = spyOn(Bun, "spawnSync"); cleanups.push(() => spawn.mockRestore());
-  expect(await syncItems(f.provider)).toEqual([]);
-  const calls = spawn.mock.calls.map(args => args[0]).filter(Array.isArray) as string[][];
-  expect(calls.some(args => args.includes(f.personal))).toBe(false);
+  const { cache, runs } = trackedInbox(f);
+  expect(await syncItems(cache)).toEqual([]);
+  expect(runs.flatMap(source => source.kind === "sync" ? [source.vault.id] : [])).toEqual(["team"]);
+  expect(runs.map(source => source.kind)).toEqual(["sync", "lint", "candidates"]);
   expect(localSyncPending(f.org)).toEqual({ changed: 0, ignored: 0, ahead: 0, upstream: true });
 });
 
 test("uncommitted paths produce a stable alert, without verbs, network commands, prompts or Git writes", async () => {
   const f = await fixture(); writeFileSync(join(f.org, "notes", "draft.md"), "Synthetic org change.\n");
+  const { cache, runs } = trackedInbox(f);
   const index = readFileSync(join(f.org, ".git", "index"));
   const spawn = spyOn(Bun, "spawnSync"); cleanups.push(() => spawn.mockRestore());
-  const [item] = await syncItems(f.provider);
+  const [item] = await syncItems(cache);
   expect(item).toMatchObject({ id: "sync:team", group: "alert", kind: "sync", title: "1 unsynced change in team", verbs: [], link: { panel: "overview", params: { vault: "team" } } });
   expect(item!.at).toBeTruthy();
   const calls = spawn.mock.calls.filter(args => Array.isArray(args[0]) && (args[0] as string[]).includes(f.org));
@@ -69,10 +92,11 @@ test("uncommitted paths produce a stable alert, without verbs, network commands,
     expect(options.env.GIT_TERMINAL_PROMPT).toBe("0"); expect(options.env.GIT_NO_LAZY_FETCH).toBe("1");
     expect(options.timeout).toBeGreaterThan(0); expect(options.timeout).toBeLessThanOrEqual(1000);
   }
-  const count = calls.length;
+  const launches = runs.length;
+  expect(launches).toBe(3);
   await Bun.sleep(5);
-  expect((await syncItems(f.provider))[0]!.at).toBe(item!.at);
-  expect(spawn.mock.calls.filter(args => Array.isArray(args[0]) && (args[0] as string[]).includes(f.org))).toHaveLength(count);
+  expect((await syncItems(cache))[0]!.at).toBe(item!.at);
+  expect(runs).toHaveLength(launches);
   expect(readFileSync(join(f.org, ".git", "index"))).toEqual(index);
   expect(existsSync(join(f.org, ".git", "index.lock"))).toBe(false);
 });
@@ -101,13 +125,14 @@ test("no upstream counts only uncommitted changes, including an unborn branch", 
 
 test("a Git failure logs and skips only that vault, and failures are cached", async () => {
   const f = await fixture({ broken: true }); writeFileSync(join(f.org, "notes", "draft.md"), "Synthetic change.\n");
-  const spawn = spyOn(Bun, "spawnSync"); cleanups.push(() => spawn.mockRestore());
-  expect((await syncItems(f.provider)).map(item => item.id)).toEqual(["sync:team"]);
+  const { cache, runs } = trackedInbox(f);
+  expect((await syncItems(cache)).map(item => item.id)).toEqual(["sync:team"]);
   expect(f.logs.filter(line => line.includes("sync pending broken failed"))).toHaveLength(1);
-  const count = spawn.mock.calls.length;
-  expect((await syncItems(f.provider)).map(item => item.id)).toEqual(["sync:team"]);
+  const count = runs.length;
+  expect(runs.flatMap(source => source.kind === "sync" ? [source.vault.id] : [])).toEqual(["broken", "team"]);
+  expect((await syncItems(cache)).map(item => item.id)).toEqual(["sync:team"]);
   expect(f.logs.filter(line => line.includes("sync pending broken failed"))).toHaveLength(1);
-  expect(spawn.mock.calls.length).toBe(count);
+  expect(runs.length).toBe(count);
 });
 
 test("cached state refreshes after 60 seconds and count changes keep the first-seen time", async () => {
@@ -158,8 +183,7 @@ test("a timed-out or killed git call names the timeout or the signal, with the c
     : real(argv as never, options as never)) as never);
   cleanups.push(() => spawn.mockRestore());
   expect(() => localSyncPending(f.org)).toThrow("git status failed: timed out after 1 s; inspect the vault Git state in System and retry");
-  expect(await syncItems(f.provider)).toEqual([]);
-  expect(f.logs.some(line => line.includes("git status failed: timed out after 1 s"))).toBe(true);
+  await expect(collectInboxSource(f.home, { kind: "sync", vault: loadRegistry(f.home).vaults.find(v => v.id === "team")! })).rejects.toThrow("timed out after 1 s");
   fake = { exitCode: null, signalCode: "SIGKILL" };
   expect(() => localSyncPending(f.org)).toThrow("git status failed: killed by SIGKILL; inspect the vault Git state in System and retry");
 });

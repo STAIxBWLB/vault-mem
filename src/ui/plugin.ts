@@ -3,15 +3,14 @@
  * The provider reuses the `vmem mcp` handlers in process, so the console acts with exactly the MCP rights and checks.
  */
 import { readFileSync } from "node:fs";
-import type { ActionResult, Change, ConsolePlugin, ConsoleProvider, InboxItem } from "@staix/agent-console/contract";
+import type { ActionResult, Change, ConsolePlugin, ConsoleProvider } from "@staix/agent-console/contract";
 import { analysisInput } from "../analysis-input.ts";
 import { resolveHome } from "../home.ts";
 import { createVaultMcp } from "../mcp-vault.ts";
 import { validArguments } from "../mcp.ts";
 import { listPromotionCandidates } from "../promote.ts";
 import { loadRegistry } from "../registry.ts";
-import { localSyncPending, STAGED_DESCRIPTION } from "../sync.ts";
-import { isDenied } from "../platform.ts";
+import { createInboxSnapshot } from "./inbox.ts";
 import { lintVault } from "../vault-lint.ts";
 import { readLogSince } from "../vault-log.ts";
 import type { LintCode } from "../analysis-types.ts";
@@ -123,7 +122,7 @@ export const plugin: ConsolePlugin = {
       return validArguments(out, schema ?? { type: "object" }) ? out : `invalid input for ${tool}`;
     };
 
-    // ponytail: lint reads every note, so inbox polls reuse one result per vault for 60 s; invalidate on writes if it lags.
+    // The Lint panel reuses its report for 60 s; inbox collection has its own off-thread cache.
     const lintCache = new Map<string, { at: number; report: ReturnType<typeof lintVault> }>();
     const lint = (id: string) => {
       const hit = lintCache.get(id);
@@ -132,22 +131,6 @@ export const plugin: ConsolePlugin = {
       const report = lintVault(analysisInput(home, id, { expectedVault: spec }).snapshot);
       lintCache.set(id, { at: Date.now(), report });
       return report;
-    };
-    // Like lint, local Git state refreshes at most once per minute, including failures.
-    const syncCache = new Map<string, { at: number; pending: ReturnType<typeof localSyncPending> | null }>();
-    const syncPending = (id: string) => {
-      const hit = syncCache.get(id);
-      if (hit && Date.now() - hit.at < CACHE_MS) return hit.pending;
-      let pending: ReturnType<typeof localSyncPending> | null = null;
-      try {
-        const config = loadRegistry(home), spec = config.vaults.find(v => v.id === id);
-        const startup = mcp.vaults.find(v => v.id === id);
-        if (!spec || JSON.stringify(spec) !== JSON.stringify(startup)) throw new Error("vault binding changed; restart the console provider");
-        if (isDenied(spec.path, config.denyPaths)) throw new Error("vault path is denied; check its path policy in System");
-        pending = localSyncPending(spec.path);
-      } catch (error) { ctx.log(`vmem: sync pending ${id} failed: ${error instanceof Error ? error.message : String(error)}`); }
-      syncCache.set(id, { at: Date.now(), pending });
-      return pending;
     };
     const projectOf = new Map<string, string>();
     const candidates = async () => {
@@ -159,40 +142,7 @@ export const plugin: ConsolePlugin = {
       catch (error) { ctx.log(`vmem: promotion candidates unavailable: ${error instanceof Error ? error.message : String(error)}`); return { projects: [], unavailable: "agent-mem candidates are unavailable; see System" }; }
     };
 
-    // The shell keys snooze and oldest-first order on `at`, so an item keeps the time it was first seen.
-    const firstSeen = new Map<string, string>();
-    const since = (id: string) => { const at = firstSeen.get(id) ?? new Date().toISOString(); firstSeen.set(id, at); return at; };
-    async function inbox(): Promise<InboxItem[]> {
-      const items: InboxItem[] = [];
-      for (const p of (await candidates()).projects) for (const c of p.candidates) items.push({
-        id: `mem:${c.id}`, group: "candidate", kind: "promotion", title: c.title ?? c.kind, detail: `${c.kind} memory to promote into a vault note`,
-        project: c.project, at: new Date(c.at).toISOString(),
-        // Promotion needs a domain and topics, so the item opens the Promote panel instead of offering a one-key verb.
-        verbs: [],
-        link: { panel: "promote", params: { id: c.id, project: c.project } },
-      });
-      for (const v of mcp.vaults.filter(x => x.kind === "personal")) {
-        let report;
-        try { report = lint(v.id); } catch (error) { ctx.log(`vmem: lint ${v.id} failed: ${error instanceof Error ? error.message : String(error)}`); continue; }
-        if (report.errors > 0) items.push({ id: `lint:${v.id}`, group: "alert", kind: "lint", title: `${report.errors} lint errors in ${v.id}`, detail: report.summary, at: since(`lint:${v.id}`),
-          chip: { text: `${report.errors} errors`, tone: "err" }, verbs: [], link: { panel: "lint", params: { vault: v.id } } });
-        const stale = report.findings.L11 ?? [];
-        if (stale.length) items.push({ id: `stale:${v.id}`, group: "alert", kind: "lint", title: `Graph report is stale in ${v.id}`, detail: stale[0]!, at: since(`stale:${v.id}`),
-          chip: { text: "stale", tone: "warn" }, verbs: [], link: { panel: "lint", params: { vault: v.id } } });
-      }
-      for (const v of mcp.vaults.filter(x => x.kind === "org")) {
-        const pending = syncPending(v.id);
-        if (!pending) continue;
-        const count = pending.changed + pending.ahead;
-        if (count > 0) items.push({ id: `sync:${v.id}`, group: "alert", kind: "sync", title: `${count} unsynced change${count === 1 ? "" : "s"} in ${v.id}`,
-          detail: [`${pending.changed} uncommitted path${pending.changed === 1 ? "" : "s"} to sync`,
-            ...(pending.ignored ? [`${pending.ignored} other path${pending.ignored === 1 ? "" : "s"} outside ${STAGED_DESCRIPTION} not counted`] : []),
-            ...(pending.upstream ? [`${pending.ahead} local commit${pending.ahead === 1 ? "" : "s"} ahead of upstream`] : [])].join("; "), at: since(`sync:${v.id}`),
-          chip: { text: "sync pending", tone: "warn" }, verbs: [], link: { panel: "overview", params: { vault: v.id } } });
-      }
-      for (const id of firstSeen.keys()) if (!items.some(i => i.id === id)) firstSeen.delete(id);
-      return items;
-    }
+    const inbox = createInboxSnapshot(home, mcp.vaults, ctx.log);
 
     /** One two-step operation: preview, and with the console's confirmation recompute and write only on the same fingerprint. */
     async function twoStep(tool: string, args: Args | string, confirmed: boolean, fingerprint: string | undefined, describe: (preview: Args) => { verb: string; preview: string[]; changes: Change[]; warnings: string[] }): Promise<ActionResult> {
@@ -204,16 +154,17 @@ export const plugin: ConsolePlugin = {
         return { ok: false, needsConfirm: true, fingerprint: preview.fingerprint, verb: d.verb, preview: d.preview, changes: d.changes, ...(d.warnings.length ? { warnings: d.warnings } : {}) };
       }
       const done = await call(tool, { ...args, confirm: true, fingerprint });
-      if (done.applied === true) lintCache.clear();
+      if (done.applied === true) { lintCache.clear(); inbox.invalidate(); }
       return confirmedOutcome(done, describe(preview).verb);
     }
 
     return {
+      async close() { await inbox.close(); },
       assets: { js: asset("./panel.js"), css: asset("./panel.css") },
       async snapshot(input) {
         const args = input as Args;
         switch (input.panel) {
-          case "inbox": return { items: await inbox() };
+          case "inbox": return inbox.snapshot();
           case "search": {
             const q = str(args.q);
             if (!q) return { hits: [], total: 0 };
