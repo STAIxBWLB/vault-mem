@@ -31,7 +31,7 @@ export function runInboxSource(home: string, source: InboxSource): { result: Pro
     const timer = setTimeout(() => finish(new Error(`inbox ${source.kind} timed out after 5 s`)), SOURCE_MS);
     cancel = () => finish(new Error("inbox closed"));
     worker.once("message", (message: { result?: InboxRows; error?: string }) => finish(message.error ? new Error(message.error) : undefined, message.result));
-    worker.once("error", error => finish(error));
+    worker.once("error", error => finish(error instanceof Error ? error : new Error(String(error))));
     worker.once("exit", code => finish(new Error(`inbox worker exited (${code})`)));
   });
   return { result, cancel: () => cancel() };

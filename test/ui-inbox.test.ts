@@ -71,3 +71,23 @@ test("worker startup failures are handled without unhandled rejections", async (
   const job = runInboxSource("/nonexistent/synthetic-vmem-home", { kind: "sync", vault: { id: "synthetic", path: "/nonexistent/synthetic-vault", kind: "org", write: "none" } });
   await expect(job.result).rejects.toThrow("vault binding changed");
 });
+
+test("a cached realistic-size candidate result answers repeated snapshots below the p95 bound", async () => {
+  const cache = createInboxSnapshot("fixture", [], () => {}, () => ({
+    result: Promise.resolve(boundInbox(Array.from({ length: 10_000 }, (_, n) => row(n)))),
+    cancel() {},
+  }));
+  const cold = await cache.snapshot();
+  expect(cold.items).toHaveLength(50); expect(cold.more).toBe(9950);
+  const durations: number[] = [];
+  for (let n = 0; n < 100; n++) {
+    const start = performance.now();
+    const snapshot = await cache.snapshot();
+    durations.push(performance.now() - start);
+    expect(snapshot.items).toHaveLength(50); expect(snapshot.more).toBe(9950);
+    expect(JSON.stringify(snapshot).length).toBeLessThan(25_000);
+  }
+  durations.sort((a, b) => a - b);
+  expect(durations[94]!).toBeLessThan(1000);
+  await cache.close();
+});
