@@ -9,6 +9,23 @@ const SOURCE_MS = 30_000;
 // agent-mem has no total-count API; a saturated candidate source can only report a lower bound.
 export type InboxRows = { items: InboxItem[]; more: number; moreIsLowerBound?: boolean };
 
+function readInboxRows(value: unknown): InboxRows {
+  if (!value || typeof value !== "object" || !("items" in value) || !Array.isArray(value.items)
+    || !("more" in value) || typeof value.more !== "number" || !Number.isSafeInteger(value.more) || value.more < 0) {
+    throw new Error("inbox source returned no valid result; inspect System and restart the console provider");
+  }
+  return value as InboxRows;
+}
+
+/** An explicit error is a failure even when its message is empty. */
+export function readInboxWorkerMessage(message: unknown): InboxRows {
+  if (message && typeof message === "object" && "error" in message) {
+    throw new Error(typeof message.error === "string" && message.error ? message.error
+      : "inbox source failed without an error message; inspect System and retry");
+  }
+  return readInboxRows(message && typeof message === "object" && "result" in message ? message.result : undefined);
+}
+
 /** Urgent rows precede candidates; newest candidates first. Never ship full lint reports or memory bodies. */
 export function boundInbox(items: InboxItem[], more = 0, moreIsLowerBound = false): InboxRows {
   const rank = (i: InboxItem) => {
@@ -43,7 +60,10 @@ export function runInboxSource(home: string, source: InboxSource): { result: Pro
     };
     const timer = setTimeout(() => finish(new Error(`inbox ${source.kind} timed out after 30 s; inspect ${panel} and System, then retry`)), SOURCE_MS);
     cancel = () => finish(new Error("inbox closed"));
-    worker.once("message", (message: { result?: InboxRows; error?: string }) => finish(message.error ? new Error(message.error) : undefined, message.result));
+    worker.once("message", (message: unknown) => {
+      try { finish(undefined, readInboxWorkerMessage(message)); }
+      catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
+    });
     worker.once("error", error => finish(error instanceof Error ? error : new Error(String(error))));
     worker.once("exit", code => finish(new Error(`inbox worker exited (${code}); inspect System and restart the console provider`)));
   });
@@ -73,7 +93,7 @@ export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (mes
         if (closed) return;
         try {
           const job = run(home, source); cancel = job.cancel;
-          rows.set(index, await job.result);
+          rows.set(index, readInboxRows(await job.result));
         } catch (error) {
           if (!closed) log(`vmem: ${source.kind === "sync" ? "sync pending" : source.kind}${"vault" in source ? ` ${source.vault.id}` : ""} failed: ${error instanceof Error ? error.message : String(error)}`);
         } finally { cancel = undefined; }
@@ -88,7 +108,15 @@ export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (mes
       cached = rows.size === 0 ? status(true) : boundInbox(all, [...rows.values()].reduce((n, r) => n + r.more, 0), [...rows.values()].some(r => r.moreIsLowerBound));
       // An action during collection makes the next poll refresh again, without erasing the last rows.
       at = started === revision ? Date.now() : -Infinity;
-    })().finally(() => { flight = undefined; });
+    })().catch(error => {
+      // Warm snapshots do not await this promise. Never let a refresh failure escape to the console.
+      if (!closed) {
+        cached ??= status(true);
+        at = started === revision ? Date.now() : -Infinity;
+        try { log(`vmem: inbox refresh failed: ${error instanceof Error ? error.message : String(error)}; inspect System and retry`); }
+        catch { /* A failed log sink must not create another unhandled rejection. */ }
+      }
+    }).finally(() => { flight = undefined; });
   }
   return {
     async snapshot(): Promise<InboxRows & { refreshing?: boolean }> {

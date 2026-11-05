@@ -8,7 +8,7 @@ import { collectInboxSource } from "../src/ui/inbox-source.ts";
 import { analysisInput } from "../src/analysis-input.ts";
 import { lintVault } from "../src/vault-lint.ts";
 import type { InboxItem } from "@staix/agent-console/contract";
-import { boundInbox, createInboxSnapshot, runInboxSource, type InboxRows } from "../src/ui/inbox.ts";
+import { boundInbox, createInboxSnapshot, runInboxSource, readInboxWorkerMessage, type InboxRows } from "../src/ui/inbox.ts";
 
 const row = (n: number): InboxItem => ({ id: `mem:${n}`, kind: "promotion", group: "candidate", title: "Synthetic title ".repeat(1000),
   at: new Date(1_700_000_000_000 + n).toISOString(), project: "synthetic", verbs: [], link: { panel: "promote", params: { id: String(n) } } });
@@ -171,3 +171,58 @@ test("one real project with 300 candidates reports overflow, and row details sur
     rmSync(root, { recursive: true, force: true });
   }
 }, 10_000);
+
+
+test("worker messages reject explicit empty errors and missing results", () => {
+  for (const error of ["", undefined, null]) {
+    expect(() => readInboxWorkerMessage({ error, result: boundInbox([row(0)]) })).toThrow("failed without an error message");
+  }
+  for (const message of [undefined, null, {}, { result: undefined }, { result: { items: [], more: -1 } }]) {
+    expect(() => readInboxWorkerMessage(message)).toThrow("no valid result");
+  }
+  expect(() => readInboxWorkerMessage({ error: "synthetic failure" })).toThrow("synthetic failure");
+  expect(readInboxWorkerMessage({ result: { items: [], more: 0 } })).toEqual({ items: [], more: 0 });
+});
+
+test("a warm refresh with undefined rows or an empty worker error cannot terminate the process", async () => {
+  const moduleUrl = new URL("../src/ui/inbox.ts", import.meta.url).href;
+  const code = `
+    import { createInboxSnapshot, readInboxWorkerMessage } from ${JSON.stringify(moduleUrl)};
+    let mode = "ok", calls = 0;
+    const logs = [];
+    const item = { id: "mem:fixture", group: "candidate", kind: "promotion", title: "Synthetic", at: "2026-11-05T00:00:00.000Z", verbs: [], link: { panel: "promote" } };
+    const cache = createInboxSnapshot("fixture", [], message => logs.push(message), () => {
+      calls++;
+      const result = Promise.resolve().then(() => {
+        if (mode === "undefined") return undefined;
+        if (mode === "empty-error") return readInboxWorkerMessage({ error: new Error().message });
+        return { items: [item], more: 0 };
+      });
+      return { result, cancel() {} };
+    });
+    const first = await cache.snapshot();
+    for (const failure of ["undefined", "empty-error"]) {
+      mode = failure; cache.invalidate();
+      if (JSON.stringify((await cache.snapshot()).items) !== JSON.stringify(first.items)) throw new Error("warm rows disappeared");
+      await Bun.sleep(10);
+      if (JSON.stringify((await cache.snapshot()).items) !== JSON.stringify(first.items)) throw new Error("failed refresh poisoned rows");
+    }
+    mode = "ok"; cache.invalidate(); await cache.snapshot(); await Bun.sleep(10);
+    const recovered = await cache.snapshot(); await cache.close();
+    console.log(JSON.stringify({ ids: recovered.items.map(item => item.id), calls, errors: logs.length }));
+  `;
+  const child = Bun.spawn([process.execPath, "--eval", code], { stdout: "pipe", stderr: "pipe" });
+  const [out, error, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(error).toBe(""); expect(exit).toBe(0);
+  expect(JSON.parse(out)).toEqual({ ids: ["mem:fixture"], calls: 4, errors: 2 });
+});
+
+test("the final refresh catch retains warm rows even if source error logging throws", async () => {
+  let fail = false, logs = 0;
+  const cache = createInboxSnapshot("fixture", [], () => { logs++; throw new Error("synthetic log failure"); }, () => ({
+    result: fail ? Promise.reject(new Error("synthetic source failure")) : Promise.resolve(boundInbox([row(1)])), cancel() {},
+  }));
+  const first = await cache.snapshot(); fail = true; cache.invalidate(); await cache.snapshot(); await Bun.sleep(0);
+  expect((await cache.snapshot()).items).toEqual(first.items); expect(logs).toBe(2);
+  await cache.close();
+});
