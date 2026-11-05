@@ -25,8 +25,9 @@ export function runInboxSource(home: string, source: InboxSource): { result: Pro
     const finish = (error?: Error, rows?: InboxRows) => {
       if (settled) return;
       settled = true; clearTimeout(timer);
-      void worker.terminate();
-      if (error) reject(error); else resolve(rows!);
+      void worker.terminate().then(() => {
+        if (error) reject(error); else resolve(rows!);
+      }, failure => reject(failure));
     };
     const timer = setTimeout(() => finish(new Error(`inbox ${source.kind} timed out after 30 s`)), SOURCE_MS);
     cancel = () => finish(new Error("inbox closed"));
