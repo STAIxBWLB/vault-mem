@@ -1,6 +1,6 @@
 # Release readiness evidence
 
-- Status: 0.1.0 was first published to npm on 2026-10-30; 0.5.0 is the release candidate; 0.4.0 is the latest published release. Historical private-corpus and native fixture gates are recorded below; the 0.5.0 run refreshes synthetic parity and performance only. Live cutover is an operation of the parent plan, outside this repository, and its result is not recorded here.
+- Status: 0.1.0 was first published to npm on 2026-10-30; 0.5.1 is the release candidate; 0.5.0 is the latest published release. Historical private-corpus and native fixture gates are recorded below; the 0.5.1 candidate refreshes synthetic performance only; the 0.5.0 external parity record remains applicable because all recorded parity inputs are unchanged. Live cutover is an operation of the parent plan, outside this repository, and its result is not recorded here.
 - Contract: [issue #11](https://github.com/STAIxBWLB/vault-mem/issues/11). This readiness work performed no host registration or live vault write. Publication does not authorize registration or cutover.
 - Runtime and method digests in the raw evidence bind measurements to source bytes. Evidence-only documentation changes do not alter measured runtime; a runtime/method change requires a new measurement.
 
