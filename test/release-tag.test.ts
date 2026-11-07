@@ -32,7 +32,7 @@ test("release tag is annotated at current main and stays local unless push is ex
     expect(git("cat-file", "-t", "v1.0.1")).toBe("tag");
     expect(git("rev-parse", "v1.0.1^{}")).toBe(git("rev-parse", "HEAD"));
     expect(execFileSync("git", ["--git-dir", remote, "tag", "--list", "v1.0.1"], { encoding: "utf8" }).trim()).toBe("");
-    expect(() => releaseTag(root, false)).toThrow("already exists. Bump package.json and add ## [x.y.z] - YYYY-MM-DD to CHANGELOG.md via a release-prep PR first.");
+    expect(() => releaseTag(root, false)).toThrow("already exists locally. Run bun run release:tag --push");
   });
   fixture((root, git) => {
     expect(releaseTag(root, true)).toBe("v1.0.1");
@@ -61,5 +61,40 @@ test("release tag requires a version bump and a dated changelog before mutation"
     expect(() => releaseTag(root, false)).toThrow("Bump package.json");
     expect(() => releaseTag(root, false)).toThrow("## [x.y.z] - YYYY-MM-DD to CHANGELOG.md via a release-prep PR first.");
     expect(git("tag", "--list", "v1.0.1")).toBe("");
+  });
+});
+
+
+test("release tag publishes an existing annotated local tag without recreating it", () => {
+  fixture((root, git) => {
+    releaseTag(root, false);
+    const object = git("rev-parse", "v1.0.1");
+    expect(releaseTag(root, true)).toBe("v1.0.1");
+    expect(git("rev-parse", "v1.0.1")).toBe(object);
+    expect(git("ls-remote", "--tags", "origin", "refs/tags/v1.0.1")).toContain(object);
+    expect(() => releaseTag(root, true)).toThrow("already exists on origin. Bump package.json");
+  });
+});
+
+test("release tag can retry a rejected push with the preserved tag", () => {
+  fixture((root, git, remote) => {
+    const hook = join(remote, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    expect(() => releaseTag(root, true)).toThrow("then retry bun run release:tag --push");
+    const object = git("rev-parse", "v1.0.1");
+    expect(git("ls-remote", "--tags", "origin", "refs/tags/v1.0.1")).toBe("");
+    rmSync(hook);
+    expect(releaseTag(root, true)).toBe("v1.0.1");
+    expect(git("ls-remote", "--tags", "origin", "refs/tags/v1.0.1")).toContain(object);
+  });
+});
+
+test("release tag refuses existing local tags at another commit or without annotation", () => {
+  fixture((root, git) => {
+    git("tag", "-a", "v1.0.1", "HEAD~1", "-m", "Wrong commit");
+    expect(() => releaseTag(root, true)).toThrow("points elsewhere");
+    expect(git("ls-remote", "--tags", "origin", "refs/tags/v1.0.1")).toBe("");
+    git("tag", "-d", "v1.0.1"); git("tag", "v1.0.1");
+    expect(() => releaseTag(root, true)).toThrow("not an annotated tag");
   });
 });
