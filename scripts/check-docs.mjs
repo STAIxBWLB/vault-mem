@@ -16,7 +16,7 @@ const errors = [];
 const reports = [];
 // A readback must not execute repository-configured helpers.
 const safeGitConfig = ["core.fsmonitor=false", "core.hooksPath=/dev/null", "diff.external=", "core.pager=cat", "credential.helper=", "core.askpass="];
-const git = (...args) => spawnSync("git", ["--no-pager", ...safeGitConfig.flatMap(value => ["-c", value]), ...args], { cwd: root, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 2000, maxBuffer: 256 * 1024 });
+const git = (...args) => spawnSync("git", ["--no-pager", ...safeGitConfig.flatMap(value => ["-c", value]), ...args], { cwd: root, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" }, timeout: 2000, maxBuffer: 256 * 1024 });
 const safePath = (path) => typeof path === "string" && path.length > 0 && !path.startsWith("/") && !path.startsWith("-") && !path.split("/").includes("..") && !path.includes("\\") && !path.includes(":");
 const documentExists = (path) => existsSync(join(root, path)) && statSync(join(root, path)).isFile();
 /** Never refresh the index through git status: it can run configured clean/process filters. */
@@ -59,7 +59,22 @@ try {
   const manifest = JSON.parse(readFileSync(join(root, "docs/verified.json"), "utf8"));
   if (manifest.schemaVersion !== 1 || !manifest.documents || typeof manifest.documents !== "object" || Array.isArray(manifest.documents)) throw new Error("invalid docs/verified.json schema");
   for (const path of REQUIRED) if (!Object.hasOwn(manifest.documents, path)) errors.push(`missing manifest entry: ${path}`);
-  if (git("rev-parse", "--verify", "HEAD").status !== 0) throw new Error("HEAD does not resolve");
+  if (git("rev-parse", "--verify", "HEAD").status !== 0) {
+    const repository = git("rev-parse", "--git-dir");
+    if (repository.status === 128 && repository.stderr.includes("not a git repository")) {
+      // A source archive can still have malformed metadata; only history checks are skipped.
+      for (const [doc, entry] of Object.entries(manifest.documents)) {
+        if (!safePath(doc) || !documentExists(doc)) errors.push(`missing or invalid document: ${doc}`);
+        if (!Array.isArray(entry?.paths) || entry.paths.length === 0 || entry.paths.some(path => !safePath(path))) errors.push(`${doc}: invalid covered paths`);
+      }
+      if (!requireFresh && errors.length === 0) {
+        console.log("docs: skipped: no git history here; run in a full git checkout, or run bun scripts/check-docs.mjs --require-fresh in a full checkout before a release");
+        process.exit(0);
+      }
+      throw new Error("no git history here; run bun scripts/check-docs.mjs --require-fresh in a full git checkout with history");
+    }
+    throw new Error("HEAD does not resolve; run in a full git checkout with a committed HEAD and history");
+  }
   for (const [doc, entry] of Object.entries(manifest.documents).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     if (!safePath(doc) || !documentExists(doc)) { errors.push(`missing or invalid document: ${doc}`); continue; }
     const stamp = entry?.verifiedAgainst;
