@@ -48,6 +48,8 @@ export function releaseTag(cwd: string, push: boolean): string {
 if (import.meta.main) {
   const args = process.argv.slice(2);
   if (args.some(arg => arg !== "--push") || args.length > 1) throw new Error("Unknown or repeated release:tag argument. Use bun run release:tag [--push].");
+  // Stale documentation stamps refuse the tag; the checker prints each stale document and the restamp step.
+  if (Bun.spawnSync(["bun", join(import.meta.dir, "check-docs.mjs"), "--require-fresh"], { stdout: "inherit", stderr: "inherit" }).exitCode !== 0) process.exit(1);
   const tag = releaseTag(process.cwd(), args.includes("--push"));
   console.log(`${tag} created${args.includes("--push") ? " and pushed" : " locally; use --push explicitly to publish the tag"}`);
 }

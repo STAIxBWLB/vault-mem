@@ -1,8 +1,10 @@
 # vault-mem
 
-An Obsidian-compatible knowledge vault tool for agents and people. Requires Bun >=1.4.2. The full check (`bun run check`) needs Bun, git and tar; it includes a package dry-run and clean installed CLI/MCP smoke. Node/npm are used by the separate release workflow, not required for the ordinary Bun gate. CI runs on Ubuntu and macOS for pull requests and for pushes to `main`.
+An Obsidian-compatible knowledge vault tool for agents and people. Requires <!-- facts:bun-floor -->Bun >=1.4.2<!-- /facts:bun-floor -->. The full check (`bun run check`) needs Bun, git and tar; it includes a package dry-run and clean installed CLI/MCP smoke. Node/npm are used by the separate release workflow, not required for the ordinary Bun gate. CI runs on Ubuntu and macOS for pull requests and for pushes to `main`.
 
-Implemented: configuration, vault registration, lossless frontmatter parsing/emission, wiki-link resolution and derived SQLite FTS5 indexing with bounded read commands. Validated note writes, the append-only log, the `vmem mcp` stdio server, reversible `vmem setup` host registration and promotion from agent-mem (`promote-from-amem`) are also implemented below. Lint/graph analysis, promotion to org vaults (`vmem promote`) and explicit `vmem sync` are implemented below. The vmem plugin for the `acon` console ([agent-console](https://github.com/STAIxBWLB/agent-console)) is described under "Console plugin"; vault-mem ships no console bin. Do not use this increment to replace an existing vault writer.
+Implemented: configuration, vault registration, lossless frontmatter parsing/emission, wiki-link resolution and derived SQLite FTS5 indexing with bounded read commands. Validated note writes, the append-only log, the `vmem mcp` stdio server, reversible `vmem setup` host registration and promotion from agent-mem (`promote-from-amem`) are also implemented below. Lint/graph analysis, promotion to org vaults (`vmem promote`) and explicit `vmem sync` are implemented below. The vmem plugin for the `acon` console ([agent-console](https://github.com/STAIxBWLB/agent-console)) is described under "Console plugin"; vault-mem ships no console bin.
+
+Status: released versions are published to npm ([CHANGELOG](CHANGELOG.md), [release readiness](docs/release-readiness.md)). Replacing an existing vault writer is a live cutover: it is the parent plan's operation, outside this repository, and follows the [cutover checklist](docs/cutover-checklist.md). This repository does not record its result, and a release does not authorize it.
 
 ```sh
 bun install
@@ -37,7 +39,37 @@ Crash recovery: the lock file records the writer's pid, host and start time. Not
 
 Vault fields: `id`, absolute `path` (must contain a real `notes/` directory), `kind` (`personal|org`), `write` (`mcp|cli|none`), optional `pii` (the `allow|deny` shorthand or a policy object, see PII policy below; default `allow` for personal and `deny` for org, and `status`/`vaults list` always report the effective shorthand and `piiPolicy` matrix, including for unhealthy entries), optional `remote` (any nonempty string such as an `https://` or `git@host:path` URL) and optional `registry` (absolute path). For healthy vaults, `doctor` checks locally that the vault is a git repository root with an origin whose fetch and push URLs all match `remote` (URL rewrites are refused), and that `registry` passes the same deny-path, size and project-id validation as log appends. Results appear under each vault's `checks.remote` and `checks.registry`. Doctor also runs the tidy planning pass for writable vaults and reports pending counts and unparsable paths, without per-note writer validation or writes. Planning failures appear as `checks.tidy`; a failed check exits 1. Actual tidy previews validate planned notes and identify skipped notes. These checks use no network and do not test reachability. `status` is unchanged. Policy fields are stored for later note-writing stages, not enforced by the read commands. Writer commands enforce write/channel policy and configured deny/PII screening.
 
-The only runtime dependency is the exact first-party pin `@staix/agent-mem@0.17.0`; it is not loaded by registry commands. Public library exports cover configuration, home resolution, registry operations, frontmatter, link resolution and the derived index. No console bin or UI contract is advertised before its implementation.
+The only runtime dependency is the exact first-party pin <!-- facts:amem-pin -->`@staix/agent-mem@0.17.0`<!-- /facts:amem-pin -->; it is not loaded by registry commands. Public library exports (`@staix/vault-mem`, from `src/index.ts`) cover configuration and home resolution, registry operations, frontmatter, link resolution and the derived index, validated writes, the append-only log, the MCP server and its vault tools, host setup, the CLI command table and completion, promotion from agent-mem and to org vaults, lint and graph analysis, sync, source references, migration tidy, and the spec source registry, graph, validation and freshness. `@staix/vault-mem/ui-plugin` is the console plugin entry (see Console plugin). No console bin is shipped. Exported functions and constants by module:
+<!-- facts:exports -->
+
+- `src/home.ts`: `resolveHome`
+- `src/config.ts`: `parseConfig`, `parseVault`, `parseSpec`, `readConfig`, `CONFIG_FILE`, `MAX_CONFIG_BYTES`
+- `src/registry.ts`: `addVault`, `removeVault`, `addSpec`, `removeSpec`, `specStatus`, `loadRegistry`, `registryStatus`, `recoverRegistry`, `effectivePii`, `syncDirectory`, `LOCK_FILE`
+- `src/frontmatter.ts`: `parseFrontmatter`, `emitFrontmatter`
+- `src/links.ts`: `extractLinks`, `resolveLinks`, `normalizeTarget`
+- `src/vault-index.ts`: `VaultIndex`, `MAX_NOTE_BYTES`, `MAX_RESULTS`, `MAX_READ_BYTES`
+- `src/writer.ts`: `applyWrite`, `sha256`, `MUTATION_LOCK`, `MAX_WRITE_BYTES`
+- `src/write-validation.ts`: `validateWrite`, `screenContent`
+- `src/vault-log.ts`: `appendLog`, `readLog`, `LOG_LOCK`, `MAX_LOG_READ_BYTES`, `MAX_LOG_RESULT_BYTES`, `LARGE_LOG_LINES`
+- `src/log-format.ts`: `formatLogEvent`, `LOG_TYPES`, `AGENT_MARKERS`
+- `src/mcp.ts`: `serveMcp`, `validArguments`, `FRAME_BYTES`, `RESULT_BYTES`
+- `src/mcp-vault.ts`: `createVaultMcp`, `vaultTools`, `VMEM_TOOL_NAMES`
+- `src/setup.ts`: `runSetup`, `defaultEntry`, `SETUP_TARGETS`, `SERVER_NAME`
+- `src/commands-table.ts`: `COMMANDS`, `completionDefinitions`, `completionScript`
+- `src/promote.ts`: `promoteFromAmem`, `listPromotionCandidates`, `draftNote`, `stemFor`, `logProjectFor`
+- `src/vault-lint.ts`: `lintVault`
+- `src/vault-graph.ts`: `buildGraph`, `graphNeighbors`, `graphReport`
+- `src/analysis-reports.ts`: `writeAnalysisReports`
+- `src/org-promote.ts`: `promoteToOrg`, `screenForOrg`, `dropUnresolvedLinks`, `lintPromoted`
+- `src/sync.ts`: `syncVault`, `sameRemote`
+- `src/source.ts`: `normalizeSource`, `sourceReferences`
+- `src/tidy.ts`: `tidyVault`, `parseTidyMap`, `TIDY_RULES`
+- `src/spec-source.ts`: `resolveSpecWorktree`, `discoverSpecs`, `SpecIndex`
+- `src/spec-graph.ts`: `buildSpecGraph`, `specSlice`, `SPEC_EDGE_KINDS`, `MAX_SPEC_INPUTS`, `MAX_SPEC_EDGES`
+- `src/spec-validate.ts`: `validateSpecs`, `introducedSpecErrors`, `validateSpecRepo`
+- `src/spec-freshness.ts`: `specFreshness`, `specsCoveringPath`
+
+<!-- /facts:exports -->
 
 # PII policy
 
@@ -84,14 +116,16 @@ The policy is changed only through the CLI, under the config lock. MCP clients c
 
 ```sh
 bun bin/vmem.js rebuild personal
-bun bin/vmem.js search personal "project discovery" --type concept --domain research --limit 20
+bun bin/vmem.js search personal "project discovery" --type insight --domain research --limit 20
 bun bin/vmem.js show personal "Note or alias" --max-bytes 16384
 bun bin/vmem.js links personal "Note or alias" --limit 50 --json
 ```
 
+`--type` and `--domain` keep only notes whose frontmatter `type` and `domain` equal the given value. Validated writes accept these note types: <!-- facts:note-types -->`insight`, `decision`, `observation`, `person`, `project`, `method`, `moc`, `reference`<!-- /facts:note-types -->.
+
 All four commands require a registered vault id. They read only flat, regular `notes/*.md` files (case-sensitive `.md` extension), skip subdirectories and symlink files, and refuse a replaced vault/notes directory. Notes are limited to 2 MiB each. They never write note content, registry configuration or `.obsidian/`. `rebuild` rebuilds the derived cache; other commands scan metadata on every invocation and rehash new or metadata-changed files. Content-identical changes only update metadata; deleted/renamed paths leave the index. SQLite transactions make each scan atomic. A concurrently changing note aborts that scan, so retry after its writer finishes. No watcher, model calls or embeddings run.
 
-The cache is `$VMEM_HOME/indexes/<canonical-vault-path-sha256>-links<N>-schema<S>.sqlite` using the resolved home, not necessarily the environment variable. `N` is the link-resolution version (currently 2) and `S` the index schema version (currently 2, which added the CJK bigram table), so two installed vmem versions that resolve links or store the index differently keep separate caches instead of rebuilding each other's; 0.2.4 and older use the unversioned `<sha256>.sqlite`, 0.3.0 through 0.3.3 use `<sha256>-links2.sqlite`, and a first run after upgrading builds the new file once with no manual step. Cache files use mode 0600 on creation. The location must be outside every registered vault, including through symlinks; linked cache directories/files are refused. It contains note text and is disposable private derived state. Removing it while commands are stopped allows the next read to build it again. SQLite uses its own transaction lock and a five-second busy timeout. There is no automatic migration or live vault cutover.
+The cache is `$VMEM_HOME/indexes/<canonical-vault-path-sha256>-links<N>-schema<S>.sqlite` using the resolved home, not necessarily the environment variable. `N` is the link-resolution version (currently <!-- facts:index-links -->2<!-- /facts:index-links -->) and `S` the index schema version (currently <!-- facts:index-schema -->3<!-- /facts:index-schema -->; schema 2 added the CJK bigram table and schema 3 the reference metadata), so two installed vmem versions that resolve links or store the index differently keep separate caches instead of rebuilding each other's; 0.2.4 and older use the unversioned `<sha256>.sqlite`, 0.3.0 through 0.3.3 use `<sha256>-links2.sqlite`, 0.4.0 uses `<sha256>-links2-schema2.sqlite`, and a first run after upgrading builds the new file once with no manual step. Cache files use mode 0600 on creation. The location must be outside every registered vault, including through symlinks; linked cache directories/files are refused. It contains note text and is disposable private derived state. Removing it while commands are stopped allows the next read to build it again. SQLite uses its own transaction lock and a five-second busy timeout. There is no automatic migration or live vault cutover.
 
 Search uses FTS5 `unicode61` over title, description and body with BM25 weights 5:2:1, ascending score and path tie-breaking. Whitespace-separated query terms are literal AND terms, not a raw FTS expression; quote the query as one shell argument. A term whose letters and digits form one run of 2 or more Hangul, Han, Hiragana or Katakana characters (surrounding punctuation is ignored) matches wherever it occurs in the title, description or body, including particle and compound forms: `사업단` finds `사업단은`, `사업단장` and `해외사업단`. That matching uses a side FTS5 table of overlapping character bigrams (Unicode NFC), so a 2-character term is one indexed lookup and a longer term a phrase of consecutive bigrams; it is substring matching, not morphological analysis. Every other term, including Latin words, single CJK characters and terms mixing CJK with Latin letters or digits (`AI교육`), keeps `unicode61` token matching, and a query without CJK terms ranks exactly as before. With a CJK term, notes where every CJK term is a standalone word or occurs in the title or description rank before notes that contain it only inside a longer body word; within each group BM25 over the bigram table (5:2:1) and path break ties, and the snippet is a body window around the first CJK term. `--type` and `--domain` are exact scalar frontmatter filters. Results include a bounded snippet and metadata, not the full body. Search queries and note targets accept at most 1024 UTF-8 bytes. Search/links default to 50 results, with an enforced 1..500 range. Show defaults to 16384 UTF-8 bytes and permits 1..65536, returning `truncated` and the full note SHA-256. `--section "Exact H2"` selects one real H2 through the next H1/H2, including its H3 children; code-fenced headings are ignored and duplicate/missing names refuse. Truncated reads include bounded `headings` (at most 64 names/8KiB metadata; `headingsTruncated` when omitted) and `nextOffset`. `--offset N` is a UTF-8 byte offset within the selected section or whole note; use the returned `nextOffset` to page even a single section larger than 64 KiB, and compare note hashes across pages. Invalid UTF-8 boundaries and zero-progress byte budgets refuse. Link string fields are capped at 1024 bytes in command results. Oversized arguments fail instead of silently raising a bound.
 
@@ -102,7 +136,7 @@ Link resolution uses NFC and case-insensitive filename stems only, as Obsidian a
 
 # Validated writes
 
-All mutations use `applyWrite(home, request)`: per-vault `mutation.lock`, current-SHA checks, in-memory planning, final-snapshot validation/screening, same-directory flushed temporary files and atomic renames, directory flushes, derived-index refresh and a structured receipt. `write: mcp` allows CLI and MCP writes; `cli` allows CLI only; `none` refuses mutations. `check` is read-only and works with `none`. No command requires a TTY or rejects agent environments. This increment runs on fixtures; it does not authorize a live vault cutover.
+All mutations use `applyWrite(home, request)`: per-vault `mutation.lock`, current-SHA checks, in-memory planning, final-snapshot validation/screening, same-directory flushed temporary files and atomic renames, directory flushes, derived-index refresh and a structured receipt. `write: mcp` allows CLI and MCP writes; `cli` allows CLI only; `none` refuses mutations. `check` is read-only and works with `none`. No command requires a TTY or rejects agent environments.
 
 ```sh
 vmem new personal example-finding --type insight --domain research --topics research --description "A distinct supporting observation."
@@ -201,6 +235,12 @@ The vault set is read once at startup: every tool's `vault` property is an enum 
 | `vmem_list_files` | `dir`, `vault`; one level, <=500 entries `{name, path, type, bytes?}` (read-only) |
 | `vmem_report` | `path` under `reports/` or `ops/`, `body`<=65536, `dryRun`, `log`; the receipt of `vmem report` |
 
+<!-- facts:mcp-tools -->
+
+`vmem mcp` lists 32 tools: `vmem_status`, `vmem_search`, `vmem_read`, `vmem_read_many`, `vmem_list`, `vmem_links`, `vmem_mocs`, `vmem_check`, `vmem_log_tail`, `vmem_create`, `vmem_patch`, `vmem_append`, `vmem_set_frontmatter`, `vmem_link`, `vmem_supersede`, `vmem_log_append`, `vmem_move`, `vmem_delete`, `vmem_promote_from_amem`, `vmem_lint`, `vmem_graph_build`, `vmem_graph_neighbors`, `vmem_promote`, `vmem_skills_mine`, `vmem_read_file`, `vmem_list_files`, `vmem_report`, `vmem_stats`, `vmem_spec_get`, `vmem_spec_graph`, `vmem_spec_grep`, `vmem_spec_validate`.
+
+<!-- /facts:mcp-tools -->
+
 Move and delete without `confirm` write nothing and return the preview and `fingerprint`; `confirm: true` requires the fingerprint recomputed on the current state, otherwise the call is refused with `V09`. `vmem_promote_from_amem` is described under Promotion from agent-mem. `vmem_promote` is described under Org promotion and sync. Graph/lint tools are listed below. Note paths in read results are relative to `notes/`.
 
 File reads and reports: `vmem_read_file` and `vmem_list_files` read only these roots: `ops/`, `reports/`, `self/`, `templates/`, `AGENTS.md` and `README.md`. They refuse `notes/` (use `vmem_read`), `log` (use `vmem_log_tail`), absolute paths, `.` or `..` segments, dot paths such as `.git`, any symlinked component, denied paths, non-UTF-8 files and files over 2 MiB. Paging, `maxBytes` and `offset` match `vmem_read`; listings leave out dot, linked, special and denied entries. Neither tool takes a lock, touches the index or writes a file. `vmem_report` is `vmem report` over MCP: the same path rules, screening, receipt and default `EXTRACT` event (a `log` override sets another event, for example `LINT` or `GRAPH`), with `write: mcp` required; MCP events always carry the agent attribution.
@@ -234,7 +274,7 @@ vmem promote-from-amem personal mem:<id> ... --confirm --fingerprint <sha>
 vmem promote-from-amem personal mem:<id> --link-to existing-note  # link an existing note instead of creating one
 ```
 
-- `src/amem/seam.ts` is the only module that imports the `@staix/agent-mem` root (exact pin 0.17.0, at or above agent-mem's 0.13 floor for agent workflows). Reads, writes and other commands never load it; promotion and mining load it when they run, and `vmem mcp` loads it at startup. The project defaults to agent-mem's key for the current directory (`--project` overrides); `AMEM_HOME` selects the memory home as in agent-mem.
+- `src/amem/seam.ts` is the only module that imports the `@staix/agent-mem` root (exact pin <!-- facts:amem-version -->0.17.0<!-- /facts:amem-version -->, at or above agent-mem's 0.13 floor for agent workflows). Reads, writes and other commands never load it; promotion and mining load it when they run, and `vmem mcp` loads it at startup. The project defaults to agent-mem's key for the current directory (`--project` overrides); `AMEM_HOME` selects the memory home as in agent-mem.
 - Listing and linking require agent-mem's generation profile; a shared-v1 memory home is refused. Candidate listing applies agent-mem's durable selection and policy (secrets, default PII and the vault config's `piiPatterns`) before ordering and `--limit`; previews screen the requested entry with the same policy.
 - The preview prefills the H1 and stem from the entry title, the body from its text, `about[]` as Relevant Notes hints, and provenance `promoted_from: mem:<id>` plus `promoted_at`. `--stem --type --domain --topics --description --title` and `--body file|-` override it; none of this needs a TTY. When a note with the same stem or title exists, the preview is refused with V08 and lists `link-existing <path>` choices; `--link-to` takes one. `--edit` opens `$VISUAL`/`$EDITOR` on the draft only when stdin is a terminal (the only TTY check); the edited text is previewed and confirmed with `--body`.
 - Confirm requires the preview fingerprint, then creates the note through `applyWrite` (V01-V10), appends one `LEARN  <project>  mem:<id> → notes/<stem>.md  <em-dash> promoted: <kind>` event (`--log-project` sets the project field; it defaults to the last segment of the agent-mem project key) and records the vault link last.
@@ -319,7 +359,7 @@ vmem sync team --confirm --fingerprint <sha>
 - `bun run parity:release` checks same-snapshot frontmatter bytes, incremental notes/FTS/links against clean rebuild, and two consecutive synthetic Python-oracle lint/graph comparisons. External Python reference paths can be supplied with `--lint-reference` and `--graph-reference`; `--output` records aggregate evidence.
 - `bun run release:verify` enforces committed runtime/method/external-parity evidence freshness and the declared synthetic thresholds at the explicit release gate. Ordinary tests validate evidence shape and internal sample consistency; routine source edits and version bumps do not require fresh benchmark evidence until release validation.
 - `bun run bench:release --output <file.json>` measures a generated 5000-note corpus in the authorized Linux dgx02 container. It records actual MCP search round-trip timings (including metadata refresh), kernel RSS high-water, the derived index size after rebuild (`indexBytes`), raw samples and environment; it exits nonzero when a synthetic threshold fails. Synthetic write timings are diagnostic and do not establish representative private-vault acceptance.
-- [Readiness evidence](docs/release-readiness.md), [release workflow](docs/release-workflow.md) and [cutover checklist](docs/cutover-checklist.md) distinguish verified results from outstanding private/native/integration/deployment gates. Live cutover remains blocked.
+- [Readiness evidence](docs/release-readiness.md), [release workflow](docs/release-workflow.md) and [cutover checklist](docs/cutover-checklist.md) distinguish verified results from outstanding private/native/integration/deployment gates. Live cutover is covered by the Status paragraph at the top.
 
 
 ## Core operating compatibility
