@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { percentile, validateCgroup } from "../scripts/release-performance.ts";
+import { percentile, validateCgroup, mcpPeakGate } from "../scripts/release-performance.ts";
 import { releaseRpc } from "../scripts/release-rpc.ts";
 import { verifyReleaseParity } from "../scripts/release-parity.ts";
 test("release parity fixture is byte-identical, links resolve, incremental index equals rebuild twice against Python oracles",()=>{verifyReleaseParity();});
@@ -69,6 +69,16 @@ test("explicit release gate rejects stale runtime, method, parity and non-monoto
   }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
 
+
+test("MCP peak gate requires charged peak and sampled RSS peak both below 200 MB",()=>{
+  const limit=200000000;
+  expect(mcpPeakGate(limit-1,limit-1)).toEqual({value:limit-1,limit,unit:"bytes",pass:true});
+  for(const [charged,sampled] of [[1,limit],[1,limit+1],[limit,1],[limit+1,1],[limit,limit]]){
+    const gate=mcpPeakGate(charged!,sampled!);
+    expect(gate.value).toBe(charged!);
+    expect(gate.pass).toBe(false);
+  }
+});
 
 test("release cgroup delegation preconditions name the cause and remote runner recovery",async()=>{
   const fs=await import("node:fs"),{join}=await import("node:path"),{tmpdir}=await import("node:os");
