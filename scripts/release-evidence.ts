@@ -12,6 +12,10 @@ export function verifyReleaseEvidence(root=resolve(import.meta.dir,"..")):void {
     const gate=performance.gates?.[name];
     if(!gate || !Number.isFinite(gate.value) || gate.value<0 || gate.value>=limit || gate.limit!==limit || gate.pass!==true)throw new Error("release evidence: failed or missing synthetic gate "+name);
   }
+  const hwm=Array.isArray(performance.rssSamples)?performance.rssSamples.map((s:{highWaterBytes?:unknown})=>s?.highWaterBytes):[];
+  if(hwm.length===0||!hwm.every((v:unknown)=>typeof v==="number"&&Number.isFinite(v)))throw new Error("release evidence: mcpPeakRss unverified: no VmHWM samples");
+  const drops=hwm.flatMap((v:number,i:number)=>i>0&&v<hwm[i-1]!?[i]:[]);
+  if(drops.length>0)throw new Error(`release evidence: mcpPeakRss unverified: VmHWM decreased ${drops.length} time(s), first at sample ${drops[0]} (${hwm[drops[0]-1]} -> ${hwm[drops[0]]} bytes), so the peak is only a lower bound; re-measure on a host where VmHWM is monotonic, or use a peak source that cannot fall`);
   if(performance.syntheticGatesPass!==true)throw new Error("release evidence: synthetic gates not passed");
   const method=createHash("sha256").update(readFileSync(join(root,"scripts/release-performance.ts"))).update(readFileSync(join(root,"scripts/release-rpc.ts"))).digest("hex");
   if(method!==performance.methodDigest)throw new Error("release evidence: stale measurement method");
