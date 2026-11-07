@@ -38,6 +38,7 @@
     "smoke:package": "bun scripts/package-smoke.ts",
     "bench:release": "bun scripts/release-performance.ts",
     "parity:release": "bun scripts/release-parity.ts",
-    "release:verify": "bun scripts/release-evidence.ts"
+    "release:verify": "bun scripts/release-evidence.ts",
+    "release:tag": "bun scripts/release-tag.ts"
   }
 }

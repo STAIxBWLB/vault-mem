@@ -21,6 +21,13 @@
 | npm trust/environment/public package | `@staix/vault-mem@0.1.0` published by GitHub Actions OIDC from the `npm-production` environment (required reviewer, `v*` tags only) with provenance; dist-tag `latest`. Registry tarball SHA-256 `b3fd27d2…` equals the validated artifact; `npm audit signatures` verified; clean install reports `vmem --version` 0.1.0. Two placeholder versions published by a maintainer before the trusted publisher could be configured remain on the registry: `0.0.0-stage` (first publish, which created the package) and `0.0.0-bootstrap.0` (dist-tag `bootstrap`, a retry after the first publish's result was misread) | Published |
 | Reader/host/live writer integration | Separate parent-plan acceptance, outside this repository | Not recorded here |
 
+## Release tags
+
+- Create release tags only with `bun run release:tag`. First bump `package.json`, add a dated `CHANGELOG.md` entry, and merge that preparation through a PR. Switch to clean, up-to-date `main` before running the script; it fetches origin/main and release tags, rejects an existing tag or a version at or below an existing release, and creates an annotated `v<version>` tag at HEAD.
+- The default command creates only a local tag. `bun run release:tag --push` explicitly creates and pushes it, triggering release validation. Tag creation and publication require separate owner authorization; do not run either command as part of ordinary implementation work.
+- Release validation requires the tag to match the package version and dated CHANGELOG entry, and its commit to be an ancestor of fetched origin/main. It waits up to 8 minutes for the latest `Check` main-push run on that exact SHA, refusing a failed, cancelled or skipped run, API error, or deadline with no successful run. PR CI alone is insufficient. Existing package/evidence gates and npm-production approval still apply.
+- Branch protection/ruleset configuration is a separate owner operation after merging the workflow change. Require only `ci-ok`, which always runs after the full check matrix and refuses every non-success result, including unexpected skips.
+
 ## Performance record
 
 The [raw synthetic report](evidence/synthetic-performance.json) contains every search/write/RSS sample, runtime/method digests, Bun/kernel/CPU details and container quotas. RSS uses decimal byte thresholds; search p95 is the nearest-rank statistic over 30 measured MCP queries after five warmups, including metadata refresh and transport. The derived index is prebuilt before the MCP process starts.
