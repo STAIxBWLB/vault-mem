@@ -164,9 +164,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
-    env:
-      # Job level so the dispatch step's `if` can see it; empty when the secret is not configured.
-      SITE_DISPATCH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -220,8 +217,19 @@ jobs:
             if [ "$RELEASE_PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
             gh release create "$RELEASE_TAG" "$RELEASE_ASSETS.tgz" "$RELEASE_ASSETS.manifest.json" --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG" --notes-file "$notes" --verify-tag "${flags[@]}"
           fi
-      # Re-syncs the family portal; skipped without the token and never fails the release.
-      - name: Notify agent-hub-site of the release
+
+  # Re-syncs the family portal; skipped without the token and never fails the release.
+  # A separate job keeps the token away from the release-writing steps.
+  notify-site:
+    name: Notify agent-hub-site of the release
+    needs: github-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      SITE_DISPATCH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+    steps:
+      - name: Send repository_dispatch
         if: env.SITE_DISPATCH_TOKEN != ''
         continue-on-error: true
         env:
