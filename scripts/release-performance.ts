@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { cpus, release, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { releaseRpc } from "./release-rpc.ts";
@@ -12,12 +12,44 @@ export function runtimeDigest(root:string):string {
   function walk(dir:string){for(const entry of readdirSync(join(root,dir),{withFileTypes:true}).sort((a,b)=>a.name<b.name?-1:1)){const file=dir+"/"+entry.name;if(entry.isDirectory())walk(file);else if(entry.isFile())files.push(file);else throw new Error("runtime source must be plain");}}
   walk("src");walk("bin");for(const file of files.sort()){hash.update(file+"\n");hash.update(readFileSync(join(root,file)));hash.update("\n");}return hash.digest("hex");
 }
+/** Keep the charged-memory value while refusing either known 200 MB breach. */
+export function mcpPeakGate(value: number, sampledPeak: number): { value: number; limit: number; unit: string; pass: boolean } {
+  return { value, limit: 200000000, unit: "bytes", pass: value < 200000000 && sampledPeak < 200000000 };
+}
+const cgroupNextStep = "run the authorized measurement through remote_dev.py run --cgroup <path> -- <cmd>";
+/** Validate delegation without requiring Linux, so unavailable setups can be tested on macOS. */
+export function validateCgroup(root: string | undefined): string {
+  if (!root) throw new Error(`REMOTE_DEV_CGROUP is missing; ${cgroupNextStep}`);
+  try {
+    const info = statSync(root);
+    if (!info.isDirectory()) throw new Error("not a directory");
+    if ((info.mode & 0o222) === 0) throw new Error("not writable");
+    accessSync(root, constants.W_OK | constants.X_OK);
+    if (!readFileSync(join(root, "cgroup.subtree_control"), "utf8").trim().split(/\s+/).includes("memory")) {
+      throw new Error("memory is not enabled in cgroup.subtree_control");
+    }
+    return realpathSync(root);
+  } catch (cause) {
+    throw new Error(`REMOTE_DEV_CGROUP is unavailable (${cause instanceof Error ? cause.message : String(cause)}); ${cgroupNextStep}`, { cause });
+  }
+}
+function readCgroupPeak(cgroup: string): number {
+  try {
+    const value = readFileSync(join(cgroup, "memory.peak"), "utf8").trim();
+    const peak = Number(value);
+    if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(peak) || peak <= 0) throw new Error("memory.peak is not a positive byte count");
+    return peak;
+  } catch (cause) {
+    throw new Error(`MCP cgroup memory.peak is unavailable; ${cgroupNextStep} with a working memory.peak controller`, { cause });
+  }
+}
 const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
 export async function measureReleasePerformance(output:string):Promise<boolean>{
-  if(process.platform!=="linux")throw new Error("release measurements run on the authorized Linux dgx02 container only");
+  if(process.platform!=="linux")throw new Error(`release measurements require the authorized Linux dgx02 container; ${cgroupNextStep}`);
+  const delegated = validateCgroup(process.env.REMOTE_DEV_CGROUP);
   const repo=resolve(import.meta.dir,".."),root=realpathSync(mkdtempSync(join(tmpdir(),"vmem-perf-"))),vault=join(root,"vault"),home=join(root,"state"),notes=join(vault,"notes");
   const env={...process.env,VMEM_HOME:home,AMEM_HOME:join(root,"amem"),CODEX_THREAD_ID:"synthetic-release-benchmark"};
-  let rpc:ReturnType<typeof releaseRpc>|undefined,timer:ReturnType<typeof setInterval>|undefined;
+  let rpc:ReturnType<typeof releaseRpc>|undefined,timer:ReturnType<typeof setInterval>|undefined,cgroup:string|undefined;
   const command=(args:string[])=>{const r=Bun.spawnSync([process.execPath,"--smol",join(repo,"bin/vmem.js"),...args],{cwd:root,env,stdout:"pipe",stderr:"pipe",timeout:120000});if(r.exitCode!==0)throw new Error("synthetic benchmark command failed: "+args[0]);return r.stdout.toString();};
   try{
     mkdirSync(notes,{recursive:true});
@@ -28,12 +60,16 @@ export async function measureReleasePerformance(output:string):Promise<boolean>{
     }
     command(["vaults","add","bench",vault,"--kind","personal","--write","mcp"]);command(["rebuild","bench"]);
     const indexBytes=readdirSync(join(home,"indexes")).reduce((total,name)=>total+statSync(join(home,"indexes",name)).size,0);
-    rpc=releaseRpc([process.execPath,"--smol",join(repo,"bin/vmem.js"),"mcp"],env);
-    const rssSamples:{phase:string;rssBytes:number;highWaterBytes:number}[]=[];let phase="startup",peak=0;
-    const sample=()=>{try{const status=readFileSync(`/proc/${rpc!.child.pid}/status`,"utf8"),rss=Number(/^VmRSS:\s+(\d+)/m.exec(status)?.[1])*1024,hwm=Number(/^VmHWM:\s+(\d+)/m.exec(status)?.[1])*1024;if(Number.isFinite(rss)&&Number.isFinite(hwm)){rssSamples.push({phase,rssBytes:rss,highWaterBytes:hwm});peak=Math.max(peak,rss,hwm);}}catch{/* Process exit is handled by RPC client. */}};
+    try { cgroup = mkdtempSync(join(delegated, "mcp-")); }
+    catch (cause) { throw new Error(`Cannot create the MCP child cgroup; ${cgroupNextStep} with writable delegation`, { cause }); }
+    // sh enters the fresh cgroup before exec: Bun startup allocation is charged there, never the client.
+    rpc=releaseRpc(["sh", "-c", 'echo $$ > "$1/cgroup.procs" && shift && exec "$@"', "sh", cgroup,
+      process.execPath,"--smol",join(repo,"bin/vmem.js"),"mcp"],env);
+    const rssSamples:{phase:string;rssBytes:number;highWaterBytes:number}[]=[];let phase="startup",sampledPeak=0;
+    const sample=()=>{try{const status=readFileSync(`/proc/${rpc!.child.pid}/status`,"utf8"),rss=Number(/^VmRSS:\s+(\d+)/m.exec(status)?.[1])*1024,hwm=Number(/^VmHWM:\s+(\d+)/m.exec(status)?.[1])*1024;if(Number.isFinite(rss)&&Number.isFinite(hwm)){rssSamples.push({phase,rssBytes:rss,highWaterBytes:hwm});sampledPeak=Math.max(sampledPeak,rss,hwm);}}catch{/* Process exit is handled by RPC client. */}};
     timer=setInterval(sample,20);sample();await rpc.initialize();await rpc.request("tools/list");phase="idle";await pause(300);sample();
     const idle=Math.max(...rssSamples.filter(s=>s.phase==="idle").map(s=>s.rssBytes));
-    if(!Number.isFinite(idle)||idle<=0||peak<=0)throw new Error("RSS telemetry unavailable");
+    if(!Number.isFinite(idle)||idle<=0||sampledPeak<=0)throw new Error("RSS telemetry unavailable");
     const search:number[]=[];phase="search";
     for(let i=0;i<35;i++){
       const query="marker"+String((i*137)%4999).padStart(4,"0"),start=performance.now();
@@ -44,14 +80,26 @@ export async function measureReleasePerformance(output:string):Promise<boolean>{
     const stats:number[]=[];phase="stats";
     for(let i=0;i<6;i++){const start=performance.now(),result=await rpc.request("tools/call",{name:"vmem_stats",arguments:{vault:"bench"}}),elapsed=performance.now()-start;if(JSON.parse(result.content[0].text).notes?.total!==5000)throw new Error("synthetic stats count mismatch");if(i>=1)stats.push(elapsed);sample();}
     phase="post-search";sample();clearInterval(timer);timer=undefined;await rpc.close();rpc=undefined;
+    const peak = readCgroupPeak(cgroup);
     const writes:number[]=[];
     for(let i=0;i<5;i++){const start=performance.now(),result=JSON.parse(command(["patch","bench","finding-0000","--old",`Revision ${i}.`,"--new",`Revision ${i+1}.`,"--json"]));if(!result.ok||!result.applied||!result.logged)throw new Error("synthetic write failed");writes.push(performance.now()-start);}
     const revision=Bun.spawnSync(["git","rev-parse","HEAD"],{cwd:repo,stdout:"pipe",stderr:"pipe"}).stdout.toString().trim();
     const optional=(file:string)=>{try{return readFileSync(file,"utf8").trim();}catch{return "unavailable";}};
     const hwmDrops=rssSamples.filter((s,i)=>i>0&&s.highWaterBytes<rssSamples[i-1]!.highWaterBytes).length;
-    const gates={mcpIdleRss:{value:idle,limit:100000000,unit:"bytes",pass:idle<100000000},mcpPeakRss:{value:peak,limit:200000000,unit:"bytes",pass:peak<200000000,...(hwmDrops>0?{lowerBound:true,hwmDecreases:hwmDrops}:{})},searchP95:{value:percentile(search,.95),limit:50,unit:"ms",pass:percentile(search,.95)<50}};
-    const report={schema:1,measuredAt:new Date().toISOString(),revision,runtimeDigest:runtimeDigest(repo),methodDigest:createHash("sha256").update(readFileSync(join(repo,"scripts/release-performance.ts"))).update(readFileSync(join(repo,"scripts/release-rpc.ts"))).digest("hex"),corpus:{kind:"synthetic",notes:5000,generator:"release-performance.ts",bodiesPrivate:false},environment:{bun:Bun.version,os:process.platform,osRelease:release(),arch:process.arch,cpu:cpus()[0]?.model,cpuCount:cpus().length,cpuQuota:optional("/sys/fs/cgroup/cpu.max"),memoryLimit:optional("/sys/fs/cgroup/memory.max")},method:{search:"Sequential MCP tools/call round-trip including metadata refresh and JSON transport; 5 warmups,30 measured queries, prebuilt derived index",rss:"/proc VmRSS sampled every20ms; peak is the running maximum of VmRSS and kernel VmHWM, marked lowerBound when sampled VmHWM decreases, including startup, all measured searches and stats calls; decimal MB gates",stats:"Diagnostic sequential MCP vmem_stats round-trip on the gated server after search, including metadata refresh; 1 warmup, 5 measured calls; covered by the RSS gates, no latency gate",write:"Diagnostic synthetic CLI patch round-trip including startup, validation,index and log;5 measured calls; not representative private-vault acceptance",p95:"nearest rank: sorted[ceil(0.95*N)-1]"},gates,indexBytes,searchMs:search,syntheticWriteMs:writes,syntheticWriteP95:percentile(writes,.95),statsMs:stats,statsP95:percentile(stats,.95),rssSamples,representativePrivateWrite:{status:"unverified",limitMs:150,reason:"No authorized representative private corpus measurement performed"},syntheticGatesPass:Object.values(gates).every(g=>g.pass),releaseReady:false};
+    const gates={mcpIdleRss:{value:idle,limit:100000000,unit:"bytes",pass:idle<100000000},mcpPeakRss:mcpPeakGate(peak,sampledPeak),searchP95:{value:percentile(search,.95),limit:50,unit:"ms",pass:percentile(search,.95)<50}};
+    const report={schema:1,peakSource:"cgroup-memory.peak",peakCgroup:"delegated/mcp",sampledPeakRss:sampledPeak,hwmDecreases:hwmDrops,measuredAt:new Date().toISOString(),revision,runtimeDigest:runtimeDigest(repo),methodDigest:createHash("sha256").update(readFileSync(join(repo,"scripts/release-performance.ts"))).update(readFileSync(join(repo,"scripts/release-rpc.ts"))).digest("hex"),corpus:{kind:"synthetic",notes:5000,generator:"release-performance.ts",bodiesPrivate:false},environment:{bun:Bun.version,os:process.platform,osRelease:release(),arch:process.arch,cpu:cpus()[0]?.model,cpuCount:cpus().length,cpuQuota:optional("/sys/fs/cgroup/cpu.max"),memoryLimit:optional("/sys/fs/cgroup/memory.max")},method:{search:"Sequential MCP tools/call round-trip including metadata refresh and JSON transport; 5 warmups,30 measured queries, prebuilt derived index",rss:"MCP alone enters a fresh delegated/mcp cgroup before Bun exec; gate uses cgroup memory.peak read after MCP exit, including startup, search, stats and shutdown; memory.peak is the peak of memory charged to the MCP cgroup (anonymous, kernel and page cache it charged first); file pages first charged by the harness are excluded, so it is not an upper bound of VmRSS; gate passes only when memory.peak and the sampled VmRSS/VmHWM maximum are both below 200 MB; the sampled maximum is a lower bound of the old RSS metric; /proc samples every20ms are retained; decimal MB gates",stats:"Diagnostic sequential MCP vmem_stats round-trip on the gated server after search, including metadata refresh; 1 warmup, 5 measured calls; covered by the RSS gates, no latency gate",write:"Diagnostic synthetic CLI patch round-trip including startup, validation,index and log;5 measured calls; not representative private-vault acceptance",p95:"nearest rank: sorted[ceil(0.95*N)-1]"},gates,indexBytes,searchMs:search,syntheticWriteMs:writes,syntheticWriteP95:percentile(writes,.95),statsMs:stats,statsP95:percentile(stats,.95),rssSamples,representativePrivateWrite:{status:"unverified",limitMs:150,reason:"No authorized representative private corpus measurement performed"},syntheticGatesPass:Object.values(gates).every(g=>g.pass),releaseReady:false};
     mkdirSync(resolve(output,".."),{recursive:true});writeFileSync(output,JSON.stringify(report,null,2)+"\n");console.log("VMEM_PERFORMANCE="+JSON.stringify(report));return report.syntheticGatesPass;
-  }finally{if(timer)clearInterval(timer);await rpc?.stop();rmSync(root,{recursive:true,force:true});}
+  }finally{
+    if(timer)clearInterval(timer);
+    try { await rpc?.stop(); }
+    finally {
+      try {
+        if(cgroup) {
+          try { rmdirSync(cgroup); }
+          catch(cause) { throw new Error(`Cannot remove the MCP child cgroup after shutdown; check for remaining MCP processes, then ${cgroupNextStep}`, { cause }); }
+        }
+      } finally { rmSync(root,{recursive:true,force:true}); }
+    }
+  }
 }
 if(import.meta.main){const args=process.argv.slice(2);if(args.length!==2||args[0]!=="--output")throw new Error("usage: --output <synthetic-evidence.json>");if(!await measureReleasePerformance(resolve(args[1]!)))process.exitCode=1;}
