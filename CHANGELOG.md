@@ -4,6 +4,8 @@
 
 - `release:verify` refuses performance evidence whose sampled VmHWM (`rssSamples` `highWaterBytes`) is missing or decreases, naming the decrease count, the first drop and the next step. The harness now records the peak as the running maximum of RSS and VmHWM and marks the gate `lowerBound` with `hwmDecreases` when VmHWM drops, as seen on dgx02 kernel 6.8.0-147. The committed 0.5.1 evidence no longer verifies, so the next release needs a new measurement on a host with monotonic VmHWM (#152).
 
+- CI now exposes the `ci-ok` aggregate over the check matrix, requires release tags to be on main with a green main-push Check on the same commit, provides the guarded `release:tag` script, and pins checkout v6 consistently across workflows (#153).
+
 ## [0.5.1] - 2026-11-05
 
 - Console inbox snapshots share a background refresh, keep prior rows through refreshes and source failures, and wait at most 700 ms cold before showing a refreshing row. Payloads are capped at 50 prioritized rows with bounded Unicode-safe title and detail. `moreIsLowerBound` identifies "at least N more" when agent-mem's per-project candidate limit prevents an exact total. Applied writes invalidate freshness without clearing triage; source workers refresh on a 60-second cache and have a 30-second termination budget (#149).
