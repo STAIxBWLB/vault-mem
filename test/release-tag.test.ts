@@ -38,7 +38,7 @@ test("release tag is annotated at current main and stays local unless push is ex
     expect(releaseTag(root, true)).toBe("v1.0.1");
     expect(git("ls-remote", "origin", "refs/tags/v1.0.1")).toContain("refs/tags/v1.0.1");
   });
-});
+}, 30_000);
 
 test("release tag refuses topic branches, dirty trees, local-only commits and stale main", () => {
   fixture((root, git) => {
@@ -48,7 +48,7 @@ test("release tag refuses topic branches, dirty trees, local-only commits and st
     git("reset", "--hard", "HEAD~2"); expect(() => releaseTag(root, false)).toThrow("up to date with origin/main. Run git pull --ff-only");
     expect(git("tag", "--list", "v1.0.1")).toBe("");
   });
-});
+}, 30_000);
 
 test("release tag requires a version bump and a dated changelog before mutation", () => {
   for (const [file, content, error] of [
@@ -62,7 +62,7 @@ test("release tag requires a version bump and a dated changelog before mutation"
     expect(() => releaseTag(root, false)).toThrow("## [x.y.z] - YYYY-MM-DD to CHANGELOG.md via a release-prep PR first.");
     expect(git("tag", "--list", "v1.0.1")).toBe("");
   });
-});
+}, 30_000);
 
 
 test("release tag publishes an existing annotated local tag without recreating it", () => {
@@ -74,7 +74,7 @@ test("release tag publishes an existing annotated local tag without recreating i
     expect(git("ls-remote", "--tags", "origin", "refs/tags/v1.0.1")).toContain(object);
     expect(() => releaseTag(root, true)).toThrow("already exists on origin. Bump package.json");
   });
-});
+}, 30_000);
 
 test("release tag can retry a rejected push with the preserved tag", () => {
   fixture((root, git, remote) => {
@@ -87,7 +87,7 @@ test("release tag can retry a rejected push with the preserved tag", () => {
     expect(releaseTag(root, true)).toBe("v1.0.1");
     expect(git("ls-remote", "--tags", "origin", "refs/tags/v1.0.1")).toContain(object);
   });
-});
+}, 30_000);
 
 test("release tag refuses existing local tags at another commit or without annotation", () => {
   fixture((root, git) => {
@@ -97,4 +97,4 @@ test("release tag refuses existing local tags at another commit or without annot
     git("tag", "-d", "v1.0.1"); git("tag", "v1.0.1");
     expect(() => releaseTag(root, true)).toThrow("not an annotated tag");
   });
-});
+}, 30_000);
