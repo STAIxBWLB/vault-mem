@@ -65,6 +65,8 @@ jobs:
           fi
           bun scripts/release-ci.ts
       - run: bun install --frozen-lockfile
+      - name: Require fresh documentation stamps
+        run: bun scripts/check-docs.mjs --require-fresh
       - name: Verify npm package dry-run
         run: npm pack --dry-run --ignore-scripts
       - name: Stage the npm tarball for validation
@@ -162,6 +164,9 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+    env:
+      # Job level so the dispatch step's `if` can see it; empty when the secret is not configured.
+      SITE_DISPATCH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -215,3 +220,15 @@ jobs:
             if [ "$RELEASE_PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
             gh release create "$RELEASE_TAG" "$RELEASE_ASSETS.tgz" "$RELEASE_ASSETS.manifest.json" --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG" --notes-file "$notes" --verify-tag "${flags[@]}"
           fi
+      # Re-syncs the family portal; skipped without the token and never fails the release.
+      - name: Notify agent-hub-site of the release
+        if: env.SITE_DISPATCH_TOKEN != ''
+        continue-on-error: true
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          curl -fsS -X POST https://api.github.com/repos/STAIxBWLB/agent-hub-site/dispatches \
+            -H "Authorization: Bearer $SITE_DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -d "{\"event_type\":\"product-release\",\"client_payload\":{\"product\":\"vmem\",\"tag\":\"$RELEASE_TAG\"}}"
