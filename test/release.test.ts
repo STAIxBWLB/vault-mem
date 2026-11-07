@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { percentile } from "../scripts/release-performance.ts";
+import { percentile, validateCgroup } from "../scripts/release-performance.ts";
 import { releaseRpc } from "../scripts/release-rpc.ts";
 import { verifyReleaseParity } from "../scripts/release-parity.ts";
 test("release parity fixture is byte-identical, links resolve, incremental index equals rebuild twice against Python oracles",()=>{verifyReleaseParity();});
@@ -26,7 +26,11 @@ test("recorded synthetic performance evidence has internally consistent samples 
   const evidence=JSON.parse(readFileSync(new URL("../docs/evidence/synthetic-performance.json",import.meta.url),"utf8"));
   expect(evidence.runtimeDigest).toMatch(/^[a-f0-9]{64}$/);expect(evidence.methodDigest).toMatch(/^[a-f0-9]{64}$/);
   expect(evidence.corpus.notes).toBe(5000);expect(evidence.searchMs).toHaveLength(30);expect(percentile(evidence.searchMs,.95)).toBe(evidence.gates.searchP95.value);
-  expect(evidence.rssSamples.length).toBeGreaterThan(0);expect(evidence.gates.mcpPeakRss.value).toBe(Math.max(...evidence.rssSamples.flatMap((s:{rssBytes:number;highWaterBytes:number})=>[s.rssBytes,s.highWaterBytes])));
+  expect(evidence.rssSamples.length).toBeGreaterThan(0);
+  if(evidence.peakSource==="cgroup-memory.peak"){
+    expect(evidence.peakCgroup).toBe("delegated/mcp");
+    expect(evidence.gates.mcpPeakRss.value).toBeGreaterThan(0);
+  }else expect(evidence.gates.mcpPeakRss.value).toBe(Math.max(...evidence.rssSamples.flatMap((s:{rssBytes:number;highWaterBytes:number})=>[s.rssBytes,s.highWaterBytes])));
   expect(typeof evidence.representativePrivateWrite.status).toBe("string");expect(typeof evidence.releaseReady).toBe("boolean");
 });
 
@@ -45,9 +49,44 @@ test("explicit release gate rejects stale runtime, method, parity and non-monoto
     fs.writeFileSync(evidencePath,good.replace('"rssSamples":[{"highWaterBytes":1},{"highWaterBytes":2}]','"rssSamples":[{"highWaterBytes":5},{"highWaterBytes":3},{"highWaterBytes":4},{"highWaterBytes":2}]'));
     expect(()=>verifyReleaseEvidence(root)).toThrow("mcpPeakRss unverified: VmHWM decreased 2 time(s), first at sample 1 (5 -> 3 bytes), so the peak is only a lower bound; re-measure on a host where VmHWM is monotonic, or use a peak source that cannot fall");
     fs.writeFileSync(evidencePath,good.replace('"rssSamples":[{"highWaterBytes":1},{"highWaterBytes":2}]','"rssSamples":[]'));expect(()=>verifyReleaseEvidence(root)).toThrow("no VmHWM samples");
+    const cgroupEvidence=JSON.parse(good);
+    cgroupEvidence.peakSource="cgroup-memory.peak";
+    cgroupEvidence.peakCgroup="delegated/mcp";
+    cgroupEvidence.rssSamples=[{highWaterBytes:5},{highWaterBytes:3}];
+    fs.writeFileSync(evidencePath,JSON.stringify(cgroupEvidence));
+    verifyReleaseEvidence(root);
+    cgroupEvidence.peakSource="proc-VmHWM";
+    fs.writeFileSync(evidencePath,JSON.stringify(cgroupEvidence));
+    expect(()=>verifyReleaseEvidence(root)).toThrow("VmHWM decreased");
+    cgroupEvidence.peakSource="cgroup-memory.peak";
+    delete cgroupEvidence.gates.mcpPeakRss.pass;
+    fs.writeFileSync(evidencePath,JSON.stringify(cgroupEvidence));
+    expect(()=>verifyReleaseEvidence(root)).toThrow("failed or missing synthetic gate mcpPeakRss");
     fs.writeFileSync(evidencePath,good);
     fs.writeFileSync(join(root,"package.json"),'{"version":"0.2.0"}');expect(()=>verifyReleaseEvidence(root)).toThrow("stale runtime");fs.writeFileSync(join(root,"package.json"),files["package.json"]);
     fs.writeFileSync(join(root,"scripts/release-rpc.ts"),"changed method");expect(()=>verifyReleaseEvidence(root)).toThrow("stale measurement");fs.writeFileSync(join(root,"scripts/release-rpc.ts"),files["scripts/release-rpc.ts"]);
     fs.writeFileSync(join(root,"docs/evidence/external-parity.json"),JSON.stringify({inputsSha256:{"src/example.ts":"0".repeat(64)}}));expect(()=>verifyReleaseEvidence(root)).toThrow("stale external parity");
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+
+test("release cgroup delegation preconditions name the cause and remote runner recovery",async()=>{
+  const fs=await import("node:fs"),{join}=await import("node:path"),{tmpdir}=await import("node:os");
+  const root=fs.mkdtempSync(join(tmpdir(),"vmem-cgroup-precondition-"));
+  const refuse=(input:string|undefined,cause:string)=>{
+    expect(()=>validateCgroup(input)).toThrow(cause);
+    expect(()=>validateCgroup(input)).toThrow("remote_dev.py run --cgroup <path> -- <cmd>");
+  };
+  try{
+    refuse(undefined,"REMOTE_DEV_CGROUP is missing");
+    refuse(join(root,"absent"),"ENOENT");
+    const file=join(root,"plain-file");fs.writeFileSync(file,"synthetic");refuse(file,"not a directory");
+    const delegated=join(root,"delegated");fs.mkdirSync(delegated);
+    fs.writeFileSync(join(delegated,"cgroup.subtree_control"),"cpu pids");
+    refuse(delegated,"memory is not enabled");
+    fs.chmodSync(delegated,0o555);
+    try{refuse(delegated,"not writable");}finally{fs.chmodSync(delegated,0o755);}
+    fs.writeFileSync(join(delegated,"cgroup.subtree_control"),"cpu memory pids\n");
+    expect(validateCgroup(delegated)).toBe(fs.realpathSync(delegated));
   }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
