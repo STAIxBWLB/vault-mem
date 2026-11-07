@@ -59,7 +59,10 @@ jobs:
         run: |
           gh auth setup-git --hostname github.com
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "Tag commit $GITHUB_SHA is not on main. Delete the tag, merge the release preparation to main, then retag with bun run release:tag --push." >&2
+            exit 1
+          fi
           bun scripts/release-ci.ts
       - run: bun install --frozen-lockfile
       - name: Verify npm package dry-run

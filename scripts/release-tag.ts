@@ -6,22 +6,22 @@ const versionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0
 
 export function releaseTag(cwd: string, push: boolean): string {
   const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", timeout: 30_000 }).trim();
-  if (git("branch", "--show-current") !== "main") throw new Error("Release tags require main");
-  if (git("status", "--porcelain", "--untracked-files=all")) throw new Error("Release tags require a clean tree");
+  if (git("branch", "--show-current") !== "main") throw new Error("Release tags require main. Run git switch main.");
+  if (git("status", "--porcelain", "--untracked-files=all")) throw new Error("Release tags require a clean tree. Commit or stash all changes, including untracked files, then retry.");
   git("fetch", "origin", "+refs/heads/main:refs/remotes/origin/main", "--tags");
   const head = git("rev-parse", "HEAD");
-  if (head !== git("rev-parse", "refs/remotes/origin/main")) throw new Error("Main must be up to date with origin/main");
+  if (head !== git("rev-parse", "refs/remotes/origin/main")) throw new Error("Main must be up to date with origin/main. Run git pull --ff-only; if main has local-only commits, move them to a PR branch first.");
   const { version } = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as { version: string };
-  if (typeof version !== "string" || !versionPattern.test(version)) throw new Error("Invalid package version");
+  if (typeof version !== "string" || !versionPattern.test(version)) throw new Error("Invalid package version. Bump package.json to a valid release version and add ## [x.y.z] - YYYY-MM-DD to CHANGELOG.md via a release-prep PR first.");
   const tag = `v${version}`;
   const tags = git("tag", "--list", "v*").split("\n").filter(Boolean);
-  if (tags.includes(tag)) throw new Error(`${tag} already exists`);
+  if (tags.includes(tag)) throw new Error(`${tag} already exists. Bump package.json and add ## [x.y.z] - YYYY-MM-DD to CHANGELOG.md via a release-prep PR first.`);
   const versions = tags.map(value => value.slice(1)).filter(value => versionPattern.test(value));
-  if (versions.some(previous => Bun.semver.order(version, previous) <= 0)) throw new Error("Package version must be bumped above existing release tags");
+  if (versions.some(previous => Bun.semver.order(version, previous) <= 0)) throw new Error("Package version must be bumped above existing release tags. Bump package.json and add ## [x.y.z] - YYYY-MM-DD to CHANGELOG.md via a release-prep PR first.");
   const prefix = `## [${version}] - `;
   if (!readFileSync(join(cwd, "CHANGELOG.md"), "utf8").split("\n")
     .some(line => line.startsWith(prefix) && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(line.slice(prefix.length)))) {
-    throw new Error("CHANGELOG needs a dated entry for the package version");
+    throw new Error("CHANGELOG needs a dated entry for the package version. Bump package.json and add ## [x.y.z] - YYYY-MM-DD to CHANGELOG.md via a release-prep PR first.");
   }
   git("tag", "-a", tag, head, "-m", `Release ${tag}`);
   if (push) git("push", "origin", `refs/tags/${tag}:refs/tags/${tag}`);
@@ -30,7 +30,7 @@ export function releaseTag(cwd: string, push: boolean): string {
 
 if (import.meta.main) {
   const args = process.argv.slice(2);
-  if (args.some(arg => arg !== "--push") || args.length > 1) throw new Error("Usage: bun run release:tag [--push]");
+  if (args.some(arg => arg !== "--push") || args.length > 1) throw new Error("Unknown or repeated release:tag argument. Use bun run release:tag [--push].");
   const tag = releaseTag(process.cwd(), args.includes("--push"));
   console.log(`${tag} created${args.includes("--push") ? " and pushed" : " locally; use --push explicitly to publish the tag"}`);
 }
