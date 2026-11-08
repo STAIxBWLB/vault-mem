@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Skill mining parses `Record` capture excerpts through agent-mem 0.23.0, preserving record kinds and using anchors as matching context under the existing screens, masks and bounds. Malformed or partially parsed excerpts are dropped as whole rows and counted in `dropped.malformedRecord`; `Title` and tool rows stay excluded. Truncated capture shards remain reported because the API has no excluded-Record count. Promotion drafting remains separate (#163).
+
 - Raise the exact bundled `@staix/agent-mem` pin from 0.17.0 to 0.23.0, bringing reader-floor enforcement and current generation-profile support to the amem seam. Record mining and promotion drafting remain separate follow-ups; no home migration or placement activation is performed.
 
 - Skill mining includes agent-mem `Recap` and `Compact` capture excerpts with their event kinds, through the existing read-only screening and masking pipeline. The Markdown report now exposes the truncated capture-window shard count already present in JSON and states that rows of any event beyond the window were not read. `Title` and tool events remain excluded; `Record` support and promotion drafting remain deferred (#163, Step 1).

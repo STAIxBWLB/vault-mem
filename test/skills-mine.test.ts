@@ -150,7 +150,7 @@ test("skills mine reads curated, capture and vault records, masks them and write
   // curated: decision + fail pass, one finding screened by piiPatterns, a fact skipped; capture: 5 mined events, a tool event skipped, 1 duplicate;
   // vault: 3 notes in the window (person, moc and an old note excluded; the undated one uses its mtime).
   expect(result.records).toEqual({ curated: 2, capture: 5, vault: 3 });
-  expect(result.dropped).toEqual({ secret: 0, policy: 1, oversized: 0, duplicate: 1, unreadable: 0, truncatedCapture: 0 });
+  expect(result.dropped).toEqual({ secret: 0, policy: 1, oversized: 0, duplicate: 1, unreadable: 0, truncatedCapture: 0, malformedRecord: 0 });
   expect(result.graph).toEqual({ nodes: 17, edges: 28, communities: 3, partitioner: "leiden" });
   expect(result.candidates.map(({ cid, label, gloss, size, day_span, unique_days, cohesion, novelty, rank, triggers, similar_skills, sources }) =>
     ({ cid, label, gloss, size, day_span, unique_days, cohesion, novelty, rank, triggers, similar_skills, sources }))).toEqual([
@@ -243,7 +243,7 @@ test("an absent amem home yields vault records only and creates no amem home", a
 });
 
 
-test("Recap and Compact keep their event kinds, pass existing screens and leave Title/Record/tool rows out", async () => {
+test("Recap and Compact keep their event kinds, pass existing screens and leave Title/tool/malformed Record rows out", async () => {
   const f = await fixture();
   const capture = new CaptureStore({ memoryDir: f.memoryDir, project, screen: () => false });
   const rows = [
@@ -298,4 +298,55 @@ test("tool rows can crowd summaries outside a bounded read window and the report
   const complete = await readAmemForMining({ env: f.env, project, since: "2026-10-01T00:00:00.000Z", maxCaptureRows: 20 });
   expect(complete.truncatedCapture).toBe(0);
   expect(complete.records.filter(row => ["Recap", "Compact"].includes(row.kind)).map(row => row.kind)).toEqual(["Recap", "Compact"]);
+});
+
+test("Record capture is parsed into kinds and anchor context, with malformed rows counted and never raw-mined", async () => {
+  const f = await fixture();
+  const capture = new CaptureStore({ memoryDir: f.memoryDir, project, screen: () => false });
+  const valid = [
+    "amem: decision | - | Choose retry with a bounded budget.",
+    "amem: fix | src/retry.ts#run | Timeout -> bounded backoff.",
+    "amem: fail | src/retry.ts | Busy loop -> wait for a new condition.",
+    "amem: contract | - | The retry budget stays fixed.",
+    "amem: finding | src/retry.ts | Keep kim@example.org and /Users/synthetic/notes with confidential-codename masked.",
+    "amem: finding | src/retry.ts | Secret ghp_" + "a".repeat(36),
+    "amem: finding | src/ghp_" + "b".repeat(36) + ".ts | Synthetic anchor must be screened.",
+  ];
+  const malformed = [
+    "retry raw-unparsed-marker must never be mined",
+    "amem: unknown | src/retry.ts | raw-unparsed-marker",
+    "amem: finding | /Users/synthetic/retry.ts | raw-unparsed-marker",
+    valid[0]! + "\namem: unknown | src/retry.ts | raw-unparsed-marker",
+    "",
+    "```\n" + valid[0]! + "\n```",
+    "> " + valid[0]!,
+  ];
+  for (const excerpt of [...valid, ...malformed]) capture.append({ project, agent: "claude", event: "Record", excerpt, at: "2026-10-30T10:00:00.000Z" } as never);
+  for (const event of ["Recap", "Compact", "Title", "PostToolUse"]) capture.append({ project, agent: "claude", event, excerpt: "retry " + event, at: "2026-10-30T11:00:00.000Z" } as never);
+  capture.close();
+  const before = [tree(f.memoryDir), tree(f.vault), tree(f.home)];
+  const input = await readAmemForMining({ env: f.env, project, since: "2026-10-30T00:00:00.000Z" });
+  expect(input.malformedRecord).toBe(malformed.length);
+  expect(input.records.map(row => row.kind)).toEqual(["decision", "fix", "fail", "contract", "finding", "finding", "finding", "Recap", "Compact"]);
+  const fix = input.records.find(row => row.kind === "fix")!;
+  expect(fix.text).toBe("Timeout -> bounded backoff.\nsrc/retry.ts#run");
+  const vocab = { actions: [{ canon: "retry", surface: ["retry"] }], objects: [] };
+  expect([...findMatches(fix.text, buildSurfaceIndex(vocab.actions, vocab.objects, []))]).toEqual(["action--retry"]);
+  const result = mineRecords({ vault: "mine", days: 30, since: "2026-10-30", projects: [project], records: input.records, vocab, registry: [], skills: [], minSize: 3, minNovelty: .3, piiPatterns: ["confidential-codename"], today: "2026-10-31", dropped: { malformedRecord: input.malformedRecord } });
+  expect(result.records.capture).toBe(7);
+  expect(result.dropped).toMatchObject({ secret: 2, malformedRecord: malformed.length });
+  expect(result.candidates).toHaveLength(1);
+  expect(result.candidates[0]!.samples.some(row => row.kind === "fix")).toBe(true);
+  const output = JSON.stringify(result);
+  for (const text of ["raw-unparsed-marker", "ghp_", "kim@example.org", "/Users/synthetic", "confidential-codename"]) expect(output).not.toContain(text);
+  for (const text of ["[EMAIL]", "[PATH]", "[PII]"]) expect(output).toContain(text);
+  expect(result.report).toContain("malformed Record 7");
+  const integrated = await mineSkills(f.home, { vault: "mine", env: f.env, vocab: join(FIXTURES, "vocab"), now: NOW });
+  expect(integrated.dropped.malformedRecord).toBe(malformed.length);
+  expect(JSON.stringify(integrated)).not.toContain("raw-unparsed-marker");
+  const after = [tree(f.memoryDir), tree(f.vault), tree(f.home)];
+  for (let i = 0; i < before.length; i++) {
+    const content = (value: Map<string, string>) => new Map([...value].filter(([file]) => !/\.db-(wal|shm)$/.test(file)));
+    expect(content(after[i]!)).toEqual(content(before[i]!));
+  }
 });
