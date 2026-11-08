@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 // Test-only: the fixture authors amem rows through agent-mem's own stores; src/ reaches the root only via the seam.
 import { CaptureStore, MemoryStore, migrate } from "@staix/agent-mem";
+import { readAmemForMining } from "../src/amem/seam.ts";
 import { addVault } from "../src/registry.ts";
 import { runAsync } from "../src/cli.ts";
 import { createVaultMcp, VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
@@ -239,4 +240,62 @@ test("an absent amem home yields vault records only and creates no amem home", a
   expect(result.projects).toEqual([]);
   expect(result.records).toEqual({ curated: 0, capture: 0, vault: 3 });
   expect(() => statSync(missing)).toThrow();
+});
+
+
+test("Recap and Compact keep their event kinds, pass existing screens and leave Title/Record/tool rows out", async () => {
+  const f = await fixture();
+  const capture = new CaptureStore({ memoryDir: f.memoryDir, project, screen: () => false });
+  const rows = [
+    ["Recap", "Summarize meeting notes and email first recap"],
+    ["Compact", "Summarize meeting notes and email compact for kim@example.org at /Users/synthetic/notes with confidential-codename"],
+    ["Recap", "Summarize meeting notes and email second recap"],
+    ["Recap", "Summarize meeting ghp_" + "a".repeat(36)],
+    ["Title", "Summarize meeting notes excluded title"],
+    ["Record", "Summarize meeting notes excluded record"],
+    ["PostToolUse", "Summarize meeting notes excluded tool"],
+  ];
+  for (const [event, excerpt] of rows) capture.append({ project, agent: "claude", event: event!, excerpt: excerpt!, at: "2026-10-30T10:00:00.000Z" } as never);
+  capture.append({ project, agent: "claude", event: "Compact", excerpt: "Summarize meeting notes excluded old compact", at: "2025-01-01T00:00:00.000Z" } as never);
+  capture.close();
+  const before = [tree(f.memoryDir), tree(f.vault), tree(f.home)];
+  const input = await readAmemForMining({ env: f.env, project, since: "2026-10-01T00:00:00.000Z", piiPatterns: ["confidential-codename"] });
+  const summaries = input.records.filter(row => row.kind === "Recap" || row.kind === "Compact");
+  expect(summaries.map(row => row.kind)).toEqual(["Recap", "Compact", "Recap", "Recap"]);
+  expect(input.records.some(row => ["Title", "Record", "PostToolUse"].includes(row.kind))).toBe(false);
+  expect(JSON.stringify(input.records)).not.toContain("excluded old compact");
+  const result = mineRecords({ vault: "mine", days: 30, since: "2026-10-01", projects: [project], records: summaries, vocab: { actions: [actions[0]!], objects: [] }, registry: [], skills: [], minSize: 3, minNovelty: 0.3, piiPatterns: ["confidential-codename"], today: "2026-10-31" });
+  expect(result.records.capture).toBe(3);
+  expect(result.dropped.secret).toBe(1);
+  expect(result.candidates).toHaveLength(1);
+  expect(result.candidates[0]!.samples.map(row => row.kind).sort()).toEqual(["Compact", "Recap", "Recap"]);
+  const output = JSON.stringify(result);
+  for (const text of ["ghp_", "kim@example.org", "/Users/synthetic", "confidential-codename"]) expect(output).not.toContain(text);
+  for (const text of ["[EMAIL]", "[PATH]", "[PII]"]) expect(output).toContain(text);
+  const after = [tree(f.memoryDir), tree(f.vault), tree(f.home)];
+  for (let i = 0; i < before.length; i++) {
+    const content = (value: Map<string, string>) => new Map([...value].filter(([file]) => !/\.db-(wal|shm)$/.test(file)));
+    expect(content(after[i]!)).toEqual(content(before[i]!));
+  }
+});
+
+
+test("tool rows can crowd summaries outside a bounded read window and the report counts truncated shards", async () => {
+  const f = await fixture();
+  const capture = new CaptureStore({ memoryDir: f.memoryDir, project });
+  for (const [event, at] of [["Recap", "2026-10-29T00:00:00.000Z"], ["Compact", "2026-10-29T01:00:00.000Z"], ["PostToolUse", "2026-10-30T00:00:00.000Z"], ["PostToolUse", "2026-10-30T01:00:00.000Z"]]) {
+    capture.append({ project, agent: "claude", event: event!, excerpt: "Summarize meeting notes " + at, at: at! } as never);
+  }
+  capture.close();
+  const input = await readAmemForMining({ env: f.env, project, since: "2026-10-01T00:00:00.000Z", maxCaptureRows: 2 });
+  expect(input.truncatedCapture).toBe(1);
+  expect(input.records.filter(row => row.source === "capture")).toEqual([]);
+  const report = mineRecords({ vault: "mine", days: 30, since: "2026-10-01", projects: input.projects, records: [], vocab: { actions, objects }, registry: [], skills: [], minSize: 3, minNovelty: 0.3, today: "2026-10-31", dropped: { truncatedCapture: input.truncatedCapture } });
+  expect(report.dropped.truncatedCapture).toBe(1);
+  expect(report.report).toContain("truncated capture machine shards: 1");
+  expect(report.report).toContain("rows of any event beyond maxReadRows were not read");
+  expect(report.report).not.toContain("unavailable");
+  const complete = await readAmemForMining({ env: f.env, project, since: "2026-10-01T00:00:00.000Z", maxCaptureRows: 20 });
+  expect(complete.truncatedCapture).toBe(0);
+  expect(complete.records.filter(row => ["Recap", "Compact"].includes(row.kind)).map(row => row.kind)).toEqual(["Recap", "Compact"]);
 });
