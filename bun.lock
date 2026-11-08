@@ -5,7 +5,7 @@
     "": {
       "name": "@staix/vault-mem",
       "dependencies": {
-        "@staix/agent-mem": "0.17.0",
+        "@staix/agent-mem": "0.23.0",
       },
       "devDependencies": {
         "@staix/agent-console": "github:STAIxBWLB/agent-console#4c4c1e0",
@@ -17,7 +17,7 @@
   "packages": {
     "@staix/agent-console": ["@staix/agent-console@github:STAIxBWLB/agent-console#4c4c1e0", { "bin": { "acon": "bin/acon.js" } }, "STAIxBWLB-agent-console-4c4c1e0", "sha512-iebfTIq5/ty50QLiZVNnoEMT6WbhuCQajwp1Nb3NC2H3Yay7NptDC9f2xW8yJmGC/CT+T6gLxkAiEx3bH4/LQA=="],
 
-    "@staix/agent-mem": ["@staix/agent-mem@0.17.0", "", { "bin": { "amem": "bin/amem.js" } }, "sha512-ALMLDodu8vRPw+h55thnsiwXAKRMxBZb6bN/SZBLwk+Jpx/Yn2kFETowjCjlMEvFPOpxqJvx+3xdx04ZPdc+9Q=="],
+    "@staix/agent-mem": ["@staix/agent-mem@0.23.0", "", { "bin": { "amem": "bin/amem.js" } }, "sha512-deQq/o6aZ267ZKd1G4RHwXI/KGAU5MVgl2LbDnumrDigYpxLcVI8fBi6ZRdfNlDjRLV4v6AvCVjB0fpyXT1Fxg=="],
 
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 
