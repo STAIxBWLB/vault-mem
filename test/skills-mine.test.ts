@@ -293,7 +293,8 @@ test("tool rows can crowd summaries outside a bounded read window and the report
   const report = mineRecords({ vault: "mine", days: 30, since: "2026-10-01", projects: input.projects, records: [], vocab: { actions, objects }, registry: [], skills: [], minSize: 3, minNovelty: 0.3, today: "2026-10-31", dropped: { truncatedCapture: input.truncatedCapture } });
   expect(report.dropped.truncatedCapture).toBe(1);
   expect(report.report).toContain("truncated capture machine shards: 1");
-  expect(report.report).toContain("excluded event-row counts unavailable");
+  expect(report.report).toContain("rows of any event beyond maxReadRows were not read");
+  expect(report.report).not.toContain("unavailable");
   const complete = await readAmemForMining({ env: f.env, project, since: "2026-10-01T00:00:00.000Z", maxCaptureRows: 20 });
   expect(complete.truncatedCapture).toBe(0);
   expect(complete.records.filter(row => ["Recap", "Compact"].includes(row.kind)).map(row => row.kind)).toEqual(["Recap", "Compact"]);

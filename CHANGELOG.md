@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Skill mining includes agent-mem `Recap` and `Compact` capture excerpts with their event kinds, through the existing read-only screening and masking pipeline. The Markdown report now exposes the truncated capture-window shard count already present in JSON. `Title` and tool events remain excluded; `Record` support, exact excluded-Record counts and promotion drafting remain deferred (#163, Step 1).
+- Skill mining includes agent-mem `Recap` and `Compact` capture excerpts with their event kinds, through the existing read-only screening and masking pipeline. The Markdown report now exposes the truncated capture-window shard count already present in JSON and states that rows of any event beyond the window were not read. `Title` and tool events remain excluded; `Record` support and promotion drafting remain deferred (#163, Step 1).
 
 - Release evidence: a new dgx02 measurement through `remote_dev.py run --cgroup` replaces the synthetic performance report (cgroup `memory.peak` 88.98 MB, sampled peak 129.82 MB, idle 44.45 MB, search p95 22.57 ms) and passes `release:verify`; the 0.5.1 report is kept as `docs/evidence/v0.5.1-synthetic-performance.json` (#156).
 
