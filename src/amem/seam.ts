@@ -50,19 +50,19 @@ export async function openAmem(options: AmemOptions = {}): Promise<AmemSeam> {
   };
 }
 export interface MineAmemRecord { source: "curated" | "capture"; kind: string; at: string; text: string; project: string }
-export interface MineAmemRead { records: MineAmemRecord[]; projects: string[]; screened: number; truncatedCapture: number; unreadable: number }
+export interface MineAmemRead { records: MineAmemRecord[]; projects: string[]; screened: number; truncatedCapture: number; unreadable: number; malformedRecord: number }
 const MINE_KINDS = new Set(["decision", "finding", "contract", "fail"]);
-const MINE_EVENTS = new Set(["UserPromptSubmit", "observation", "summary", "Recap", "Compact"]);
+const MINE_EVENTS = new Set(["UserPromptSubmit", "observation", "summary", "Recap", "Compact", "Record"]);
 /**
  * Skill mining input, read-only: curated entries (screened by amem's standalone policy plus the vault's piiPatterns) and
- * capture rows (events UserPromptSubmit/observation/summary/Recap/Compact) of every active project, or one. Opens nothing that does not
+ * capture rows (events UserPromptSubmit/observation/summary/Recap/Compact/Record) of every active project, or one. Opens nothing that does not
  * exist: an absent home, a capture-only shard or an unsplit home without curated logs yields no rows, never a new store.
  */
 export async function readAmemForMining(options: { env?: NodeJS.ProcessEnv; project?: string; since: string; piiPatterns?: string[]; maxCaptureRows?: number }): Promise<MineAmemRead> {
   const amem = await import("@staix/agent-mem");
   const { existsSync } = await import("node:fs"), { basename, join } = await import("node:path");
   const base = amem.memoryHome(options.env ?? process.env), maxRows = options.maxCaptureRows ?? 20000;
-  const out: MineAmemRead = { records: [], projects: [], screened: 0, truncatedCapture: 0, unreadable: 0 };
+  const out: MineAmemRead = { records: [], projects: [], screened: 0, truncatedCapture: 0, unreadable: 0, malformedRecord: 0 };
   if (!existsSync(base)) return out;
   const policy = amem.createStandalonePolicy({ ...(options.piiPatterns?.length ? { piiPatterns: [...options.piiPatterns] } : {}) });
   const state = amem.lifecycleResolver(base);
@@ -95,8 +95,17 @@ export async function readAmemForMining(options: { env?: NodeJS.ProcessEnv; proj
           capture = new amem.CaptureStore({ memoryDir: base, project: shard.key, machine: basename(dir), readOnly: true, recentReadRows: true, maxReadRows: maxRows });
           if (capture.recentReadTruncated) out.truncatedCapture++;
           for (const row of capture.rows({ limit: maxRows })) {
-            if (!MINE_EVENTS.has(row.event) || row.at < options.since || !row.excerpt.trim()) continue;
-            out.records.push({ source: "capture", kind: row.event, at: row.at, text: row.excerpt, project: shard.key });
+            if (!MINE_EVENTS.has(row.event) || row.at < options.since) continue;
+            if (row.event === "Record") {
+              const parsed = amem.parseRecordLines(row.excerpt);
+              if (parsed.incomplete || !parsed.records.length || Object.keys(parsed.drops).length) { out.malformedRecord++; continue; }
+              for (const record of parsed.records) {
+                // Anchors enter the same matching, screening, masking and byte bounds as the authored text.
+                out.records.push({ source: "capture", kind: record.kind, at: row.at, text: [record.text, ...record.anchors].join("\n"), project: shard.key });
+              }
+              continue;
+            }
+            if (row.excerpt.trim()) out.records.push({ source: "capture", kind: row.event, at: row.at, text: row.excerpt, project: shard.key });
           }
         } catch { out.unreadable++; }
         finally { capture?.close(); }

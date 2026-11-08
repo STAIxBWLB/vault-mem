@@ -47,7 +47,7 @@ export interface MineOptions {
 export interface MineResult {
   vault: string; days: number; since: string; projects: string[];
   records: Record<RecordSource, number>;
-  dropped: { secret: number; policy: number; oversized: number; duplicate: number; unreadable: number; truncatedCapture: number };
+  dropped: { secret: number; policy: number; oversized: number; duplicate: number; unreadable: number; truncatedCapture: number; malformedRecord: number };
   graph: { nodes: number; edges: number; communities: number; partitioner: "leiden" };
   godNodes: { id: string; degree: number }[];
   candidates: Candidate[];
@@ -322,7 +322,7 @@ export interface MineInputs {
 }
 /** The pure part: screen, mask, match, cluster, score and render. */
 export function mineRecords(input: MineInputs): MineResult {
-  const dropped: MineResult["dropped"] = { secret: 0, policy: 0, oversized: 0, duplicate: 0, unreadable: 0, truncatedCapture: 0, ...input.dropped };
+  const dropped: MineResult["dropped"] = { secret: 0, policy: 0, oversized: 0, duplicate: 0, unreadable: 0, truncatedCapture: 0, malformedRecord: 0, ...input.dropped };
   const ordered = [...input.records].sort((a, b) => compare(a.at, b.at) || compare(a.source, b.source) || compare(a.project, b.project) || compare(a.text, b.text));
   const kept: MineRecord[] = [], texts = new Set<string>();
   let total = 0;
@@ -397,7 +397,7 @@ export function renderReport(result: Omit<MineResult, "report">, today: string, 
     `# Skill Candidates (${today}, memory-based)`, "",
     `- corpus: ${total} records / ${result.days} days (curated ${result.records.curated}, capture ${result.records.capture}, vault ${result.records.vault})`,
     `- projects: ${result.projects.length}`,
-    `- dropped: secret ${result.dropped.secret}, policy ${result.dropped.policy}, oversized ${result.dropped.oversized}, duplicate ${result.dropped.duplicate}, unreadable ${result.dropped.unreadable}`,
+    `- dropped: secret ${result.dropped.secret}, policy ${result.dropped.policy}, oversized ${result.dropped.oversized}, duplicate ${result.dropped.duplicate}, unreadable ${result.dropped.unreadable}, malformed Record ${result.dropped.malformedRecord}`,
     `- truncated capture machine shards: ${result.dropped.truncatedCapture}; rows of any event beyond maxReadRows were not read`,
     `- graph: ${result.graph.nodes} nodes, ${result.graph.edges} edges, ${result.graph.communities} communities (deterministic Leiden)`, "",
   ];
@@ -450,7 +450,7 @@ export async function mineSkills(home: string, options: MineOptions): Promise<Mi
   const amem = await readAmemForMining({ env: options.env, since, ...(options.project ? { project: options.project } : {}), piiPatterns: local.config.piiPatterns ?? [] });
   return mineRecords({
     vault: options.vault, days, since, projects: amem.projects, records: [...amem.records, ...local.records], vocab, registry, skills, minSize, minNovelty, piiPatterns: local.config.piiPatterns ?? [],
-    today: localDate(now), dropped: { policy: amem.screened, unreadable: amem.unreadable + local.unreadable, truncatedCapture: amem.truncatedCapture },
+    today: localDate(now), dropped: { policy: amem.screened, unreadable: amem.unreadable + local.unreadable, truncatedCapture: amem.truncatedCapture, malformedRecord: amem.malformedRecord },
   });
 }
 
