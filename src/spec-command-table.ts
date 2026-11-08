@@ -8,7 +8,7 @@ const schema = (properties: Record<string, unknown>, required: string[] = []) =>
 const listChanges = { type: "object", properties: Object.fromEntries(listFields.map(field => [field, { type: "array", items: string(4096), maxItems: 256 }])), additionalProperties: false, maxProperties: listFields.length };
 const scalarChanges = { type: "object", properties: {
   title: string(4096), type: { type: "string", enum: ["goal", "architecture", "module", "submodule"] },
-  status: { type: "string", enum: ["draft", "active", "deprecated"] }, parent: string(1024), "superseded-by": string(1024), "verified-against": { ...string(40, 40), pattern: "^[a-f0-9]{40}$" },
+  status: { type: "string", enum: ["draft", "active", "deprecated"] }, parent: string(1024), "superseded-by": string(1024), "verified-against": { ...string(64, 40), pattern: "^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$" },
 }, additionalProperties: false, maxProperties: 6 };
 /** Implemented commands only; CLI flags and MCP definitions share these schemas. */
 export const SPEC_COMMANDS = [

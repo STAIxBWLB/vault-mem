@@ -445,7 +445,6 @@ Validation candidates are any `SPEC.md`, plus Markdown with parsed `id` or `type
 
 The portable schema contract is [test/fixtures/spec-graph/README.md](test/fixtures/spec-graph/README.md), with independent small valid/error/warning trees and expected codes. Consumers can copy the fixtures without a runtime dependency. Validation/CI reports omit raw sources; display limits are 1..500 records per collection and 128 KiB total, with errors shown before warnings, with `truncated` when records or oversized optional identifiers are omitted. Fixing errors and rerunning reveals later items.
 
-
 `vmem_spec_update` / `vmem spec update <id>` share the update schema in `SPEC_COMMANDS`:
 
 - `set` (`--set JSON`) accepts scalar `title`, `type`, `status`, `parent`, `superseded-by` and `verified-against`. Types are `goal|architecture|module|submodule`; statuses are `draft|active|deprecated`.

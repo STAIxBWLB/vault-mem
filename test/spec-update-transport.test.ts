@@ -14,11 +14,11 @@ import { specGit } from "../src/spec-git.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-function fixture(write: "mcp" | "cli" | "none" = "mcp") {
+function fixture(write: "mcp" | "cli" | "none" = "mcp", objectFormat?: "sha256") {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-spec-update-transport-"))); roots.push(root);
   const home = join(root, "state"), repo = join(root, "repo"); mkdirSync(repo);
   const git = (args: string[]) => specGit(repo, ["-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid", "-c", "commit.gpgsign=false", ...args]);
-  git(["-c", "init.templateDir=", "init", "--quiet"]);
+  git(["-c", "init.templateDir=", "init", "--quiet", ...(objectFormat ? ["--object-format=sha256"] : [])]);
   const file = join(repo, "SPEC.md");
   writeFileSync(file, '---\nid: root\ntype: goal\ntitle: Original\nstatus: draft\ntags: [alpha, beta]\n---\n# Body stays unchanged\n');
   git(["add", "."]); git(["commit", "--quiet", "-m", "Synthetic update fixture"]);
@@ -91,3 +91,25 @@ test("MCP spec update refuses a changed startup registry binding before writing"
   expect(() => server.handlers.vmem_spec_update!({ id: "root", set: { title: "Forbidden" } })).toThrow("registry changed since server startup");
   expect(readFileSync(f.file, "utf8")).toBe(before);
 });
+
+
+test("spec update accepts SHA-1 and SHA-256 verification commits in either hex case", () => {
+  const schema = specCommandSchema("update");
+  const fields = schema.properties as unknown as Record<string, { properties: Record<string, { pattern: string }> }>;
+  const stampSchema = fields.set!.properties["verified-against"]!;
+  const pattern = new RegExp(stampSchema.pattern);
+  for (const format of [undefined, "sha256"] as const) {
+    const f = fixture("mcp", format);
+    const stamp = specGit(f.repo, ["rev-parse", "HEAD"], { env: f.env }).stdout.toString().trim();
+    expect(stamp).toHaveLength(format ? 64 : 40);
+    for (const value of [stamp, stamp.toUpperCase()]) {
+      expect(pattern.test(value)).toBe(true);
+      expect(argumentError({ id: "root", set: { "verified-against": value } }, schema)).toBeUndefined();
+      const result = runSpecCommand(["update", "root", "--set", JSON.stringify({ "verified-against": value }), "--json"], f.env);
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.text).ok).toBe(true);
+      expect(parseFrontmatter(readFileSync(f.file, "utf8")).data["verified-against"]).toBe(value);
+    }
+  }
+  for (const value of ["a".repeat(39), "a".repeat(41), "a".repeat(63), "a".repeat(65), "g".repeat(40)]) expect(pattern.test(value)).toBe(false);
+}, 30_000);
