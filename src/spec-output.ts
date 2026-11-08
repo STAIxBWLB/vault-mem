@@ -3,6 +3,7 @@
  * and never adds content to it; data goes through `clean()` in tables and fields, and bodies keep their lines with
  * terminal escape sequences stripped.
  */
+import type { SpecWriteResult } from "./spec-write.ts";
 import type { SpecCommand } from "./spec-command-table.ts";
 import type { SpecEdge, SpecNode } from "./spec-graph.ts";
 import type { SpecFreshnessEntry } from "./spec-freshness.ts";
@@ -111,7 +112,16 @@ export function renderSpecValidate(r: SpecValidateResult, o: TextOptions, contex
       paint(verdict, r.ok ? "ok" : "fail", o)].filter(Boolean).join("\n"));
 }
 
+/** A frontmatter mutation receipt shows the verdict and SHA without repeating authored content. */
+export function renderSpecUpdate(r: SpecWriteResult, o: TextOptions): string {
+  const verdict = r.ok ? r.changed ? "updated" : "unchanged" : "refused";
+  return blocks(heading(`spec update ${r.id ?? ""}: ${verdict}`.trim(), o),
+    fields([["source", r.source], ["worktree", r.worktree], ["path", r.path], ["sha256", r.sha256], ["actor", r.actor]], o),
+    issueTable(r.issues, o));
+}
+
 export function renderSpec(command: SpecCommand, result: unknown, o: TextOptions, context: SpecTextContext): string {
+  if (command === "update") return renderSpecUpdate(result as SpecWriteResult, o);
   if (command === "get") return renderSpecGet(result as SpecGetResult, o, context);
   if (command === "graph") return renderSpecGraph(result as SpecGraphResult, o, context);
   if (command === "grep") return renderSpecGrep(result as SpecGrepResult, o, context);

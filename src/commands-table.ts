@@ -7,12 +7,13 @@ const SPEC_HELP: Record<SpecCommand, string> = {
   graph: "read a bounded slice of the spec graph",
   grep: "search specs by terms or literal text with metadata filters",
   validate: "validate specs and report errors, warnings and freshness",
+  update: "update spec frontmatter with validation, policy and expected SHA guards",
 };
 /** Help sections in print order; every COMMANDS entry names one. */
 export const HELP_SECTIONS = ["Registry", "Read", "Write", "Log", "Analysis", "Promotion and sync", "Design specs", "Setup"] as const;
 interface CommandEntry { name: string; usage: string; mutates: boolean | string; section: typeof HELP_SECTIONS[number]; description: string }
 export const COMMANDS = [
-  ...SPEC_COMMANDS.map(item => ({ name: `spec ${item.command}`, usage: item.usage, mutates: false, section: "Design specs" as const, description: SPEC_HELP[item.command] })),
+  ...SPEC_COMMANDS.map(item => ({ name: `spec ${item.command}`, usage: item.usage, mutates: item.command === "update", section: "Design specs" as const, description: SPEC_HELP[item.command] })),
   { name: "lint", usage: "lint <vault> [--note PATH] [--write] [--dry-run] [--json]", mutates: "write", section: "Analysis", description: "lint links, schema, filenames and the log; --write saves a screened report" },
   { name: "graph build", usage: "graph build <vault> [--workspace] [--dry-run] [--json]", mutates: true, section: "Analysis", description: "build the vault graph, or the workspace graph with --workspace, under reports/" },
   { name: "graph neighbors", usage: "graph neighbors <vault> <stem> [--hops 1..2] [--limit 1..500] [--relation REL] [--json]", mutates: false, section: "Analysis", description: "read a note's graph neighborhood up to two hops, optionally over one link relation" },

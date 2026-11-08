@@ -7,9 +7,9 @@ import { loadRegistry } from "./registry.ts";
 import { PLAIN, type TextOptions } from "./text-output.ts";
 import { renderSpec } from "./spec-output.ts";
 
-/** Spec tool definitions; every spec tool is read-only. */
+/** Spec definitions retain read annotations for reads; update is a policy-gated mutation. */
 export const specTools = (): McpTool[] => SPEC_COMMANDS.map(item => ({ name: item.name, description: item.description, inputSchema: item.inputSchema,
-  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } }));
+  annotations: { readOnlyHint: item.command !== "update", destructiveHint: false, idempotentHint: true, openWorldHint: false } }));
 
 export function createSpecMcp(home: string, env: NodeJS.ProcessEnv = process.env): { tools: McpTool[]; handlers: Record<string, McpHandler> } {
   const registered = loadRegistry(home).specs ?? [];
@@ -17,12 +17,12 @@ export function createSpecMcp(home: string, env: NodeJS.ProcessEnv = process.env
   const handlers: Record<string, McpHandler> = {};
   for (const item of SPEC_COMMANDS) handlers[item.name] = args => {
     const invalid = argumentError(args, item.inputSchema);
-    if (invalid) throw new Error(invalid);
+    if (invalid) throw new Error(`${invalid}; see vmem spec ${item.command} --help to correct the arguments`);
     const selected = registered.find(source => source.id === (args.source ?? registered[0]?.id));
     if (!selected) throw new Error("spec source: no matching source in the server's startup registry; pass the source argument with a registered id, or register with vmem specs add and restart the MCP server");
     const current = loadRegistry(home).specs?.find(source => source.id === selected.id);
-    if (!current || JSON.stringify(current) !== JSON.stringify(selected)) throw new Error("spec source: registry changed since server startup; restart the MCP server before reading");
-    return executeSpecCommand(home, item.command, { ...args, source: selected.id }, env);
+    if (!current || JSON.stringify(current) !== JSON.stringify(selected)) throw new Error("spec source: registry changed since server startup; restart the MCP server before retrying the spec command");
+    return executeSpecCommand(home, item.command, { ...args, source: selected.id }, env, { channel: "mcp", binding: selected });
   };
   return { tools, handlers };
 }
@@ -55,9 +55,12 @@ export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.
     if (properties[key!]!.type === "integer") {
       if (!/^[0-9]+$/.test(value)) throw new Error(`${flag}: expected integer; see vmem spec ${item.command} --help for its bounds`);
       values[key!] = Number(value);
+    } else if (properties[key!]!.type === "object" || properties[key!]!.type === "array") {
+      try { values[key!] = JSON.parse(value); }
+      catch { throw new Error(`${flag}: invalid JSON; supply a JSON ${properties[key!]!.type} as shown by vmem spec ${item.command} --help`); }
     } else values[key!] = value;
   }
-  const takesId = item.command === "get" || item.command === "graph";
+  const takesId = item.command === "get" || item.command === "graph" || item.command === "update";
   if (positional.length > (item.command === "validate" ? 0 : 1) || (takesId && positional.length !== 1)) throw new Error(`spec ${item.command}: unexpected targets; use vmem ${item.usage}`);
   if (positional[0] !== undefined) values[takesId ? "id" : "query"] = positional[0];
   const invalid = argumentError(values, item.inputSchema);
@@ -66,6 +69,6 @@ export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.
   const result = repo !== undefined
     ? validateSpecRepo(repo, { requireFresh: values.requireFresh as boolean | undefined, limit: values.limit as number | undefined, env }).report
     : executeSpecCommand(resolveHome(env).home, item.command, values, env);
-  const code = item.command === "validate" && !(result as { ok: boolean }).ok ? 1 : 0;
+  const code = (item.command === "validate" || item.command === "update") && !(result as { ok: boolean }).ok ? 1 : 0;
   return { text: json ? JSON.stringify(result) : renderSpec(item.command, result, text, { args, values, ...(repo !== undefined ? { repo } : {}) }), code };
 }
