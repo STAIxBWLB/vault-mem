@@ -52,10 +52,10 @@ export async function openAmem(options: AmemOptions = {}): Promise<AmemSeam> {
 export interface MineAmemRecord { source: "curated" | "capture"; kind: string; at: string; text: string; project: string }
 export interface MineAmemRead { records: MineAmemRecord[]; projects: string[]; screened: number; truncatedCapture: number; unreadable: number }
 const MINE_KINDS = new Set(["decision", "finding", "contract", "fail"]);
-const MINE_EVENTS = new Set(["UserPromptSubmit", "observation", "summary"]);
+const MINE_EVENTS = new Set(["UserPromptSubmit", "observation", "summary", "Recap", "Compact"]);
 /**
  * Skill mining input, read-only: curated entries (screened by amem's standalone policy plus the vault's piiPatterns) and
- * capture rows (events UserPromptSubmit/observation/summary) of every active project, or one. Opens nothing that does not
+ * capture rows (events UserPromptSubmit/observation/summary/Recap/Compact) of every active project, or one. Opens nothing that does not
  * exist: an absent home, a capture-only shard or an unsplit home without curated logs yields no rows, never a new store.
  */
 export async function readAmemForMining(options: { env?: NodeJS.ProcessEnv; project?: string; since: string; piiPatterns?: string[]; maxCaptureRows?: number }): Promise<MineAmemRead> {

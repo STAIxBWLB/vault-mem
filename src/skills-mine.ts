@@ -398,6 +398,7 @@ export function renderReport(result: Omit<MineResult, "report">, today: string, 
     `- corpus: ${total} records / ${result.days} days (curated ${result.records.curated}, capture ${result.records.capture}, vault ${result.records.vault})`,
     `- projects: ${result.projects.length}`,
     `- dropped: secret ${result.dropped.secret}, policy ${result.dropped.policy}, oversized ${result.dropped.oversized}, duplicate ${result.dropped.duplicate}, unreadable ${result.dropped.unreadable}`,
+    `- truncated capture machine shards: ${result.dropped.truncatedCapture}; excluded event-row counts unavailable with the current agent-mem pin`,
     `- graph: ${result.graph.nodes} nodes, ${result.graph.edges} edges, ${result.graph.communities} communities (deterministic Leiden)`, "",
   ];
   if (result.godNodes.length) {
