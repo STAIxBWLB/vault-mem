@@ -107,16 +107,22 @@ test("create refuses invalid metadata, preserves pre-existing errors and isolate
   expect(existsSync(join(f.repo, "linked.md"))).toBe(false); expect(existsSync(join(linked, "linked.md"))).toBe(true);
 }, 30_000);
 
-for (const mode of ["policy-drift", "target-appears", "temp-write", "tree-drift", "publish", "publish-race"]) test(`create ${mode} refusal cleans owned staging and preserves a concurrent writer's file`, () => {
+for (const mode of ["policy-drift", "target-appears", "temp-write", "tree-drift", "publish", "publish-race", "link-EPERM", "link-ENOTSUP", "link-EXDEV"]) test(`create ${mode} refusal cleans owned staging and preserves a concurrent writer's file`, () => {
   const f = fixture();
   const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-create-fault.ts"), f.home, mode], { env: { ...process.env, ...f.env }, stdout: "pipe", stderr: "pipe", timeout: 20000 });
   expect(child.exitCode).toBe(0);
   const result = JSON.parse(child.stdout.toString()) as SpecWriteResult;
   expect(result).toMatchObject({ ok: false, changed: false });
+  if (mode.startsWith("link-")) {
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: "LINK", path: "new/deep/SPEC.md", message: expect.stringContaining(mode.slice(5)) }));
+    expect(result.issues[0]!.message).toContain("filesystem hard-link support and permissions");
+    expect(result.issues[0]!.message).toContain("never falls back to rename");
+  }
   const file = join(f.repo, "new/deep/SPEC.md");
   if (mode === "target-appears" || mode === "publish-race") {
     expect(readFileSync(file, "utf8")).toBe("foreign file\n");
     expect(readdirSync(join(f.repo, "new/deep"))).toEqual(["SPEC.md"]);
+    if (mode === "publish-race") expect(result.issues[0]!.code).toBe("EEXIST");
   } else expect(existsSync(join(f.repo, "new"))).toBe(false);
   expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
 }, 30_000);

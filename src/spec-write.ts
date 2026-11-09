@@ -124,7 +124,14 @@ function checkExpectedSha(change: SpecMutation, expectedSha: string | undefined)
 }
 /** A new target is published without replacement; an update replaces its checked original. */
 function publishSpec(temp: string, file: string, change: SpecMutation, result: SpecWriteResult): void {
-  if (change.before === null) linkSync(temp, file);
+  if (change.before === null) {
+    try { linkSync(temp, file); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "IO";
+      if (code === "EEXIST") refuse("EEXIST", "create target appeared before publication; inspect the existing file and choose an absent path before retrying", change.path);
+      refuse("LINK", `create hard-link publication failed (${code}: ${error instanceof Error ? error.message : "unavailable link"}); check filesystem hard-link support and permissions, then choose a writable worktree on a filesystem supporting same-directory hard links; create never falls back to rename`, change.path);
+    }
+  }
   else renameSync(temp, file);
   result.changed = true; result.sha256 = hash(change.after);
   if (change.before === null) unlinkSync(temp);
