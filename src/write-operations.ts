@@ -132,8 +132,8 @@ export function stampNoteContent(source: string, today: string, create: boolean,
   const dates = { updated: today, ...(create && !Object.hasOwn(doc.data, "created") ? { created: today } : {}) };
   const references = frontmatterReferences(doc);
   const skipStamp = (cause: string) => {
-    const repair = references.length ? "replace the alias with a literal value and remove any unused anchor" : "repair the header or replace the incompatible value with a supported literal";
-    warning?.(`automatic dates were not set: ${cause}; ${repair} through a frontmatter edit to stamp updated${create && !Object.hasOwn(doc.data, "created") ? " and explicitly set created" : ""}`);
+    const repair = "open this note in a text editor and rewrite the header as a block mapping with plain literal values" + (references.length ? ", replacing any aliases with their literal values and removing anchors" : "");
+    warning?.(`automatic dates were not set: ${cause}; ${repair}; later authored writes stamp updated automatically${create && !Object.hasOwn(doc.data, "created") ? "; set created explicitly in the repaired header if it was also skipped" : ""}`);
     return source;
   };
   let candidate: string;

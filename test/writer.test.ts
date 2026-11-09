@@ -103,7 +103,7 @@ for (const [op, value] of [["patch", ".inf"], ["append", ".inf"], ["link", ".inf
     : { op, old: "old", next: "next" };
   const result = writeAtDate(f, operation);
   expect(result).toMatchObject({ ok: true, applied: true });
-  expect(result.issues).toContainEqual(expect.objectContaining({ code: "V01", severity: "warning", path: `notes/${path}.md`, message: expect.stringMatching(/content was saved.*automatic dates were not set.*cannot round-trip.*frontmatter edit.*updated/) }));
+  expect(result.issues).toContainEqual(expect.objectContaining({ code: "V01", severity: "warning", path: `notes/${path}.md`, message: expect.stringMatching(/content was saved.*automatic dates were not set.*cannot round-trip.*text editor.*block mapping.*updated/) }));
   expect(result.issues.some(issue => issue.code === "IO")).toBe(false);
   const text = readFileSync(file, "utf8"); expect(text.startsWith(header)).toBe(true);
   expect(parseFrontmatter(text).data.updated).toBe("2026-01-01");
@@ -124,8 +124,8 @@ for (const operation of ["patch", "append"] as const) for (const [name, fields] 
   expect(result).toMatchObject({ ok: true, applied: true });
   const warning = result.issues.find(issue => issue.code === "V01" && issue.severity === "warning" && /anchor|alias/i.test(issue.message));
   expect(warning).toMatchObject({ path: "notes/old.md" });
-  expect(warning!.message).toContain("replace the alias with a literal value");
-  expect(warning!.message).toMatch(/content was saved.*frontmatter edit.*updated/);
+  expect(warning!.message).toContain("replacing any aliases with their literal values and removing anchors");
+  expect(warning!.message).toMatch(/content was saved.*text editor.*block mapping.*updated/);
   expect(warning!.message).not.toMatch(/retry|repeat|rerun/i);
   expect(result.issues.some(issue => issue.code === "IO" || issue.severity === "error")).toBe(false);
   const text = readFileSync(file, "utf8");
@@ -695,9 +695,38 @@ for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} dat
   expect(readFileSync(file, "utf8")).toBe(source);
   const result = writeAtDate(f, request); expect(result).toMatchObject({ ok: true, applied: true });
   const warning = result.issues.find(issue => issue.severity === "warning" && issue.message.includes("automatic dates"))!;
-  expect(warning.message).toMatch(/content was saved.*header could not be rewritten without changing a value.*frontmatter edit.*updated/);
+  expect(warning.message).toMatch(/content was saved.*header could not be rewritten without changing a value.*text editor.*block mapping.*updated/);
   expect(warning.message).not.toMatch(/alias|anchor|retry|repeat|rerun/i);
   const after = readFileSync(file, "utf8"); expect(after.startsWith(header)).toBe(true);
   expect(parseFrontmatter(after).data).toEqual(parseFrontmatter(source).data);
   expect(after).toContain(operation === "patch" ? "Changed value text." : "Added value evidence.");
+});
+
+for (const cause of ["non-JSON flow", "flow value mismatch", "date alias"] as const) test(`AC1 advised manual header repair works for ${cause} before the next distinct authored write`, () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  const fields = { title: "Manual Repair", description: cause === "flow value mismatch" ? "Synthetic NEL value." : "Synthetic header repair evidence.", type: "insight", domain: "research", topics: ["[[research]]"], updated: "2026-01-01" };
+  let block = Object.entries(fields).map(([key, value]) => `${key}: ${JSON.stringify(value)}\n`).join("");
+  let yaml = JSON.stringify(cause === "non-JSON flow" ? { ...fields, methodology: { threshold: "NON_JSON" } } : fields).replace('"NON_JSON"', ".inf");
+  if (cause === "non-JSON flow") block += "methodology:\n  threshold: .inf\n";
+  if (cause === "flow value mismatch") { yaml = yaml.replace("NEL", String.raw`\N`); block = block.replace("NEL", String.raw`\N`); }
+  if (cause === "date alias") { yaml = block.replace('updated: "2026-01-01"\n', 'updated: &day "2026-01-01"\ncreated: *day\n'); block += 'created: "2026-01-01"\n'; }
+  const header = `---\n${yaml}\n---\n`;
+  writeFileSync(file, header + "# Manual Repair\n\nOriginal repair prose.\n\n## Topics\n\n- [[research]]\n");
+  const first = writeAtDate(f, { op: "append", path: "old", section: "Evidence", markdown: "First saved evidence." });
+  expect(first).toMatchObject({ ok: true, applied: true });
+  const warning = first.issues.find(issue => issue.message.includes("automatic dates"))!;
+  expect(warning.message).toMatch(/content was saved.*text editor.*block mapping with plain literal values.*later authored writes stamp updated automatically/);
+  expect(warning.message).not.toMatch(/frontmatter edit|retry|repeat|rerun/i);
+  if (cause === "date alias") expect(warning.message).toContain("replacing any aliases with their literal values and removing anchors");
+  const saved = parseFrontmatter(readFileSync(file, "utf8"));
+  expect(saved.data.updated).toBe("2026-01-01");
+  // Simulate the instructed text-editor header edit, not the refused/no-op vmem metadata operation.
+  writeFileSync(file, `---\n${block}---\n${saved.body}`);
+  const repaired = parseFrontmatter(readFileSync(file, "utf8")); expect(repaired.data).toEqual(saved.data);
+  const next = writeAtDate(f, { op: "append", path: "old", section: "After Repair", markdown: "New evidence after manual repair." });
+  expect(next).toMatchObject({ ok: true, applied: true, issues: [] });
+  const after = parseFrontmatter(readFileSync(file, "utf8"));
+  expect(after.data).toEqual({ ...repaired.data, updated: contentDate });
+  expect(after.body.split("First saved evidence.")).toHaveLength(2);
+  expect(after.body.split("New evidence after manual repair.")).toHaveLength(2);
 });
