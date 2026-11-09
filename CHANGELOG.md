@@ -30,6 +30,8 @@
 
 - CI now exposes the `ci-ok` aggregate over the check matrix, requires release tags to be on main with a green main-push Check on the same commit, provides the guarded `release:tag` script, and pins checkout v6 consistently across workflows (#153).
 
+- Vault statistics add the note text size in bytes and words, in total and by type and domain, and a note-to-source byte ratio: for notes whose frontmatter `source` names readable workspace files, the note's size over theirs, reported as median and p90 with the notes larger than their sources and the five largest. Each source counts at its own size on disk rather than at the size of its decoded text. Non-file sources, denied or missing paths, files past the 2 MiB read bound, a file that would take the 64 MiB source total past its cap, and anything past the per-call bounds are skipped and counted, and `truncatedNotes` counts the sourced notes the index's 10000-note cap left out. Stats stay read-only (#165 part 5).
+
 ## [0.5.1] - 2026-11-05
 
 - Console inbox snapshots share a background refresh, keep prior rows through refreshes and source failures, and wait at most 700 ms cold before showing a refreshing row. Payloads are capped at 50 prioritized rows with bounded Unicode-safe title and detail. `moreIsLowerBound` identifies "at least N more" when agent-mem's per-project candidate limit prevents an exact total. Applied writes invalidate freshness without clearing triage; source workers refresh on a 60-second cache and have a 30-second termination budget (#149).

@@ -55,7 +55,7 @@ export const COMMANDS = [
   { name: "setup", usage: "setup <claude|codex|kimi|pi|qwen|jcode|agy|all> [--root PATH] [--apply|--undo] [--json]", mutates: "apply", section: "Setup", description: "preview, apply or undo the vmem MCP entry in agent hosts" },
   { name: "manifest", usage: "manifest [--json]", mutates: false, section: "Setup", description: "print the package version, MCP tools and command names" },
   { name: "completion", usage: "completion <bash|zsh|fish>", mutates: false, section: "Setup", description: "print a shell completion script built from this table" },
-  { name: "stats", usage: "stats <vault> [--days 1..3650] [--json]", mutates: false, section: "Read", description: "count notes by type, domain and status, recent edits and log events" },
+  { name: "stats", usage: "stats <vault> [--days 1..3650] [--json]", mutates: false, section: "Read", description: "count notes by type, domain and status, note size and note-to-source ratio, recent edits and log events" },
 ] as const satisfies readonly CommandEntry[];
 const RELATIONS = ["supports", "contradicts", "extends", "applies-to", "context-for"] as const;
 const LOG_EVENT_TYPES = ["INGEST", "ROUTE", "EXTRACT", "CONNECT", "DIGEST", "LEARN", "LINT", "TASK", "GRAPH", "SYNC", "RETHINK", "SOURCE"] as const;

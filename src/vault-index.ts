@@ -170,6 +170,14 @@ export interface IndexSourceAdapter {
 }
 export class IndexCacheError extends Error {}
 export interface IndexOptions { memory?: boolean; adapter?: IndexSourceAdapter; reuseCache?: boolean }
+/** Whitespace-separated tokens of a note source, frontmatter included; 0 for an empty source. */
+const wordCount = (source: string) => { const trimmed = source.trim(); return trimmed ? trimmed.split(/\s+/u).length : 0; };
+/** Note text size in bytes and words, with the number of notes that contributed. */
+export interface NoteSize { notes: number; bytes: number; words: number }
+/** One note that declares frontmatter `source`, with the byte size the ratio compares to its sources. */
+export interface SourcedNote { path: string; bytes: number; source: unknown }
+/** The ratio pass reads at most this many notes that declare a source, in path order. */
+export const MAX_RATIO_NOTES = 10000;
 /** Derived cache only. No vault or application configuration files are written. */
 export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
   private readonly db: Database;
@@ -526,10 +534,15 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     return { notes, total, ...(rows.length > max ? { nextCursor: notes.at(-1)!.path } : {}) };
   }
   /**
-   * Note counts by type, domain and frontmatter `status` ("(none)" when empty), and how many notes have an mtime at or
-   * after each cutoff (epoch ms). Streams rows; returns no note text.
+   * Note counts by type, domain and frontmatter `status` ("(none)" when empty), how many notes have an mtime at or
+   * after each cutoff (epoch ms), note text size in bytes and words by type and domain, and the notes that declare a
+   * frontmatter `source` (at most `sourcedLimit`, in path order) as the input of the note-to-source ratio, with
+   * `truncatedSourced` counting the sourced notes that cap kept out. Streams rows; returns no note text.
    */
-  noteStats(cutoffs: readonly number[]): { total: number; byType: Record<string, number>; byDomain: Record<string, number>; byStatus: Record<string, number>; modified: number[] } {
+  noteStats(cutoffs: readonly number[], sourcedLimit = MAX_RATIO_NOTES): {
+    total: number; byType: Record<string, number>; byDomain: Record<string, number>; byStatus: Record<string, number>; modified: number[];
+    size: { total: NoteSize; byType: Record<string, NoteSize>; byDomain: Record<string, NoteSize> }; sourced: SourcedNote[]; truncatedSourced: number;
+  } {
     const add = (map: Map<string, number>, value: string, count = 1) => { const key = value ? boundedText(value, 256).content : "(none)"; map.set(key, (map.get(key) ?? 0) + count); };
     const sorted = (map: Map<string, number>) => Object.fromEntries([...map].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
     const grouped = (column: "type" | "domain") => {
@@ -537,21 +550,32 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
       for (const row of this.db.query<{ value: string; count: number }, []>(`SELECT ${column} AS value, count(*) AS count FROM notes GROUP BY ${column}`).all()) add(map, row.value, row.count);
       return sorted(map);
     };
-    // Status is not a column: stream each stored source once, parsing only its frontmatter.
-    const byStatus = new Map<string, number>(), modified = cutoffs.map(() => 0);
-    let total = 0;
-    const rows = this.db.prepare<{ metadata: string; source: string }, []>("SELECT metadata,source FROM notes");
+    const size = { total: { notes: 0, bytes: 0, words: 0 }, byType: new Map<string, NoteSize>(), byDomain: new Map<string, NoteSize>() };
+    const grow = (map: Map<string, NoteSize>, value: string, bytes: number, words: number) => {
+      const key = value ? boundedText(value, 256).content : "(none)", item = map.get(key) ?? { notes: 0, bytes: 0, words: 0 };
+      map.set(key, { notes: item.notes + 1, bytes: item.bytes + bytes, words: item.words + words });
+    };
+    const sortedSize = (map: Map<string, NoteSize>) => Object.fromEntries([...map].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+    // Status, size and `source` are not columns: stream each stored source once, parsing only its frontmatter.
+    const byStatus = new Map<string, number>(), modified = cutoffs.map(() => 0), sourced: SourcedNote[] = [];
+    let total = 0, truncatedSourced = 0;
+    const rows = this.db.prepare<{ metadata: string; source: string; path: string; type: string; domain: string }, []>("SELECT metadata,source,path,type,domain FROM notes ORDER BY path");
     try {
       for (const row of rows.iterate()) {
         total++;
-        let status: unknown;
-        try { status = parseFrontmatter(row.source).data.status; } catch { /* counted as (none) */ }
-        add(byStatus, text(status));
+        const bytes = Buffer.byteLength(row.source), words = wordCount(row.source);
+        size.total = { notes: size.total.notes + 1, bytes: size.total.bytes + bytes, words: size.total.words + words };
+        grow(size.byType, row.type, bytes, words); grow(size.byDomain, row.domain, bytes, words);
+        let data: Record<string, unknown> = {};
+        try { data = parseFrontmatter(row.source).data; } catch { /* counted as (none) and skipped by the ratio pass */ }
+        add(byStatus, text(data.status));
+        if (data.source !== undefined) { if (sourced.length < sourcedLimit) sourced.push({ path: row.path, bytes, source: data.source }); else truncatedSourced++; }
         const mtime = stampMtime(row.metadata);
         cutoffs.forEach((cutoff, i) => { if (mtime !== null && mtime >= cutoff) modified[i]!++; });
       }
     } finally { rows.finalize(); }
-    return { total, byType: grouped("type"), byDomain: grouped("domain"), byStatus: sorted(byStatus), modified };
+    return { total, byType: grouped("type"), byDomain: grouped("domain"), byStatus: sorted(byStatus), modified,
+      size: { total: size.total, byType: sortedSize(size.byType), byDomain: sortedSize(size.byDomain) }, sourced, truncatedSourced };
   }
   /** Links that resolve to the target note, ordered by source. */
   backlinks(target: string, limit = 50): ResolvedLink[] {

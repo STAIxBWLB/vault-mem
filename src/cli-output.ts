@@ -8,6 +8,7 @@ import type { PiiMatrix, PiiRow } from "./pii.ts";
 import { effectivePii, type RecoveryReport } from "./registry.ts";
 import type { SetupReport } from "./setup.ts";
 import { blocks, clean, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions } from "./text-output.ts";
+import { MAX_RATIO_NOTES } from "./vault-index.ts";
 import type { VaultStats } from "./vault-stats.ts";
 
 type Check = { ok: boolean; issue?: string };
@@ -58,11 +59,23 @@ export function renderDoctor(r: StatusResult, o: TextOptions): string {
 
 export function renderStats(r: VaultStats, o: TextOptions): string {
   const counts = (record: Record<string, number>) => fields(Object.entries(record).sort(([a, x], [b, y]) => y - x || a.localeCompare(b)), o);
-  const block = (name: string, body: string) => body ? `${heading(name, o)}\n${body}` : undefined;
+  const block = (name: string, body: string | undefined) => body ? `${heading(name, o)}\n${body}` : undefined;
+  const size = r.size.total, ratio = r.ratio;
+  const notFile = ratio.skippedNonFile ? `, ${ratio.skippedNonFile} not a file` : "";
+  // No ratio can be printed either because nothing was readable or because every readable source was empty.
+  const noRatio = ratio.sources ? "no cited source had a nonzero size" : "no note cites a readable workspace file";
+  const ratioBody = ratio.notes
+    ? fields([["notes", plural(ratio.notes, "note")], ["sources", plural(ratio.sources, "file")], ["median", ratio.median ?? ""], ["p90", ratio.p90 ?? ""],
+      ["over 1", plural(ratio.overOne, "note")], ["skipped", `${plural(ratio.skipped, "source reference")}${notFile}`],
+      ["truncated", ratio.truncatedNotes ? `${plural(ratio.truncatedNotes, "note")} past the ${MAX_RATIO_NOTES}-note cap` : ""],
+      ["largest", ratio.largest.map(entry => `${entry.path} ${entry.ratio}`).join("; ")]], o)
+    : paragraph(`${noRatio}${ratio.skipped ? `; ${plural(ratio.skipped, "source reference")} skipped` : ""}${ratio.truncatedNotes ? `; ${plural(ratio.truncatedNotes, "note")} past the ${MAX_RATIO_NOTES}-note cap` : ""}`, o);
   const log = r.log.total === null ? paragraph("unreadable; see the issues below", o, "fail", "  ")
     : fields([["total", r.log.total], ...Object.entries(r.log.byType ?? {}).filter(([, n]) => n > 0).sort(([a, x], [b, y]) => y - x || a.localeCompare(b))], o);
   return blocks(`${heading(r.vault, o)}  ${plural(r.notes.total, "note")} as of ${r.asOf}`,
     block("Notes by type", counts(r.notes.byType)), block("Notes by domain", counts(r.notes.byDomain)), block("Notes by status", counts(r.notes.byStatus)),
+    block("Note size", size.notes ? fields([["total", `${plural(size.bytes, "byte")}, ${plural(size.words, "word")}`]], o) : undefined),
+    block("Note-to-source ratio", ratioBody),
     block("Modified", fields([["last 7 days", r.modified.last7Days], ["last 30 days", r.modified.last30Days]], o)),
     block(`Log since ${r.log.since} (${plural(r.log.days, "day")})`, log),
     r.log.warnings.map(w => paragraph(`warning: ${w}`, o, "warn")).join("\n"), issueTable(r.log.issues, o));
