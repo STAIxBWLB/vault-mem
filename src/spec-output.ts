@@ -114,7 +114,7 @@ export function renderSpecValidate(r: SpecValidateResult, o: TextOptions, contex
 
 /** A frontmatter mutation receipt shows the verdict and SHA without repeating authored content. */
 export function renderSpecUpdate(r: SpecWriteResult, o: TextOptions): string {
-  const verdict = r.ok ? r.changed ? "updated" : "unchanged" : "refused";
+  const verdict = r.changed ? r.ok ? "updated" : "updated with errors" : r.ok ? "unchanged" : "refused";
   return blocks(heading(`spec update ${r.id ?? ""}: ${verdict}`.trim(), o),
     fields([["source", r.source], ["worktree", r.worktree], ["path", r.path], ["sha256", r.sha256], ["actor", r.actor]], o),
     issueTable(r.issues.map(issue => ({ ...issue, message: [issue.message,

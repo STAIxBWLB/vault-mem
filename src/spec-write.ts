@@ -151,6 +151,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     if (identity(parent) !== parentIdentity || !isDeepStrictEqual(discoverSpecs(source, { worktree: root, env }), current)) refuse("DRIFT", "spec tree changed while validating; reread the source tree and retry the update", change.path);
     const latest = readPlain(root, change.path, config.denyPaths ?? []), staged = readBounded(temp, change.path);
     if (latest.source !== change.before || latest.identity !== original.identity || staged.source !== change.after || staged.identity !== tempIdentity) refuse("DRIFT", "spec target or staged file changed before commit; reread the spec and retry the update", change.path);
+    assertBinding();
     renameSync(temp, file); temp = undefined; result.changed = true; result.sha256 = hash(change.after);
     syncDirectory(parent); result.ok = true;
   } catch (error) {
@@ -198,7 +199,12 @@ function updateFrontmatter(document: SpecCandidate, request: SpecUpdateRequest):
 }
 export function updateSpec(home: string, request: SpecUpdateRequest, options: SpecWriteOptions = {}): SpecWriteResult {
   return mutateSpec(home, request, snapshot => {
-    const document = (snapshot.candidates ?? snapshot.specs).find(candidate => candidate.frontmatter.id === request.id);
+    let document: SpecCandidate | undefined = snapshot.specs.find(candidate => candidate.id === request.id);
+    if (!document) {
+      const candidates = (snapshot.candidates ?? []).filter(candidate => candidate.frontmatter.id === request.id);
+      if (candidates.length > 1) refuse("AMBIGUOUS", "multiple candidates share this id and none is an admitted spec; make the ids unique with an editor before retrying");
+      document = candidates[0];
+    }
     if (!document) refuse("TARGET", "spec id was not found; choose an id from vmem spec grep in the selected source");
     return { path: document.path, before: document.source, after: updateFrontmatter(document, request) };
   }, options);

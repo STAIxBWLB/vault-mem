@@ -8,6 +8,7 @@ import { parseFrontmatter } from "../src/frontmatter.ts";
 import { AGENT_MARKERS } from "../src/log-format.ts";
 import { addSpec } from "../src/registry.ts";
 import { specGit } from "../src/spec-git.ts";
+import { executeSpecCommand } from "../src/spec-commands.ts";
 import { discoverSpecs } from "../src/spec-source.ts";
 import { introducedSpecErrors } from "../src/spec-validate.ts";
 import { attributeSpecErrors, prospectiveSpecSnapshot, updateSpec, type SpecUpdateRequest, type SpecWriteResult } from "../src/spec-write.ts";
@@ -59,6 +60,30 @@ test("no-op leaves source metadata and the home unchanged, including no lock dir
   expect(result).toMatchObject({ ok: true, changed: false, sha256: sha(f.original), actor: "person" });
   expect(f.read()).toBe(f.original); expect(statSync(file).mtimeMs).toBe(before);
   expect(existsSync(join(f.home, "spec-mutations"))).toBe(false); expect(f.git(["status", "--porcelain=v1"])).toBe("");
+}, 30_000);
+
+test("update selects the same admitted spec as get when an earlier untyped candidate shares its id", () => {
+  const f = fixture(), untyped = '---\nid: shared\ntitle: Untyped\n---\n# Keep candidate\n';
+  f.put("a.md", untyped);
+  f.put("z.md", '---\nid: shared\ntype: module\ntitle: Typed\nparent: root\n---\n# Keep body\n');
+  expect(executeSpecCommand(f.home, "get", { id: "shared" }, f.env)).toMatchObject({ path: "z.md" });
+  expect(f.update({ id: "shared", set: { title: "Edited typed" } })).toMatchObject({ ok: true, changed: true, path: "z.md" });
+  expect(f.read("a.md")).toBe(untyped);
+  expect(parseFrontmatter(f.read("z.md")).data.title).toBe("Edited typed");
+}, 30_000);
+
+test("a unique untyped candidate can be repaired; multiple unadmitted candidates refuse as ambiguous", () => {
+  const f = fixture();
+  f.put("repair.md", '---\nid: repair\ntitle: Repair\n---\n');
+  expect(f.update({ id: "repair", set: { type: "module" } })).toMatchObject({ ok: true, changed: true, path: "repair.md" });
+  const untyped = '---\nid: ambiguous\ntitle: Candidate\n---\n';
+  f.put("a.md", untyped); f.put("z.md", untyped);
+  const result = f.update({ id: "ambiguous", set: { type: "module" } });
+  expect(result).toMatchObject({ ok: false, changed: false });
+  expect(result.issues).toContainEqual(expect.objectContaining({ code: "AMBIGUOUS" }));
+  expect(result.issues[0]!.message).toContain("none is an admitted spec");
+  expect(result.issues[0]!.message).toContain("make the ids unique with an editor");
+  expect(f.read("a.md")).toBe(untyped); expect(f.read("z.md")).toBe(untyped);
 }, 30_000);
 
 for (const [name, request, code] of [
@@ -150,11 +175,12 @@ test("a held canonical-worktree lock refuses and preserves its owner; home canno
   expect(result.issues[0]!.code).toBe("HOME"); expect(existsSync(join(inRepo, "spec-mutations"))).toBe(false);
 }, 30_000);
 
-for (const mode of ["reread", "policy-drift", "tree-drift", "temp-write", "rename", "lock-replaced", "lock-open-replaced", "temp-corrupt", "temp-replaced"]) test(`interrupted/racing ${mode} keeps original spec bytes and cleans only owned temporaries`, () => {
+for (const mode of ["reread", "policy-drift", "final-policy", "tree-drift", "temp-write", "rename", "lock-replaced", "lock-open-replaced", "temp-corrupt", "temp-replaced"]) test(`interrupted/racing ${mode} keeps original spec bytes and cleans only owned temporaries`, () => {
   const f = fixture();
   const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-write-fault.ts"), f.home, mode], { env: f.env, stdout: "pipe", stderr: "pipe", timeout: 20000 });
   expect(child.exitCode).toBe(0); const result = JSON.parse(child.stdout.toString()) as SpecWriteResult;
   expect(result).toMatchObject({ ok: false, changed: false });
+  if (mode === "final-policy") expect(result.issues[0]!.code).toBe("REGISTRY_DRIFT");
   expect(f.read()).toBe(mode === "reread" ? f.original + "External edit.\r\n" : f.original);
   const files = readdirSync(join(f.repo, "nested"));
   if (mode === "temp-replaced") {
@@ -164,4 +190,15 @@ for (const mode of ["reread", "policy-drift", "tree-drift", "temp-write", "renam
   const locks = readdirSync(join(f.home, "spec-mutations"));
   if (["lock-replaced", "lock-open-replaced"].includes(mode)) { expect(locks).toHaveLength(1); expect(readFileSync(join(f.home, "spec-mutations", locks[0]!), "utf8")).toBe("foreign replacement\n"); }
   else expect(locks).toEqual([]);
+}, 30_000);
+
+for (const mode of ["dir-fsync", "lock-cleanup"]) test(`post-rename ${mode} reports updated with errors and retains changed bytes`, () => {
+  const f = fixture();
+  const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-write-fault.ts"), f.home, mode], { env: f.env, stdout: "pipe", stderr: "pipe", timeout: 20000 });
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  const output = JSON.parse(child.stdout.toString()) as { result: SpecWriteResult; text: string };
+  expect(output.result).toMatchObject({ ok: false, changed: true, path: "nested/SPEC.md" });
+  expect(output.text).toContain("updated with errors"); expect(output.text).not.toContain(": refused");
+  expect(parseFrontmatter(f.read()).data.title).toBe("Attempted edit");
+  expect(output.result.sha256).toBe(sha(f.read()));
 }, 30_000);
