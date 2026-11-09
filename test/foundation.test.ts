@@ -52,7 +52,8 @@ describe("configuration", () => {
     const { spec } = fixture(), futurePolicy = { mode: "synthetic" };
     const vault = { ...spec, pii: "deny" as const, domains: ["synthetic"], futurePolicy, canonTables: [{ path: "notes/glossary.md" }] };
     const projected = mutationVault(vault);
-    expect(projected).toEqual({ ...spec, pii: "deny", domains: ["synthetic"], futurePolicy });
+    const expected = { ...spec, pii: "deny" as const, domains: ["synthetic"], futurePolicy };
+    expect(projected).toEqual(expected);
     expect(vault.canonTables).toEqual([{ path: "notes/glossary.md" }]);
     expect(mutationVault(spec)).toEqual(spec);
   });
