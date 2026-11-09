@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type SpecSourceSpec } from "../src/config.ts";
+import { CONFIG_FILE, type SpecSourceSpec } from "../src/config.ts";
 import { AGENT_MARKERS } from "../src/log-format.ts";
 import { addSpec } from "../src/registry.ts";
 import { specGit } from "../src/spec-git.ts";
@@ -99,14 +99,69 @@ test("deletion refuses a different introduced error when a duplicate id becomes 
   expect(tree(f.repo)).toEqual((before as unknown[][]).find(entry => entry[0] === "repo")![1]);
 }, 30_000);
 
-for (const mode of ["child-after-lock", "file-after-lock", "policy-after-lock", "tree-after-gate", "unlink"]) test(`delete ${mode} refuses safely and removes its owned lock`, () => {
-  const f = fixture(), preview = f.remove();
+for (const mode of ["child-after-lock", "file-after-lock", "policy-after-lock", "tree-after-gate", "final-policy", "final-home-spec", "final-home-vault", "lock-permission", "lock-space", "unlink"]) test(`delete ${mode} refuses safely and removes its owned lock`, () => {
+  const f = fixture(), preview = f.remove(), before = readFileSync(join(f.repo, "SPEC.md"));
+  if (mode === "final-home-spec") f.git(["-c", "init.templateDir=", "init", "--quiet"], f.root);
+  if (mode === "final-home-vault") mkdirSync(join(f.root, "notes"));
   const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-delete-fault.ts"), f.home, mode, preview.fingerprint!], { env: { ...process.env, ...f.env }, stdout: "pipe", stderr: "pipe", timeout: 20000 });
   expect(child.exitCode, child.stderr.toString()).toBe(0);
   const result = JSON.parse(child.stdout.toString()) as SpecDeleteResult;
   expect(result).toMatchObject({ ok: false, changed: false }); expect(existsSync(join(f.repo, "SPEC.md"))).toBe(true);
   expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
   if (mode === "child-after-lock" || mode === "file-after-lock") expect(result.issues[0]!.code).toBe("FINGERPRINT");
+  if (mode === "final-policy") expect(result.issues[0]!.code).toBe("REGISTRY_DRIFT");
+  if (mode.startsWith("final-home-")) {
+    expect(result.issues[0]!.code).toBe("HOME");
+    const registered = JSON.parse(readFileSync(join(f.home, CONFIG_FILE), "utf8"));
+    expect([...registered.vaults, ...registered.specs]).toContainEqual(expect.objectContaining({ id: "container", path: f.root }));
+  }
+  if (mode !== "file-after-lock") expect(readFileSync(join(f.repo, "SPEC.md"))).toEqual(before);
+  if (mode === "lock-permission" || mode === "lock-space") {
+    expect(result.issues[0]!.code).toBe("IO");
+    expect(result.issues[0]!.message).toContain(mode === "lock-permission" ? "EACCES" : "ENOSPC");
+    expect(result.issues[0]!.message).toContain("permissions and free space");
+    expect(result.issues[0]!.message).not.toContain("wait for the other mutation");
+  }
+  expect(result.issues[0]!.message).not.toContain("expectedSha");
+  expect(result.issues[0]!.message).not.toContain("spec get");
+  expect(result.issues[0]!.message).not.toContain("retry the update");
+  expect(result.issues[0]!.message).not.toContain("correct the update");
+}, 30_000);
+
+for (const mode of ["dir-fsync", "lock-close", "mcp-dir-fsync", "mcp-lock-close"]) test(`post-unlink ${mode} retains deletion and SHA, with applied-with-errors receipt and owned-lock cleanup`, () => {
+  const f = fixture(), preview = f.remove();
+  const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-delete-fault.ts"), f.home, mode, preview.fingerprint!], { env: { ...process.env, ...f.env }, stdout: "pipe", stderr: "pipe", timeout: 20000 });
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  const output = JSON.parse(child.stdout.toString()) as { result: SpecDeleteResult; text: string };
+  expect(output.result).toMatchObject({ ok: false, changed: true, path: "SPEC.md", sha256: preview.sha256 });
+  expect(existsSync(join(f.repo, "SPEC.md"))).toBe(false);
+  expect(output.text).toContain("deleted with errors"); expect(output.text).not.toContain(": refused");
+  expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
+  if (mode.endsWith("lock-close")) expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "CLEANUP", message: expect.stringContaining("descriptor close") }));
+  if (mode.startsWith("mcp-")) {
+    expect(output.result.actor).toBe("agent"); expect(output.result).not.toHaveProperty("refused");
+  }
+}, 30_000);
+
+test("delete preview and confirm refuse a case alias when only its canonical target matches denyPaths", () => {
+  const f = fixture(), source = '---\nid: case\ntype: module\ntitle: Case fixture\nparent: root\n---\n';
+  f.git(["config", "core.ignorecase", "true"]); writeFileSync(join(f.repo, "Case.md"), source);
+  f.git(["add", "Case.md"]); f.git(["commit", "-qm", "Synthetic delete case alias"]);
+  const preview = f.remove({ id: "case" }); expect(preview.ok).toBe(true);
+  renameSync(join(f.repo, "Case.md"), join(f.repo, "case-temp.md")); renameSync(join(f.repo, "case-temp.md"), join(f.repo, "case.md"));
+  const configFile = join(f.home, CONFIG_FILE), config = JSON.parse(readFileSync(configFile, "utf8"));
+  config.denyPaths = [join(f.repo, "case.md")]; writeFileSync(configFile, JSON.stringify(config));
+  const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-delete-deny-alias.ts"), f.home, preview.fingerprint!], { env: { ...process.env, ...f.env }, stdout: "pipe", stderr: "pipe", timeout: 20000 });
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  const output = JSON.parse(child.stdout.toString()) as { preview: SpecDeleteResult; confirm: SpecDeleteResult; lexicalDenied: boolean; canonicalDenied: boolean; canonical: string };
+  expect(output.lexicalDenied).toBe(false); expect(output.canonicalDenied).toBe(true);
+  expect(output.canonical).toBe(join(f.repo, "case.md"));
+  for (const result of [output.preview, output.confirm]) {
+    expect(result).toMatchObject({ ok: false, changed: false, path: "Case.md" });
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: "PATH" }));
+  }
+  expect(readFileSync(join(f.repo, "case.md"), "utf8")).toBe(source);
+  expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
 }, 30_000);
 
 test("acknowledged dangling links are excluded before result limits; unrelated introduced errors cannot hide", () => {

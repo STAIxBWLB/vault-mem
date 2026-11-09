@@ -64,6 +64,9 @@ test("delete CLI preview lists every relation and a confirm command, then delete
   expect(human.text).toContain(receipt.fingerprint!);
   const missing = runSpecCommand(["delete", "root", "--confirm"], f.env);
   expect(missing.code).toBe(1); expect(missing.text).toContain("refused"); expect(existsSync(f.file)).toBe(true);
+  expect(missing.text).toMatch(/fresh (?:delete )?preview/);
+  expect(missing.text).not.toContain("expectedSha"); expect(missing.text).not.toContain("spec get");
+  expect(missing.text).not.toContain("retry the update");
   const result = runSpecCommand(["delete", "root", "--confirm", "--fingerprint", receipt.fingerprint!], f.env);
   expect(result.code).toBe(0); expect(result.text).toContain("spec delete root: deleted");
   expect(existsSync(f.file)).toBe(false); expect(existsSync(join(f.repo, "child.md"))).toBe(true);
@@ -76,7 +79,7 @@ test("MCP delete preview and confirm preserve agent attribution and reject a sta
   expect(preview).toMatchObject({ ok: true, changed: false, preview: true, actor: "agent" });
   expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
   const denied = server.handlers.vmem_spec_delete!({ id: "root", confirm: true, fingerprint: "0".repeat(64) }) as SpecDeleteResult;
-  expect(denied).toMatchObject({ ok: false, changed: false, actor: "agent" }); expect(existsSync(f.file)).toBe(true);
+  expect(denied).toMatchObject({ ok: false, changed: false, actor: "agent", refused: true }); expect(existsSync(f.file)).toBe(true);
   const confirmed = server.handlers.vmem_spec_delete!({ id: "root", confirm: true, fingerprint: preview.fingerprint! }) as SpecDeleteResult;
   expect(confirmed).toMatchObject({ ok: true, changed: true, actor: "agent", path: "SPEC.md" });
   expect(existsSync(f.file)).toBe(false);
@@ -87,7 +90,7 @@ test("delete transports enforce source policy for previews and confirmations", (
     const f = fixture(write), server = createSpecMcp(f.home, f.env);
     for (const request of [{ id: "root" }, { id: "root", confirm: true, fingerprint: "a".repeat(64) }]) {
       const refused = server.handlers.vmem_spec_delete!(request) as SpecDeleteResult;
-      expect(refused).toMatchObject({ ok: false, changed: false });
+      expect(refused).toMatchObject({ ok: false, changed: false, refused: true });
       expect(refused.issues.some(issue => issue.message.includes(write))).toBe(true);
     }
     const preview = runSpecCommand(["delete", "root", "--json"], f.env);
@@ -116,5 +119,31 @@ test("human delete refusals keep the related path and original target visible", 
   const result = runSpecCommand(["delete", "root", "--confirm", "--fingerprint", preview.fingerprint!], f.env);
   expect(result.code).toBe(1); expect(result.text).toContain("child.md");
   expect(result.text.replace(/\s+/g, " ")).toContain("original target: root");
+  expect(result.text).toContain("spec delete root: refused"); expect(result.text).toMatch(/fresh (?:delete )?preview/);
+  expect(result.text).not.toContain("expectedSha"); expect(result.text).not.toContain("spec get");
+  expect(result.text).not.toContain("retry the update"); expect(result.text).not.toContain("correct the update");
+  expect(readFileSync(f.file, "utf8")).toBe(f.original);
+});
+
+test("MCP delete marks target lookup, validation and fingerprint refusals before mutation", () => {
+  const f = fixture(), server = createSpecMcp(f.home, f.env);
+  const lookup = server.handlers.vmem_spec_delete!({ id: "missing" }) as SpecDeleteResult;
+  expect(lookup).toMatchObject({ ok: false, changed: false, refused: true });
+  expect(lookup.issues).toContainEqual(expect.objectContaining({ code: "TARGET" }));
+  writeFileSync(join(f.repo, "Z.md"), '---\nid: root\ntype: submodule\ntitle: Duplicate\n---\n');
+  const preview = server.handlers.vmem_spec_delete!({ id: "root" }) as SpecDeleteResult;
+  expect(preview).toMatchObject({ ok: true, changed: false, preview: true });
+  const validation = server.handlers.vmem_spec_delete!({ id: "root", confirm: true, fingerprint: preview.fingerprint! }) as SpecDeleteResult;
+  expect(validation).toMatchObject({ ok: false, changed: false, refused: true, path: "SPEC.md" });
+  expect(validation.issues).toContainEqual(expect.objectContaining({ code: "type_rank" }));
+  const fingerprint = server.handlers.vmem_spec_delete!({ id: "root", confirm: true, fingerprint: "0".repeat(64) }) as SpecDeleteResult;
+  expect(fingerprint).toMatchObject({ ok: false, changed: false, refused: true });
+  expect(fingerprint.issues).toContainEqual(expect.objectContaining({ code: "FINGERPRINT" }));
+  for (const result of [validation, fingerprint]) {
+    const message = result.issues.map(issue => issue.message).join(" ");
+    expect(message).toMatch(/fresh (?:delete )?preview/);
+    expect(message).not.toContain("expectedSha"); expect(message).not.toContain("spec get");
+    expect(message).not.toContain("retry the update"); expect(message).not.toContain("correct the update");
+  }
   expect(readFileSync(f.file, "utf8")).toBe(f.original);
 });

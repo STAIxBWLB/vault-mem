@@ -78,13 +78,13 @@ function readBounded(file: string, path: string, operation: SpecWriteOperation):
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = fstatSync(fd, { bigint: true });
-    if (!before.isFile() || before.size > BigInt(MAX_NOTE_BYTES)) refuse("SIZE", `spec ${operation} input is not a bounded plain file; ${operation === "create" ? "reduce the metadata" : "split the file below the read limit"} before retrying the ${operation}`, path);
+    if (!before.isFile() || before.size > BigInt(MAX_NOTE_BYTES)) refuse("SIZE", `spec ${operation} input is not a bounded plain file; ${operation === "create" ? "reduce the metadata" : "split the file below the read limit"}, then ${retrySpecOperation(operation)}`, path);
     const bytes = Buffer.alloc(Number(before.size) + 1); let size = 0;
     while (size < bytes.length) { const n = readSync(fd, bytes, size, bytes.length - size, null); if (!n) break; size += n; }
     const after = fstatSync(fd, { bigint: true }), named = lstatSync(file, { bigint: true });
     if (named.dev !== after.dev || named.ino !== after.ino || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs || size !== Number(before.size)) refuse("DRIFT", `spec ${operation} input changed during its read; ${retrySpecOperation(operation)}`, path);
     const buffer = bytes.subarray(0, size), source = buffer.toString("utf8");
-    if (!Buffer.from(source).equals(buffer)) refuse("ENCODING", `spec ${operation} input is not valid UTF-8; ${operation === "create" ? retrySpecOperation(operation) : "re-encode the file before retrying the update"}`, path);
+    if (!Buffer.from(source).equals(buffer)) refuse("ENCODING", `spec ${operation} input is not valid UTF-8; ${operation === "create" ? retrySpecOperation(operation) : `re-encode the file, then ${retrySpecOperation(operation)}`}`, path);
     return { source, mode: Number(before.mode & 0o777n), identity: `${before.dev}:${before.ino}` };
   } finally { closeSync(fd); }
 }
@@ -205,7 +205,8 @@ export function prospectiveSpecSnapshot(current: SpecSnapshot, edits: ReadonlyMa
 }
 /** Validation can blame a related file (for example a later duplicate). The mutation receipt always names the written file. */
 export function attributeSpecErrors(issues: SpecValidationIssue[], path: string, operation: SpecWriteOperation = "update"): SpecWriteIssue[] {
-  return issues.map(issue => ({ ...issue, path, ...(issue.path !== path ? { target: issue.path, ...(issue.target !== undefined ? { originalTarget: issue.target } : {}) } : {}), message: `${issue.message}; correct the ${operation} metadata for ${path}; ${retrySpecOperation(operation)}` }));
+  const correction = operation === "delete" ? `repair the source tree error before deleting ${path}` : `correct the ${operation} metadata for ${path}`;
+  return issues.map(issue => ({ ...issue, path, ...(issue.path !== path ? { target: issue.path, ...(issue.target !== undefined ? { originalTarget: issue.target } : {}) } : {}), message: `${issue.message}; ${correction}; ${retrySpecOperation(operation)}` }));
 }
 function screen(after: string, source: SpecSourceSpec, config: VmemConfig, path: string, operation: SpecWriteOperation): void {
   if (Buffer.byteLength(after) > MAX_NOTE_BYTES) refuse("SIZE", `spec ${operation} exceeds the read limit; ${operation === "create" ? "reduce the metadata" : "reduce its frontmatter or split the file"} before retrying the ${operation}`, path);
@@ -231,20 +232,20 @@ interface SpecWriteGuard { config: VmemConfig; source: SpecSourceSpec; root: str
 function guardSpecWrite(home: string, request: Pick<SpecUpdateRequest, "source" | "worktree">, options: SpecWriteOptions & { operation: SpecWriteOperation }, previous?: SpecWriteGuard, prepare?: (guard: SpecWriteGuard) => string): SpecWriteGuard {
   const config = loadRegistry(home), sources = config.specs ?? [], source = request.source === undefined ? sources[0] : sources.find(value => value.id === request.source);
   const path = previous?.path, env = options.env ?? process.env, channel = options.channel ?? "cli";
-  if (!source) refuse(previous ? "REGISTRY_DRIFT" : "SOURCE", "spec source is not registered; use vmem specs list and select a registered source", path);
+  if (!source) refuse(previous ? "REGISTRY_DRIFT" : "SOURCE", `spec source is not registered; use vmem specs list and select a registered source, then ${retrySpecOperation(options.operation)}`, path);
   if (options.binding && !isDeepStrictEqual(source, options.binding)) refuse("REGISTRY_DRIFT", `spec ${options.operation} source changed since MCP startup; restart the server, then ${retrySpecOperation(options.operation)}`, path);
   if (previous && (!isDeepStrictEqual(source, previous.source) || !isDeepStrictEqual(config.denyPaths, previous.config.denyPaths) || !isDeepStrictEqual(config.piiPatterns, previous.config.piiPatterns))) refuse("REGISTRY_DRIFT", `spec registry or screening policy changed during the ${options.operation}; reread the source policy, then ${retrySpecOperation(options.operation)}`, path);
   if (!["mcp", "cli"].includes(channel)) refuse("POLICY", "unknown spec write channel; use CLI or MCP", path);
   const root = resolveSpecWorktree(source, request.worktree, env), homeRoot = canonicalPath(home);
-  if (deniedSpecPath(root, config.denyPaths ?? [])) refuse("PATH", `spec worktree is denied; select an allowed registered source before retrying the ${options.operation}`, path);
+  if (deniedSpecPath(root, config.denyPaths ?? [])) refuse("PATH", `spec worktree is denied; select an allowed registered source, then ${retrySpecOperation(options.operation)}`, path);
   const roots = [root, source.path, ...config.vaults.map(value => value.path), ...sources.map(value => value.path)];
-  if (roots.some(value => within(value, homeRoot))) refuse("HOME", `VMEM_HOME is inside a registered source/worktree; select a home outside repositories before retrying the ${options.operation}`, path);
+  if (roots.some(value => within(value, homeRoot))) refuse("HOME", `VMEM_HOME is inside a registered source/worktree; select a home outside repositories, then ${retrySpecOperation(options.operation)}`, path);
   const bindings = [...new Set([root, source.path])].map(value => [value, identity(value)] as const);
   if (previous && (root !== previous.root || !isDeepStrictEqual(bindings, previous.bindings))) refuse("DRIFT", `spec worktree identity changed; restore the registered worktree, then ${retrySpecOperation(options.operation)}`, path);
   const guard = { config, source, root, homeRoot, bindings, path };
   // Resolve the written path once so startup policy refusals retain path attribution.
   if (prepare) guard.path = prepare(guard);
-  if (source.write === "none" || channel === "mcp" && source.write !== "mcp") refuse("POLICY", `spec write policy ${source.write} refuses channel ${channel}; select an allowed channel or have the owner update the source policy before retrying the ${options.operation}`, guard.path);
+  if (source.write === "none" || channel === "mcp" && source.write !== "mcp") refuse("POLICY", `spec write policy ${source.write} refuses channel ${channel}; select an allowed channel or have the owner update the source policy, then ${retrySpecOperation(options.operation)}`, guard.path);
   return guard;
 }
 
@@ -266,7 +267,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     });
     const { config, source, root, homeRoot } = startup;
     const assertBinding = () => {
-      if (lockFile && lockIdentity !== undefined && identity(lockFile) !== lockIdentity) refuse("LOCKED", `spec mutation lock changed ownership; inspect the lock under VMEM_HOME and retry the ${operation} after the other writer finishes`, result.path);
+      if (lockFile && lockIdentity !== undefined && identity(lockFile) !== lockIdentity) refuse("LOCKED", `spec mutation lock changed ownership; inspect the lock under VMEM_HOME and wait for the other writer, then ${retrySpecOperation(operation)}`, result.path);
       guardSpecWrite(home, request, context, startup);
     };
     checkDeletionConfirmation(first);
@@ -277,13 +278,13 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     if (first.before === first.after && first.after !== null) { assertBinding(); result.ok = true; result.sha256 = hash(first.after); return result; }
     mkdirSync(homeRoot, { recursive: true, mode: 0o700 });
     const lockDir = join(homeRoot, "spec-mutations"); mkdirSync(lockDir, { recursive: true, mode: 0o700 });
-    if (lstatSync(lockDir).isSymbolicLink() || realpathSync(lockDir) !== lockDir) refuse("LOCKED", "spec lock directory is not plain; restore a private lock directory under VMEM_HOME and retry", first.path);
+    if (lstatSync(lockDir).isSymbolicLink() || realpathSync(lockDir) !== lockDir) refuse("LOCKED", `spec lock directory is not plain; restore a private lock directory under VMEM_HOME, then ${retrySpecOperation(operation)}`, first.path);
     lockFile = join(lockDir, `${hash(root)}.lock`);
     try { lockFd = openSync(lockFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
     catch (error) {
       lockFile = undefined;
-      if ((error as NodeJS.ErrnoException | undefined)?.code === "EEXIST") refuse("LOCKED", `spec mutation lock already exists; wait for the other mutation, or inspect the interrupted writer's owned lock under VMEM_HOME before retrying the ${operation}`, first.path);
-      refuse("IO", `spec mutation lock open failed (${writeErrorCause(error)}); check permissions and free space for the lock directory under VMEM_HOME, then retry the ${operation}`, first.path);
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "EEXIST") refuse("LOCKED", `spec mutation lock already exists; wait for the other mutation or inspect the interrupted writer's owned lock under VMEM_HOME, then ${retrySpecOperation(operation)}`, first.path);
+      refuse("IO", `spec mutation lock open failed (${writeErrorCause(error)}); check permissions and free space for the lock directory under VMEM_HOME, then ${retrySpecOperation(operation)}`, first.path);
     }
     const ownedLock = fstatSync(lockFd, { bigint: true }); lockIdentity = `${ownedLock.dev}:${ownedLock.ino}`;
     writeFileSync(lockFd, JSON.stringify({ pid: process.pid, token: randomUUID() }) + "\n"); fsyncSync(lockFd);
@@ -299,9 +300,9 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     if (introduced.length) throw new Refusal(attributeSpecErrors(introduced, change.path, operation));
     if (change.after === null) {
       assertBinding();
-      if (!isDeepStrictEqual(discoverSpecs(source, { worktree: root, env }), current)) refuse("DRIFT", "spec tree changed while validating deletion; request a fresh delete preview and retry", change.path);
+      if (!isDeepStrictEqual(discoverSpecs(source, { worktree: root, env }), current)) refuse("DRIFT", `spec tree changed while validating deletion; ${retrySpecOperation(operation)}`, change.path);
       const latest = readMutation(root, change, config.denyPaths ?? [], env, operation);
-      if (latest.source !== change.before || latest.identity !== original.identity) refuse("DRIFT", "spec changed before deletion; request a fresh preview and retry", change.path);
+      if (latest.source !== change.before || latest.identity !== original.identity) refuse("DRIFT", `spec changed before deletion; ${retrySpecOperation(operation)}`, change.path);
       const file = plainPath(root, change.path, config.denyPaths ?? []);
       assertBinding();
       unlinkSync(file); result.changed = true; syncDirectory(dirname(file)); result.ok = true; return result;
@@ -319,7 +320,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     publishSpec(temp, file, change, result); temp = undefined;
     syncDirectory(parent); syncCreatedParents(createdDirs); result.ok = true;
   } catch (error) {
-    result.issues = error instanceof Refusal ? error.issues : [{ code: "IO", severity: "error", message: `spec ${operation} failed (${writeErrorCause(error)}); inspect the source tree and target directory, check permissions and free space for the target and VMEM_HOME lock directory, repair the reported cause and retry the ${operation}`, ...(result.path ? { path: result.path } : {}) }];
+    result.issues = error instanceof Refusal ? error.issues : [{ code: "IO", severity: "error", message: `spec ${operation} failed (${writeErrorCause(error)}); inspect the source tree and target directory, check permissions and free space for the target and VMEM_HOME lock directory, repair the reported cause, then ${retrySpecOperation(operation)}`, ...(result.path ? { path: result.path } : {}) }];
     result.path ??= result.issues.find(issue => issue.path)?.path;
   } finally {
     if (temp) {
@@ -417,11 +418,11 @@ function deletionPreview(snapshot: SpecSnapshot, document: SpecCandidate, previe
 }
 export function deleteSpec(home: string, request: SpecDeleteRequest, options: SpecWriteOptions = {}): SpecDeleteResult {
   return mutateSpec(home, request, snapshot => {
-    if (Object.keys(request).some(key => !["id", "source", "worktree", "confirm", "fingerprint"].includes(key)) || typeof request.id !== "string" || !request.id.trim() || request.confirm !== undefined && typeof request.confirm !== "boolean") refuse("INPUT", "use a spec id, optional source/worktree and boolean confirm with the preview fingerprint");
+    if (Object.keys(request).some(key => !["id", "source", "worktree", "confirm", "fingerprint"].includes(key)) || typeof request.id !== "string" || !request.id.trim() || request.confirm !== undefined && typeof request.confirm !== "boolean") refuse("INPUT", "invalid spec delete request; use a spec id, optional source/worktree and boolean confirm with a fresh preview fingerprint");
     if (request.fingerprint !== undefined && (typeof request.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(request.fingerprint))) refuse("FINGERPRINT", "invalid delete fingerprint; request a fresh delete preview before confirming");
     const document = snapshot.specs.find(candidate => candidate.id === request.id);
-    if (!document) refuse("TARGET", "spec id was not found; choose an id from vmem spec grep in the selected source");
+    if (!document) refuse("TARGET", "spec delete id was not found; choose an id from vmem spec grep in the selected source, then request a fresh preview with vmem spec delete");
     const deletion = deletionPreview(snapshot, document, request.confirm !== true);
     return { path: document.path, before: document.source, after: null, deletion, expectedFingerprint: request.fingerprint };
-  }, options);
+  }, options, "delete");
 }

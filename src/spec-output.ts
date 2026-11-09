@@ -128,7 +128,7 @@ export function renderSpecUpdate(r: SpecWriteResult, o: TextOptions, command: "c
 
 /** Deletion previews show every acknowledged relation and a command bound to that exact preview. */
 export function renderSpecDelete(r: SpecDeleteResult, o: TextOptions): string {
-  const verdict = !r.ok ? "refused" : r.preview ? "preview" : r.changed ? "deleted" : "unchanged";
+  const verdict = r.changed ? r.ok ? "deleted" : "deleted with errors" : !r.ok ? "refused" : r.preview ? "preview" : "unchanged";
   const backlinks = r.backlinks ?? [], children = r.children ?? [];
   const confirm = r.ok && r.preview && r.fingerprint && r.id !== undefined
     ? ["vmem", "spec", "delete", ...(r.source ? ["--source", r.source] : []), ...(r.worktree ? ["--worktree", r.worktree] : []), "--confirm", "--fingerprint", r.fingerprint, "--", r.id].map(shellWord).join(" ") : undefined;
