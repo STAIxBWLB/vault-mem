@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeSource } from "./source.ts";
-import { parseFrontmatter, emitFrontmatter } from "./frontmatter.ts";
+import { parseFrontmatter, emitFrontmatter, frontmatterReferences } from "./frontmatter.ts";
 import { LINK_RELATIONS, normalizeTarget, proseLines, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
 import type { PatchEdit, PlannedChange, WriteIssue, WriteOp } from "./write-types.ts";
 export class WriteRefusal extends Error {
@@ -126,6 +126,47 @@ function mayHaveDoi(source: string): boolean {
   const header = source.slice(0, closing.exec(source)?.index ?? source.length);
   return /(?:^|[{\n,])[ \t]*(?:doi|["']doi["'])[ \t]*:|[\\!&*?]/.test(header);
 }
+/** Shared date emission for validated note content, including promotion previews. */
+export function stampNoteContent(source: string, today: string, create: boolean, warning?: (message: string) => void): string {
+  const doc = parseFrontmatter(source);
+  const dates = { updated: today, ...(create && !Object.hasOwn(doc.data, "created") ? { created: today } : {}) };
+  const references = frontmatterReferences(doc);
+  const skipStamp = (cause: string) => {
+    const repair = "open this note in a text editor and rewrite the header as a block mapping with plain literal values" + (references.length ? ", replacing any aliases with their literal values and removing anchors" : "");
+    warning?.(`automatic dates were not set: ${cause}; ${repair}; later authored writes stamp updated automatically${create && !Object.hasOwn(doc.data, "created") ? "; set created explicitly in the repaired header if it was also skipped" : ""}`);
+    return source;
+  };
+  let candidate: string;
+  try { candidate = emitFrontmatter(doc, dates); }
+  catch (error) {
+    if (!(error instanceof Error) || error.message !== "frontmatter: editing requires a block mapping") throw error;
+    // Canonicalizing a flow or merge-key header would erase its reference graph.
+    if (references.length) return skipStamp("rewriting this header would change YAML anchor/alias relationships");
+    const newline = /\r?\n/.exec(doc.frontmatter ?? "")?.[0] ?? "\n";
+    try {
+      const header = emitFrontmatter(parseFrontmatter(""), { ...doc.data, ...dates }).replaceAll("\n", newline);
+      candidate = source.slice(0, source.indexOf("---")) + header + doc.body;
+    } catch (cause) {
+      if (!(cause instanceof Error) || cause.message !== "frontmatter: changed values must be JSON-compatible") throw cause;
+      return skipStamp("the header contains values that cannot round-trip through JSON (such as .inf, .nan or -0)");
+    }
+  }
+  try {
+    const stamped = parseFrontmatter(candidate);
+    if (!isDeepStrictEqual(references, frontmatterReferences(stamped))) return skipStamp(references.length ? "date emission would change YAML anchor/alias relationships" : "the header could not be rewritten without changing its structure");
+    if (!isDeepStrictEqual(stamped.data, { ...doc.data, ...dates })) return skipStamp(references.length ? "date emission would alter metadata or YAML anchor/alias values" : "the header could not be rewritten without changing a value");
+  } catch { return skipStamp(references.length ? "the stamped YAML header would not parse after an anchor or alias changed" : "the stamped YAML header could not be parsed"); }
+  return candidate;
+}
+/** Date authored content only; mechanical rewrites retain their existing freshness. */
+export function stampContentChanges(operation: WriteOp, changes: PlannedChange[], today: string, issues: WriteIssue[] = []): PlannedChange[] {
+  if (["check", "report", "move", "tidy", "sanitize"].includes(operation.op)) return changes;
+  return changes.map(change => {
+    if (change.after === null || change.after === change.before) return change;
+    return { ...change, after: stampNoteContent(change.after, today, operation.op === "create", message => issues.push({ code: "V01", severity: "warning", path: change.path, message })) };
+  }).filter(change => change.before !== change.after);
+}
+
 /** Plan transformations in memory. This function never touches files. */
 export function planOperation(operation: WriteOp, notes: Map<string, string>, reportBefore?: string | null): PlannedChange[] {
   const planned = new Map<string, PlannedChange>();

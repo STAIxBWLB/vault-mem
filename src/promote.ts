@@ -5,7 +5,7 @@ import { emitFrontmatter, parseFrontmatter } from "./frontmatter.ts";
 import { loadRegistry } from "./registry.ts";
 import { VaultIndex } from "./vault-index.ts";
 import { applyWrite } from "./writer.ts";
-import { notePath } from "./write-operations.ts";
+import { notePath, planOperation, stampContentChanges } from "./write-operations.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
 import type { AmemCandidate, AmemSeam, AmemOptions } from "./amem/seam.ts";
 
@@ -106,6 +106,7 @@ function lookup(home: string, spec: VaultSpec, all: VaultSpec[], id: string, lin
  * the note through `promoted_from` and offers link-only instead of a second note.
  */
 export async function promoteFromAmem(home: string, request: PromoteRequest, options: { env?: NodeJS.ProcessEnv; project?: string; cwd?: string; seam?: SeamFactory; now?: Date } = {}): Promise<PromoteResult> {
+  const now = options.now ?? new Date();
   const base: PromoteResult = { ok: false, action: "create", applied: false, id: request.id, path: null, issues: [] };
   if (!ID.test(request.id)) return { ...base, issues: [issue("AMEM", "expected a 32-hex agent-mem entry id")] };
   const { spec, all } = vaultSpec(home, request.vault);
@@ -128,21 +129,22 @@ export async function promoteFromAmem(home: string, request: PromoteRequest, opt
       await seam.recordLink(request.id, existing);
       return { ...result, applied: true, linked: existing };
     }
-    const draft = draftNote(entry, request, options.now);
+    const draft = draftNote(entry, request, now);
     if (!draft.stem) return { ...base, issues: [issue("V04", "cannot derive an ASCII stem from the title; pass --stem")] };
     let path: string;
     try { path = notePath(draft.stem); } catch { return { ...base, issues: [issue("V04", "expected a flat lowercase ASCII stem")] }; }
     const operation = { op: "create" as const, path: draft.stem, frontmatter: {}, body: draft.text };
-    const planned = applyWrite(home, { vault: spec.id, operation, channel: request.channel ?? "cli", dryRun: true }, { env: options.env });
+    const planned = applyWrite(home, { vault: spec.id, operation, channel: request.channel ?? "cli", dryRun: true }, { env: options.env, now });
     const v08 = planned.issues.some(i => i.code === "V08") || (planned.possibleDuplicates?.length ?? 0) > 0;
     const possibleDuplicates = v08 ? [...new Set([...(planned.possibleDuplicates ?? []), ...similar(home, spec, all, String(draft.frontmatter.title), draft.stem)])].filter(p => p !== path) : [];
     const fingerprint = sha({ action: "create", id: request.id, write: planned.fingerprint, text: draft.text, linked, vault: spec.id });
-    const result: PromoteResult = { ...base, ok: planned.ok, path, text: draft.text, fingerprint, issues: planned.issues, linked,
+    const text = planned.ok ? stampContentChanges(operation, planOperation(operation, new Map()), localDate(now))[0]!.after! : draft.text;
+    const result: PromoteResult = { ...base, ok: planned.ok, path, text, fingerprint, issues: planned.issues, linked,
       ...(possibleDuplicates.length ? { possibleDuplicates, choices: ["create", ...possibleDuplicates.map(p => `link-existing ${p}`)] } : {}) };
     if (request.confirm !== true || !planned.ok) return { ...result, preview: request.confirm !== true };
     if (request.fingerprint !== fingerprint) return { ...result, ok: false, issues: [issue("V09", "stale or missing preview fingerprint")] };
     const note = applyWrite(home, { vault: spec.id, operation, channel: request.channel ?? "cli",
-      log: { type: "LEARN", project: logProjectFor(seam.project, request.logProject), source: `mem:${request.id}`, dest: path, note: `promoted: ${entry.kind}` } }, { env: options.env });
+      log: { type: "LEARN", project: logProjectFor(seam.project, request.logProject), source: `mem:${request.id}`, dest: path, note: `promoted: ${entry.kind}` } }, { env: options.env, now });
     if (!note.ok || !note.applied) return { ...result, ok: false, note, issues: note.issues };
     try {
       await seam.recordLink(request.id, path);

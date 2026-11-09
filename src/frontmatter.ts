@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { parseYamlWithQuotedEscapes } from "./yaml-quoted.ts";
+import { parseYamlWithQuotedEscapes, type YamlReference } from "./yaml-quoted.ts";
 
 interface FieldSpan { key: string; start: number; end: number }
 export interface FrontmatterDocument {
@@ -8,6 +8,12 @@ export interface FrontmatterDocument {
   readonly data: Record<string, unknown>;
   /** Original delimiters and YAML, including their original line endings. */
   readonly frontmatter: string | null;
+}
+const referenceGraphs = new WeakMap<FrontmatterDocument, readonly YamlReference[]>();
+/** Actual header reference tokens and their prior anchor bindings, excluding scalar/comment text. */
+export function frontmatterReferences(document: FrontmatterDocument): readonly YamlReference[] {
+  if (document.frontmatter === null) return [];
+  return referenceGraphs.get(document) ?? referenceGraphs.get(parseFrontmatter(document.source)) ?? [];
 }
 interface ParsedDocument extends FrontmatterDocument {
   start: number;
@@ -99,8 +105,8 @@ export function parseFrontmatter(source: string): FrontmatterDocument {
   const match = closing.exec(source);
   if (!match) throw new Error("frontmatter: missing closing delimiter");
   const yaml = source.slice(start, match.index);
-  let value: unknown;
-  try { value = parseYamlWithQuotedEscapes(yaml); }
+  let value: unknown; const references: YamlReference[] = [];
+  try { value = parseYamlWithQuotedEscapes(yaml, references); }
   catch { throw new Error("frontmatter: invalid YAML"); }
   if (value === null || value === undefined) value = {};
   if (!mapping(value)) throw new Error("frontmatter: expected mapping");
@@ -109,6 +115,7 @@ export function parseFrontmatter(source: string): FrontmatterDocument {
     source, body: source.slice(end), data: value, frontmatter: source.slice(0, end),
     start, end: match.index, newline: opening[0].endsWith("\r\n") ? "\r\n" : "\n", fields: fieldSpans(yaml),
   };
+  referenceGraphs.set(document, references);
   return document;
 }
 

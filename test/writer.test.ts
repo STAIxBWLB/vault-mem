@@ -35,7 +35,211 @@ function disk(root: string): Record<string, string> {
   visit(root); return result;
 }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-const create = (): WriteOp => ({ op: "create", path: "new-finding", frontmatter: { title: "New Finding", description: "A separate synthetic result.", type: "insight", domain: "research", topics: ["[[research]]"] } });
+const create = (): Extract<WriteOp, { op: "create" }> => ({ op: "create", path: "new-finding", frontmatter: { title: "New Finding", description: "A separate synthetic result.", type: "insight", domain: "research", topics: ["[[research]]"] } });
+const contentNow = new Date(2026, 0, 2, 1), contentDate = "2026-01-02";
+const writeAtDate = (f: ReturnType<typeof fixture>, operation: WriteOp) => applyWrite(f.home, { vault: "test", operation }, { now: contentNow });
+
+test("AC1 create stamps created and updated with the captured local date", () => {
+  const f = fixture(), result = writeAtDate(f, create());
+  expect(result).toMatchObject({ ok: true, applied: true });
+  const data = parseFrontmatter(readFileSync(join(f.notes, "new-finding.md"), "utf8")).data;
+  expect(data.created).toBe(contentDate); expect(data.updated).toBe(contentDate);
+  expect(parseFrontmatter(readFileSync(join(f.notes, "old.md"), "utf8")).data.updated).toBeUndefined();
+});
+
+test("AC1 create preserves supplied legacy created metadata, including embedded body frontmatter", () => {
+  for (const source of ["metadata", "body"] as const) {
+    const f = fixture(), operation = create(), legacy = `legacy ${source} creation label`;
+    if (source === "metadata") Object.assign(operation.frontmatter, { created: legacy, updated: "2000-01-01" });
+    else operation.body = note("Embedded Creation", "Embedded source draft.", { created: legacy, updated: "2000-01-01" });
+    expect(writeAtDate(f, operation)).toMatchObject({ ok: true, applied: true });
+    const data = parseFrontmatter(readFileSync(join(f.notes, "new-finding.md"), "utf8")).data;
+    expect(data.created).toBe(legacy); expect(data.updated).toBe(contentDate);
+  }
+});
+
+test("AC1 append refreshes updated and preserves an existing created value", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  writeFileSync(file, note("Old Finding", "Original text.", { created: "legacy creation label", updated: "2026-01-01" }));
+  expect(writeAtDate(f, { op: "append", path: "old", section: "Evidence", markdown: "New dated evidence." })).toMatchObject({ ok: true, applied: true });
+  const after = parseFrontmatter(readFileSync(file, "utf8"));
+  expect(after.data).toMatchObject({ created: "legacy creation label", updated: contentDate });
+  expect(after.body).toContain("New dated evidence.");
+});
+
+test("AC1 patch stamps updated without synthesizing created on an existing note", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  expect(writeAtDate(f, { op: "patch", path: "old", oldString: "Original text.", newString: "Dated replacement." })).toMatchObject({ ok: true, applied: true });
+  const after = parseFrontmatter(readFileSync(file, "utf8"));
+  expect(after.data.updated).toBe(contentDate); expect(after.data.created).toBeUndefined();
+  expect(after.body).toContain("Dated replacement.");
+});
+
+for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} stamps a valid flow-mapping header without changing metadata or unrelated body bytes`, () => {
+  const f = fixture(), file = join(f.notes, "old.md"), newline = operation === "patch" ? "\r\n" : "\n";
+  const metadata = { title: "Flow Header", description: "Synthetic flow metadata evidence.", type: "insight", domain: "research", topics: ["[[research]]"], aliases: ["Flow Alias"], created: "legacy flow creation", updated: "2026-01-01" };
+  const body = ["# Flow Header", "", "Original flow text.", "", "## Topics", "", "- [[research]]", ""].join(newline);
+  const original = "﻿---" + newline + JSON.stringify(metadata) + newline + "---" + newline + body;
+  writeFileSync(file, original);
+  const result = writeAtDate(f, operation === "patch"
+    ? { op: "patch", path: "old", oldString: "Original flow text.", newString: "Changed flow text." }
+    : { op: "append", path: "old", section: "Evidence", markdown: "Added flow evidence." });
+  expect(result).toMatchObject({ ok: true, applied: true });
+  const text = readFileSync(file, "utf8"), after = parseFrontmatter(text);
+  expect(after.data).toEqual({ ...metadata, updated: contentDate });
+  expect(after.body).toBe(operation === "patch" ? body.replace("Original flow text.", "Changed flow text.") : body.replace("## Topics", "## Evidence\n\nAdded flow evidence.\n\n## Topics"));
+  expect(Buffer.from(text).subarray(0, 3)).toEqual(Buffer.from(original).subarray(0, 3));
+  if (operation === "patch") expect(text.replaceAll("\r\n", "")).not.toContain("\n");
+});
+
+for (const [op, value] of [["patch", ".inf"], ["append", ".inf"], ["link", ".inf"], ["supersede", ".inf"], ["patch", ".nan"], ["patch", "-0"]] as const) test(`AC1 ${op} preserves legacy non-JSON flow value ${value} and warns when dates cannot be stamped`, () => {
+  const f = fixture(), path = op === "supersede" ? "next" : "old", file = join(f.notes, `${path}.md`);
+  const fields = { title: "Legacy Flow Reference", description: "Synthetic legacy bibliographic evidence.", type: "reference", domain: "research", topics: ["[[research]]"], year: "non-json", updated: "2026-01-01" };
+  const header = `---\n${JSON.stringify(fields).replace('"year":"non-json"', `"year":${value}`)}\n---\n`;
+  writeFileSync(file, header + "# Legacy Flow Reference\n\nOriginal legacy text.\n\n## Topics\n\n- [[research]]\n");
+  const operation: WriteOp = op === "patch" ? { op, path, oldString: "Original legacy text.", newString: "Changed legacy text." }
+    : op === "append" ? { op, path, section: "Evidence", markdown: "Added legacy evidence." }
+    : op === "link" ? { op, from: "old", to: "next", relation: "supports" }
+    : { op, old: "old", next: "next" };
+  const result = writeAtDate(f, operation);
+  expect(result).toMatchObject({ ok: true, applied: true });
+  expect(result.issues).toContainEqual(expect.objectContaining({ code: "V01", severity: "warning", path: `notes/${path}.md`, message: expect.stringMatching(/content was saved.*automatic dates were not set.*cannot round-trip.*text editor.*block mapping.*updated/) }));
+  expect(result.issues.some(issue => issue.code === "IO")).toBe(false);
+  const text = readFileSync(file, "utf8"); expect(text.startsWith(header)).toBe(true);
+  expect(parseFrontmatter(text).data.updated).toBe("2026-01-01");
+  expect(text).toContain(op === "patch" ? "Changed legacy text." : op === "append" ? "Added legacy evidence." : op === "link" ? "[[next]] (supports)" : "Supersedes [[old]]");
+});
+
+for (const operation of ["patch", "append"] as const) for (const [name, fields] of [
+  ["updated anchor referenced by created", 'updated: &day "2020-01-01"\ncreated: *day\n'],
+  ["updated alias referencing created", 'created: &day "2020-01-01"\nupdated: *day\n'],
+  ["unreferenced updated anchor", 'updated: &day "2020-01-01"\ncreated: "2019-01-01"\n'],
+] as const) test(`AC1 ${operation} preserves ${name} and warns instead of breaking its header`, () => {
+  const f = fixture(), file = join(f.notes, "old.md"), base = parseFrontmatter(note("Old Finding", "Original anchored text."));
+  const header = base.frontmatter!.replace(/---\n$/, fields + "---\n"), original = header + base.body;
+  writeFileSync(file, original);
+  const result = writeAtDate(f, operation === "patch"
+    ? { op: "patch", path: "old", oldString: "Original anchored text.", newString: "Changed anchored text." }
+    : { op: "append", path: "old", section: "Evidence", markdown: "Added anchored evidence." });
+  expect(result).toMatchObject({ ok: true, applied: true });
+  const warning = result.issues.find(issue => issue.code === "V01" && issue.severity === "warning" && /anchor|alias/i.test(issue.message));
+  expect(warning).toMatchObject({ path: "notes/old.md" });
+  expect(warning!.message).toContain("replacing any aliases with their literal values and removing anchors");
+  expect(warning!.message).toMatch(/content was saved.*text editor.*block mapping.*updated/);
+  expect(warning!.message).not.toMatch(/retry|repeat|rerun/i);
+  expect(result.issues.some(issue => issue.code === "IO" || issue.severity === "error")).toBe(false);
+  const text = readFileSync(file, "utf8");
+  expect(text.startsWith(header)).toBe(true);
+  expect(parseFrontmatter(text).data).toEqual(parseFrontmatter(original).data);
+  expect(parseFrontmatter(text).data.updated).toBe("2020-01-01");
+  expect(parseFrontmatter(text).body).toContain(operation === "patch" ? "Changed anchored text." : "Added anchored evidence.");
+});
+
+for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} can stamp a date beside unrelated anchored metadata without changing its alias graph`, () => {
+  const f = fixture(), file = join(f.notes, "old.md"), base = parseFrontmatter(note("Old Finding", "Original unrelated-anchor text."));
+  const anchor = 'aliases: &labels ["Unrelated Alias"]\ntags: *labels\n';
+  const original = base.frontmatter!.replace(/---\n$/, anchor + "---\n") + base.body;
+  writeFileSync(file, original);
+  const result = writeAtDate(f, operation === "patch"
+    ? { op: "patch", path: "old", oldString: "Original unrelated-anchor text.", newString: "Changed unrelated-anchor text." }
+    : { op: "append", path: "old", section: "Evidence", markdown: "Added unrelated-anchor evidence." });
+  expect(result).toMatchObject({ ok: true, applied: true });
+  const text = readFileSync(file, "utf8"), after = parseFrontmatter(text);
+  expect(text).toContain(anchor);
+  expect(after.data).toEqual({ ...parseFrontmatter(original).data, updated: contentDate });
+  expect(result.issues.some(issue => /automatic dates were not set/.test(issue.message) || issue.code === "IO" || issue.severity === "error")).toBe(false);
+  expect(after.body).toContain(operation === "patch" ? "Changed unrelated-anchor text." : "Added unrelated-anchor evidence.");
+});
+
+test("AC1 frontmatter stamps updated after a valid metadata change", () => {
+  const f = fixture();
+  expect(writeAtDate(f, { op: "frontmatter", path: "old", set: { confidence: "likely", updated: "2000-01-01" } })).toMatchObject({ ok: true, applied: true });
+  const after = parseFrontmatter(readFileSync(join(f.notes, "old.md"), "utf8"));
+  expect(after.data).toMatchObject({ confidence: "likely", updated: contentDate });
+  expect(after.data.created).toBeUndefined();
+});
+
+test("AC1 supersede stamps updated on both changed notes", () => {
+  const f = fixture();
+  expect(writeAtDate(f, { op: "supersede", old: "old", next: "next" })).toMatchObject({ ok: true, applied: true });
+  for (const name of ["old.md", "next.md"]) {
+    const data = parseFrontmatter(readFileSync(join(f.notes, name), "utf8")).data;
+    expect(data.updated).toBe(contentDate); expect(data.created).toBeUndefined();
+  }
+});
+
+test("AC1 no-op, read/check and report paths leave yesterday's note metadata untouched", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  const original = note("Old Finding", "Original text.", { updated: "2026-01-01" }); writeFileSync(file, original);
+  for (const operation of [
+    { op: "frontmatter", path: "old", set: { title: "Old Finding" } },
+    { op: "patch", path: "old", oldString: "Original text.", newString: "Original text." },
+  ] satisfies WriteOp[]) {
+    expect(writeAtDate(f, operation)).toMatchObject({ ok: true, applied: false, changes: [] });
+    expect(readFileSync(file, "utf8")).toBe(original);
+  }
+  const checked = writeAtDate(f, { op: "check", path: "old", text: original });
+  expect(checked).toMatchObject({ ok: true, applied: false });
+  expect(checked.changes).toEqual([expect.objectContaining({ path: "notes/old.md", beforeSha: sha256(original), sha256: sha256(original) })]);
+  expect(run(["show", "test", "old", "--json"], f.env).code).toBe(0);
+  const report = note("Report snapshot", "Report bytes stay exact.", { updated: "1999-01-01" });
+  expect(writeAtDate(f, { op: "report", path: "reports/date-check.md", text: report })).toMatchObject({ ok: true, applied: true });
+  expect(readFileSync(join(f.vault, "reports/date-check.md"), "utf8")).toBe(report);
+  expect(readFileSync(file, "utf8")).toBe(original);
+});
+
+test("AC1 link stamps both authored relations and an already-linked no-op preserves dates", () => {
+  const f = fixture();
+  for (const [path, title] of [["old", "Old Finding"], ["next", "Next Finding"]]) writeFileSync(join(f.notes, `${path}.md`), note(title!, "A relation fixture.", { updated: "2026-01-01" }));
+  const operation = { op: "link" as const, from: "old", to: "next", relation: "supports" as const };
+  expect(writeAtDate(f, operation)).toMatchObject({ ok: true, applied: true });
+  const before = ["old", "next"].map(path => readFileSync(join(f.notes, `${path}.md`), "utf8"));
+  for (const source of before) expect(parseFrontmatter(source).data.updated).toBe(contentDate);
+  expect(applyWrite(f.home, { vault: "test", operation }, { now: new Date(2026, 0, 3, 1) })).toMatchObject({ ok: true, applied: false, changes: [] });
+  expect(["old", "next"].map(path => readFileSync(join(f.notes, `${path}.md`), "utf8"))).toEqual(before);
+});
+
+test("AC1 move rewrites self-links and another note's backlink without refreshing either note", () => {
+  const f = fixture();
+  writeFileSync(join(f.notes, "old.md"), note("Old Finding", "Self link [[old]].", { updated: "2026-01-01" }));
+  writeFileSync(join(f.notes, "next.md"), note("Next Finding", "Backlink [[old]].", { updated: "2025-12-31" }));
+  const operation = { op: "move" as const, from: "old", to: "renamed" };
+  const preview = applyWrite(f.home, { vault: "test", operation }, { now: contentNow });
+  expect(preview).toMatchObject({ ok: true, applied: false, preview: true });
+  expect(applyWrite(f.home, { vault: "test", operation, confirm: true, fingerprint: preview.fingerprint }, { now: contentNow })).toMatchObject({ ok: true, applied: true });
+  for (const [path, updated] of [["renamed", "2026-01-01"], ["next", "2025-12-31"]]) {
+    const text = readFileSync(join(f.notes, `${path}.md`), "utf8");
+    expect(text).toContain("[[renamed]]"); expect(text).not.toContain("[[old]]");
+    expect(parseFrontmatter(text).data.updated).toBe(updated);
+  }
+});
+
+for (const op of ["tidy", "sanitize"] as const) test(`AC1 ${op} normalizes content without refreshing updated`, () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  const source = note("Old Finding", "Original text.\n\n## Connections\n\n- [[next]]", { updated: "2026-01-01" });
+  writeFileSync(file, source);
+  const operation: WriteOp = op === "tidy" ? { op } : { op, path: "notes/old.md", text: source.replace("Original text.", "Normalized text.") };
+  const preview = applyWrite(f.home, { vault: "test", operation, dryRun: true }, { now: contentNow });
+  expect(preview).toMatchObject({ ok: true, applied: false, preview: true });
+  const result = applyWrite(f.home, { vault: "test", operation, ...(op === "tidy" ? { confirm: true, fingerprint: preview.fingerprint } : {}) }, { now: contentNow });
+  expect(result).toMatchObject({ ok: true, applied: true });
+  const text = readFileSync(file, "utf8"); expect(text).not.toBe(source);
+  expect(text).toContain(op === "tidy" ? "## Relevant Notes" : "Normalized text.");
+  expect(parseFrontmatter(text).data.updated).toBe("2026-01-01");
+});
+
+test("AC1 stamping cannot hide secret-looking caller-supplied updated metadata from validation", () => {
+  const f = fixture(), before = readFileSync(join(f.notes, "old.md"), "utf8"), operation = create();
+  operation.frontmatter.updated = "password: synthetic-value";
+  for (const candidate of [operation, { op: "frontmatter", path: "old", set: { updated: "password: synthetic-value" } }] satisfies WriteOp[]) {
+    const result = writeAtDate(f, candidate);
+    expect(result).toMatchObject({ ok: false, applied: false });
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: "V06", severity: "error" }));
+    expect(JSON.stringify(result)).not.toContain("synthetic-value");
+  }
+  expect(existsSync(join(f.notes, "new-finding.md"))).toBe(false);
+  expect(readFileSync(join(f.notes, "old.md"), "utf8")).toBe(before);
+});
 test("dry-run, read-only check and refusal make no filesystem changes including locks/cache", () => {
   const f = fixture(), before = disk(f.root);
   expect(f.request(create(), { dryRun: true }).ok).toBe(true); expect(disk(f.root)).toEqual(before);
@@ -475,4 +679,54 @@ test("per-command help uses the usage table before parsing or loading a home", a
   expect(result.exitCode).toBe(0);
   expect(result.stdout.toString()).toContain("check <vault> <file|->");
   expect(result.stderr.toString()).toBe("");
+});
+
+for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} date warning names a value mismatch without blaming absent aliases`, () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  const fields = { title: "Flow Value", description: "Synthetic NEL value.", type: "insight", domain: "research", topics: ["[[research]]"], updated: "2026-01-01" };
+  // ASCII YAML escape syntax deliberately tests a decoded NEL, not literal header text.
+  const header = `---\n${JSON.stringify(fields).replace("NEL", String.raw`\N`)}\n---\n`;
+  const source = header + "# Flow Value\n\nOriginal value text.\n\n## Topics\n\n- [[research]]\n";
+  writeFileSync(file, source);
+  const request: WriteOp = operation === "patch" ? { op: operation, path: "old", oldString: "Original value text.", newString: "Changed value text." } : { op: operation, path: "old", section: "Evidence", markdown: "Added value evidence." };
+  const preview = applyWrite(f.home, { vault: "test", operation: request, dryRun: true }, { now: contentNow });
+  expect(preview).toMatchObject({ ok: true, applied: false, preview: true });
+  expect(preview.issues.map(issue => issue.message).join(" ")).not.toContain("content was saved");
+  expect(readFileSync(file, "utf8")).toBe(source);
+  const result = writeAtDate(f, request); expect(result).toMatchObject({ ok: true, applied: true });
+  const warning = result.issues.find(issue => issue.severity === "warning" && issue.message.includes("automatic dates"))!;
+  expect(warning.message).toMatch(/content was saved.*header could not be rewritten without changing a value.*text editor.*block mapping.*updated/);
+  expect(warning.message).not.toMatch(/alias|anchor|retry|repeat|rerun/i);
+  const after = readFileSync(file, "utf8"); expect(after.startsWith(header)).toBe(true);
+  expect(parseFrontmatter(after).data).toEqual(parseFrontmatter(source).data);
+  expect(after).toContain(operation === "patch" ? "Changed value text." : "Added value evidence.");
+});
+
+for (const cause of ["non-JSON flow", "flow value mismatch", "date alias"] as const) test(`AC1 advised manual header repair works for ${cause} before the next distinct authored write`, () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  const fields = { title: "Manual Repair", description: cause === "flow value mismatch" ? "Synthetic NEL value." : "Synthetic header repair evidence.", type: "insight", domain: "research", topics: ["[[research]]"], updated: "2026-01-01" };
+  let block = Object.entries(fields).map(([key, value]) => `${key}: ${JSON.stringify(value)}\n`).join("");
+  let yaml = JSON.stringify(cause === "non-JSON flow" ? { ...fields, methodology: { threshold: "NON_JSON" } } : fields).replace('"NON_JSON"', ".inf");
+  if (cause === "non-JSON flow") block += "methodology:\n  threshold: .inf\n";
+  if (cause === "flow value mismatch") { yaml = yaml.replace("NEL", String.raw`\N`); block = block.replace("NEL", String.raw`\N`); }
+  if (cause === "date alias") { yaml = block.replace('updated: "2026-01-01"\n', 'updated: &day "2026-01-01"\ncreated: *day\n'); block += 'created: "2026-01-01"\n'; }
+  const header = `---\n${yaml}\n---\n`;
+  writeFileSync(file, header + "# Manual Repair\n\nOriginal repair prose.\n\n## Topics\n\n- [[research]]\n");
+  const first = writeAtDate(f, { op: "append", path: "old", section: "Evidence", markdown: "First saved evidence." });
+  expect(first).toMatchObject({ ok: true, applied: true });
+  const warning = first.issues.find(issue => issue.message.includes("automatic dates"))!;
+  expect(warning.message).toMatch(/content was saved.*text editor.*block mapping with plain literal values.*later authored writes stamp updated automatically/);
+  expect(warning.message).not.toMatch(/frontmatter edit|retry|repeat|rerun/i);
+  if (cause === "date alias") expect(warning.message).toContain("replacing any aliases with their literal values and removing anchors");
+  const saved = parseFrontmatter(readFileSync(file, "utf8"));
+  expect(saved.data.updated).toBe("2026-01-01");
+  // Simulate the instructed text-editor header edit, not the refused/no-op vmem metadata operation.
+  writeFileSync(file, `---\n${block}---\n${saved.body}`);
+  const repaired = parseFrontmatter(readFileSync(file, "utf8")); expect(repaired.data).toEqual(saved.data);
+  const next = writeAtDate(f, { op: "append", path: "old", section: "After Repair", markdown: "New evidence after manual repair." });
+  expect(next).toMatchObject({ ok: true, applied: true, issues: [] });
+  const after = parseFrontmatter(readFileSync(file, "utf8"));
+  expect(after.data).toEqual({ ...repaired.data, updated: contentDate });
+  expect(after.body.split("First saved evidence.")).toHaveLength(2);
+  expect(after.body.split("New evidence after manual repair.")).toHaveLength(2);
 });

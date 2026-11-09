@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { emitFrontmatter, parseFrontmatter } from "../src/frontmatter.ts";
+import { emitFrontmatter, parseFrontmatter, frontmatterReferences } from "../src/frontmatter.ts";
 
 describe("lossless frontmatter", () => {
   test("retains comments, scalar styles, sequences, mappings, BOM and CRLF byte-identically", () => {
@@ -69,4 +69,12 @@ describe("lossless frontmatter", () => {
     }
     expect(() => emitFrontmatter(parseFrontmatter("Body"), { title: Number.NaN })).toThrow("JSON-compatible");
   });
+});
+
+test("header reference graphs use the shared YAML lexer and ignore literal scalar/comment/body text", () => {
+  const source = "---\nquoted: \"&literal *literal\"\nsingle: '&literal *literal'\nplain: a &literal *literal\nblock: |\n  &literal *literal\n# &literal *literal\nvalues: [&first one, *first, &second two, *second]\n---\n&body *body\n";
+  expect(frontmatterReferences(parseFrontmatter(source))).toEqual([
+    { kind: "anchor", name: "first", binding: 0 }, { kind: "alias", name: "first", binding: 0 },
+    { kind: "anchor", name: "second", binding: 1 }, { kind: "alias", name: "second", binding: 1 },
+  ]);
 });
