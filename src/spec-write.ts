@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, fstatSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, fchmodSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { SpecSourceSpec, VmemConfig } from "./config.ts";
@@ -11,6 +11,7 @@ import { discoverSpecs, resolveSpecWorktree, type SpecCandidate, type SpecDocume
 import { introducedSpecErrors, type SpecValidationIssue } from "./spec-validate.ts";
 import { MAX_NOTE_BYTES } from "./vault-index.ts";
 import { screenContent, screenMetadata } from "./write-validation.ts";
+import { specGit } from "./spec-git.ts";
 
 export const SPEC_UPDATE_SCALAR_FIELDS = ["title", "type", "status", "parent", "superseded-by", "verified-against"] as const;
 export const SPEC_UPDATE_LIST_FIELDS = ["depends-on", "references", "implements", "covers", "tags", "paths"] as const;
@@ -19,12 +20,17 @@ export interface SpecUpdateRequest {
   id: string; source?: string; worktree?: string; expectedSha?: string;
   set?: Record<string, string>; unset?: string[]; add?: Record<string, string[]>; remove?: Record<string, string[]>;
 }
+export interface SpecCreateRequest {
+  path: string; id: string; type: string; title: string; source?: string; worktree?: string;
+  status?: string; parent?: string; "superseded-by"?: string; "verified-against"?: string;
+  "depends-on"?: string[]; references?: string[]; implements?: string[]; covers?: string[]; tags?: string[]; paths?: string[];
+}
 export interface SpecWriteIssue { code: string; severity: "error" | "warning"; message: string; path?: string; target?: string; originalTarget?: string; field?: string }
 export interface SpecWriteResult {
   ok: boolean; changed: boolean; actor: "agent" | "person"; source?: string; worktree?: string; id?: string; path?: string; sha256?: string; issues: SpecWriteIssue[];
 }
 export interface SpecWriteOptions { env?: NodeJS.ProcessEnv; channel?: "cli" | "mcp"; binding?: SpecSourceSpec }
-export interface SpecMutation { path: string; before: string; after: string }
+export interface SpecMutation { path: string; before: string | null; after: string }
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 class Refusal extends Error {
@@ -42,9 +48,14 @@ function deniedSpecPath(file: string, denyPaths: string[]): boolean {
   return isDenied(canonicalPath(file), denyPaths) || isDenied(file, denyPaths);
 }
 
+function pathParts(path: string): string[] {
+  if (typeof path !== "string" || isAbsolute(path) || !path.endsWith(".md") || path.includes("\\") || /[\p{Cc}]/u.test(path) || path.split("/").some(part => !part || part === "." || part === ".." || part.toLowerCase() === ".git")) refuse("PATH", "spec path is not contained Markdown; use a relative .md path outside Git administrative directories", typeof path === "string" ? path : undefined);
+  return path.split("/");
+}
+
 /** Read without following links or accepting a torn/oversized file. Parent paths are checked before every write stage. */
 function plainPath(root: string, path: string, denyPaths: string[] = []): string {
-  if (isAbsolute(path) || !path.endsWith(".md") || path.includes("\\") || /[\p{Cc}]/u.test(path) || path.split("/").some(part => !part || part === "." || part === "..")) refuse("PATH", "spec path is not contained Markdown; use a discovered plain .md file", path);
+  pathParts(path);
   let file = root;
   if (lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory()) refuse("PATH", "worktree root changed; restore the original plain root and retry", path);
   for (const [index, part] of path.split("/").entries()) {
@@ -70,6 +81,61 @@ function readBounded(file: string, path: string): { source: string; mode: number
 }
 
 function readPlain(root: string, path: string, denyPaths: string[]) { return readBounded(plainPath(root, path, denyPaths), path); }
+
+/** Missing parent directories are allowed; every existing component must be plain. Never follows a dangling link. */
+function createPath(root: string, path: string, denyPaths: string[], env: NodeJS.ProcessEnv): string {
+  const parts = pathParts(path);
+  if (lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory()) refuse("PATH", "worktree root changed; restore the original plain root and retry", path);
+  let file = root;
+  for (const [index, part] of parts.entries()) {
+    file = join(file, part);
+    let stat;
+    try { stat = lstatSync(file); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; continue; }
+    if (stat.isSymbolicLink() || !stat.isDirectory() || index === parts.length - 1) refuse("PATH", "create requires an absent target and plain directory components; choose a new in-worktree path", path);
+    if (!within(root, realpathSync(file))) refuse("PATH", "spec parent leaves the worktree; choose a contained plain path", path);
+  }
+  if (deniedSpecPath(file, denyPaths)) refuse("PATH", "spec path is denied; choose an allowed path", path);
+  if (specGit(root, ["check-ignore", "--quiet", "--no-index", "--", path], { env, allowedExitCodes: [0, 1] }).status === 0) refuse("PATH", "spec path is git-ignored; choose a non-ignored path or adjust the ignore policy before retrying", path);
+  return file;
+}
+function readMutation(root: string, change: SpecMutation, denyPaths: string[], env: NodeJS.ProcessEnv): { source: string | null; mode: number; identity: string | null } {
+  if (change.before !== null) return readPlain(root, change.path, denyPaths);
+  createPath(root, change.path, denyPaths, env);
+  return { source: null, mode: 0o600, identity: null };
+}
+function ensureCreateParents(root: string, path: string, denyPaths: string[], env: NodeJS.ProcessEnv, owned: Map<string, string>): void {
+  let parent = root;
+  for (const part of pathParts(path).slice(0, -1)) {
+    createPath(root, path, denyPaths, env);
+    parent = join(parent, part);
+    try { mkdirSync(parent, { mode: 0o700 }); owned.set(parent, identity(parent)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  }
+  createPath(root, path, denyPaths, env);
+}
+function prepareMutationTarget(root: string, change: SpecMutation, denyPaths: string[], env: NodeJS.ProcessEnv, owned: Map<string, string>): string {
+  if (change.before !== null) return plainPath(root, change.path, denyPaths);
+  ensureCreateParents(root, change.path, denyPaths, env, owned);
+  return createPath(root, change.path, denyPaths, env);
+}
+function checkExpectedSha(change: SpecMutation, expectedSha: string | undefined): void {
+  if (expectedSha !== undefined && (change.before === null || !/^[a-f0-9]{64}$/.test(expectedSha) || hash(change.before) !== expectedSha)) refuse("EXPECTED_SHA", "expectedSha does not match the spec; reread vmem spec get and retry with its sha256", change.path);
+}
+/** A new target is published without replacement; an update replaces its checked original. */
+function publishSpec(temp: string, file: string, change: SpecMutation, result: SpecWriteResult): void {
+  if (change.before === null) linkSync(temp, file);
+  else renameSync(temp, file);
+  result.changed = true; result.sha256 = hash(change.after);
+  if (change.before === null) unlinkSync(temp);
+}
+function cleanupCreatedDirs(owned: Map<string, string>, result: SpecWriteResult): void {
+  if (result.changed) return;
+  for (const [dir, stamp] of [...owned].reverse()) {
+    try { if (identity(dir) !== stamp) throw new Error("directory ownership changed"); rmdirSync(dir); }
+    catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "owned empty parent directory cleanup failed; inspect the target's parent directories before retrying", ...(result.path ? { path: result.path } : {}) }); }
+  }
+}
 
 /** Pure prospective tree, shared by frontmatter update and future create/delete operations. No prospective file is read from disk. */
 export function prospectiveSpecSnapshot(current: SpecSnapshot, edits: ReadonlyMap<string, string | null>): SpecSnapshot {
@@ -128,13 +194,14 @@ function guardSpecWrite(home: string, request: Pick<SpecUpdateRequest, "source" 
 export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" | "source" | "worktree" | "expectedSha">, plan: (snapshot: SpecSnapshot) => SpecMutation, options: SpecWriteOptions = {}): SpecWriteResult {
   const env = options.env ?? process.env, channel = options.channel ?? "cli";
   const result: SpecWriteResult = { ok: false, changed: false, actor: channel === "mcp" || AGENT_MARKERS.some(key => !!env[key]) ? "agent" : "person", id: request.id, issues: [] };
+  const createdDirs = new Map<string, string>();
   let lockFd: number | undefined, lockFile: string | undefined, lockIdentity: string | undefined, temp: string | undefined, tempIdentity: string | undefined;
   try {
     let initial!: SpecSnapshot, first!: SpecMutation, commonIdentity!: string;
     const startup = guardSpecWrite(home, request, options, undefined, guard => {
       result.source = guard.source.id; result.worktree = guard.root;
       initial = discoverSpecs(guard.source, { worktree: guard.root, env }); commonIdentity = identity(initial.commonDir); first = plan(initial);
-      result.path = first.path; plainPath(guard.root, first.path, guard.config.denyPaths ?? []);
+      result.path = first.path; readMutation(guard.root, first, guard.config.denyPaths ?? [], env);
       return first.path;
     });
     const { config, source, root, homeRoot } = startup;
@@ -142,9 +209,9 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
       if (lockFile && lockIdentity !== undefined && identity(lockFile) !== lockIdentity) refuse("LOCKED", "spec mutation lock changed ownership; inspect the lock under VMEM_HOME and retry after the other writer finishes", result.path);
       guardSpecWrite(home, request, options, startup);
     };
-    if (request.expectedSha !== undefined && (!/^[a-f0-9]{64}$/.test(request.expectedSha) || hash(first.before) !== request.expectedSha)) refuse("EXPECTED_SHA", "expectedSha does not match the spec; reread vmem spec get and retry with its sha256", first.path);
+    checkExpectedSha(first, request.expectedSha);
     screen(first.after, source, config, first.path);
-    if (first.before === first.after) { assertBinding(); result.ok = true; result.sha256 = hash(first.before); return result; }
+    if (first.before === first.after) { assertBinding(); result.ok = true; result.sha256 = hash(first.after); return result; }
     mkdirSync(homeRoot, { recursive: true, mode: 0o700 });
     const lockDir = join(homeRoot, "spec-mutations"); mkdirSync(lockDir, { recursive: true, mode: 0o700 });
     if (lstatSync(lockDir).isSymbolicLink() || realpathSync(lockDir) !== lockDir) refuse("LOCKED", "spec lock directory is not plain; restore a private lock directory under VMEM_HOME and retry", first.path);
@@ -160,26 +227,26 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     assertBinding();
     const current = discoverSpecs(source, { worktree: root, env }), change = plan(current);
     if (current.commonDir !== initial.commonDir || identity(initial.commonDir) !== commonIdentity || change.path !== first.path || change.before !== first.before) refuse("DRIFT", "spec changed since the request read; reread vmem spec get and retry with its sha256", first.path);
-    const original = readPlain(root, change.path, config.denyPaths ?? []);
+    const original = readMutation(root, change, config.denyPaths ?? [], env);
     if (original.source !== change.before) refuse("DRIFT", "spec changed under the mutation lock; reread vmem spec get and retry", change.path);
     const prospective = prospectiveSpecSnapshot(current, new Map([[change.path, change.after]]));
     screen(change.after, source, config, change.path);
     const introduced = introducedSpecErrors(current, prospective, { env });
     if (introduced.length) throw new Refusal(attributeSpecErrors(introduced, change.path));
-    const file = plainPath(root, change.path, config.denyPaths ?? []), parent = dirname(file), parentIdentity = identity(parent);
+    const file = prepareMutationTarget(root, change, config.denyPaths ?? [], env, createdDirs), parent = dirname(file), parentIdentity = identity(parent);
     const candidateTemp = join(parent, `.spec-${randomUUID()}.tmp`);
     const fd = openSync(candidateTemp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, original.mode);
     temp = candidateTemp;
     try { const stat = fstatSync(fd, { bigint: true }); tempIdentity = `${stat.dev}:${stat.ino}`; fchmodSync(fd, original.mode); writeFileSync(fd, change.after); fsyncSync(fd); } finally { closeSync(fd); }
     assertBinding();
     if (identity(parent) !== parentIdentity || !isDeepStrictEqual(discoverSpecs(source, { worktree: root, env }), current)) refuse("DRIFT", "spec tree changed while validating; reread the source tree and retry the update", change.path);
-    const latest = readPlain(root, change.path, config.denyPaths ?? []), staged = readBounded(temp, change.path);
+    const latest = readMutation(root, change, config.denyPaths ?? [], env), staged = readBounded(temp, change.path);
     if (latest.source !== change.before || latest.identity !== original.identity || staged.source !== change.after || staged.identity !== tempIdentity) refuse("DRIFT", "spec target or staged file changed before commit; reread the spec and retry the update", change.path);
     assertBinding();
-    renameSync(temp, file); temp = undefined; result.changed = true; result.sha256 = hash(change.after);
+    publishSpec(temp, file, change, result); temp = undefined;
     syncDirectory(parent); result.ok = true;
   } catch (error) {
-    result.issues = error instanceof Refusal ? error.issues : [{ code: "IO", severity: "error", message: `spec update failed (${writeErrorCause(error)}); inspect the written file and source binding, check permissions and free space for the target and VMEM_HOME lock directory, repair the reported cause and retry`, ...(result.path ? { path: result.path } : {}) }];
+    result.issues = error instanceof Refusal ? error.issues : [{ code: "IO", severity: "error", message: `spec write failed (${writeErrorCause(error)}); inspect the written file and source binding, check permissions and free space for the target and VMEM_HOME lock directory, repair the reported cause and retry`, ...(result.path ? { path: result.path } : {}) }];
     result.path ??= result.issues.find(issue => issue.path)?.path;
   } finally {
     if (temp) {
@@ -192,6 +259,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
       try { if (lockFile && identity(lockFile) === lockIdentity) unlinkSync(lockFile); }
       catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "spec lock cleanup failed; inspect the owned lock under VMEM_HOME before retrying", ...(result.path ? { path: result.path } : {}) }); }
     }
+    cleanupCreatedDirs(createdDirs, result);
   }
   return result;
 }
@@ -234,3 +302,31 @@ export function updateSpec(home: string, request: SpecUpdateRequest, options: Sp
     return { path: document.path, before: document.source, after: updateFrontmatter(document, request) };
   }, options);
 }
+
+/** Create structural prose only; body editing remains with the caller's normal file tools. */
+export function createSpec(home: string, request: SpecCreateRequest, options: SpecWriteOptions = {}): SpecWriteResult {
+  return mutateSpec(home, request, () => {
+    const fields = ["id", "type", "title", "status", "parent", "superseded-by", "depends-on", "references", "implements", "covers", "tags", "paths", "verified-against"] as const;
+    const invalid = (message: string): never => refuse("INPUT", `${message}; supply the documented spec create metadata fields`, request.path);
+    if (Object.keys(request).some(key => !["path", "source", "worktree", ...fields].includes(key))) invalid("unknown create option");
+    for (const field of ["path", "id", "type", "title"] as const) if (typeof request[field] !== "string" || !request[field].trim()) invalid(`${field} must be a nonempty string`);
+    if (!Object.hasOwn(SPEC_HEADINGS, request.type)) invalid("unknown type vocabulary");
+    if (request.status !== undefined && !["draft", "active", "deprecated"].includes(request.status)) invalid("unknown status vocabulary");
+    if (/[\r\n]/.test(request.title)) invalid("title must be a single line for the generated H1 heading");
+    const data: Record<string, unknown> = {};
+    for (const field of fields) {
+      const value = field === "status" ? request.status ?? "draft" : request[field];
+      if (value === undefined) continue;
+      if ((SPEC_UPDATE_LIST_FIELDS as readonly string[]).includes(field)) {
+        if (!Array.isArray(value) || value.some(item => typeof item !== "string" || !item.trim())) invalid(`${field} must be a list of nonempty strings`);
+      } else if (typeof value !== "string" || !value.trim()) invalid(`${field} must be a nonempty string`);
+      data[field] = value;
+    }
+    const body = `# ${request.title}\n\n` + SPEC_HEADINGS[request.type]!.map(heading => `## ${heading}\n\n`).join("");
+    return { path: request.path, before: null, after: emitFrontmatter(parseFrontmatter(body), data) };
+  }, options);
+}
+const SPEC_HEADINGS: Readonly<Record<string, readonly string[]>> = {
+  goal: ["Scope", "Decisions", "Success and evidence"], architecture: ["Boundaries", "Decisions"],
+  module: ["Responsibility", "Interfaces", "Decisions"], submodule: ["Responsibility", "Interfaces", "Decisions"],
+};

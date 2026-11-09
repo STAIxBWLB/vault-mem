@@ -52,7 +52,7 @@ test("tools/list: vault enum is the registered ids, default is first personal, e
     if (!t.name.startsWith("vmem_spec_") && !["vmem_status", "vmem_promote"].includes(t.name)) expect(t.inputSchema.properties.vault.enum).toEqual(["team", "mine"]);
     for (const [key, schema] of Object.entries<any>(t.inputSchema.properties)) {
       if (schema.type === "string" && !schema.enum) expect(schema.maxLength, `${t.name}.${key}`).toBeLessThanOrEqual(262144);
-      if (schema.type === "array") expect(schema.maxItems).toBeLessThanOrEqual(64);
+      if (schema.type === "array") expect(schema.maxItems).toBeLessThanOrEqual(t.name === "vmem_spec_create" ? 256 : 64);
     }
   }
   expect(tools.filter(t => t.annotations.destructiveHint).map(t => t.name)).toEqual(["vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_promote"]);

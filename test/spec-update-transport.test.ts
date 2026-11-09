@@ -34,8 +34,8 @@ test("spec update shares one bounded closed schema and advertises a write in MCP
   const update = server.tools.find(tool => tool.name === "vmem_spec_update")!;
   expect(update.inputSchema).toEqual(command.inputSchema);
   expect(update.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
-  for (const tool of server.tools.filter(tool => tool.name !== "vmem_spec_update")) expect(tool.annotations.readOnlyHint).toBe(true);
-  expect(server.tools.some(tool => ["vmem_spec_create", "vmem_spec_delete"].includes(tool.name))).toBe(false);
+  for (const tool of server.tools.filter(tool => !["vmem_spec_update", "vmem_spec_create"].includes(tool.name))) expect(tool.annotations.readOnlyHint).toBe(true);
+  expect(server.tools.some(tool => tool.name === "vmem_spec_delete")).toBe(false);
   expect(COMMANDS.find(item => item.name === "spec update")!.mutates).toBe(true);
   expect(commandUsage("spec update")).toContain("--expected-sha");
   expect(completionScript("bash")).toContain("--unset");
