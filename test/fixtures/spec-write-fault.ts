@@ -1,11 +1,12 @@
 import { mock } from "bun:test";
 import * as fs from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 const [home, mode] = process.argv.slice(2);
 if (!home || !mode) throw new Error("synthetic spec fault fixture needs home and mode");
 const original = { ...fs }, configFile = join(home, "vmem.config.json"), config = JSON.parse(original.readFileSync(configFile, "utf8"));
 const root = config.specs[0].path, target = join(root, "nested/SPEC.md"), temps = new Set<number>(), tempReads = new Set<number>();
 let injected = false, published = false, lock: string | undefined, temp: string | undefined;
+let registerContainer: (() => void) | undefined;
 mock.module("node:fs", () => ({ ...original,
   openSync: (...args: Parameters<typeof fs.openSync>) => {
     const file = String(args[0]), fd = original.openSync(...args);
@@ -40,7 +41,10 @@ mock.module("node:fs", () => ({ ...original,
     original.renameSync(...args); published = true;
   },
   closeSync: (fd: number) => {
-    if (tempReads.delete(fd) && mode === "final-policy") { config.specs[0].write = "none"; original.writeFileSync(configFile, JSON.stringify(config)); }
+    if (tempReads.delete(fd)) {
+      if (mode === "final-policy") { config.specs[0].write = "none"; original.writeFileSync(configFile, JSON.stringify(config)); }
+      if (mode.startsWith("final-home-")) registerContainer!();
+    }
     original.closeSync(fd);
   },
   unlinkSync: (...args: Parameters<typeof fs.unlinkSync>) => {
@@ -49,6 +53,13 @@ mock.module("node:fs", () => ({ ...original,
   },
 }));
 const { updateSpec } = await import("../../src/spec-write.ts");
+if (mode.startsWith("final-home-")) {
+  const { addSpec, addVault } = await import("../../src/registry.ts");
+  registerContainer = () => {
+    if (mode === "final-home-spec") addSpec(home, { id: "container", path: dirname(home), write: "none", pii: "deny" }, process.env);
+    else addVault(home, { id: "container", path: dirname(home), kind: "personal", write: "none", pii: "deny" });
+  };
+}
 const result = updateSpec(home, { id: "child", set: { title: "Attempted edit" } }, { env: process.env });
 if (mode === "dir-fsync" || mode === "lock-cleanup") {
   const { renderSpecUpdate } = await import("../../src/spec-output.ts"), { PLAIN } = await import("../../src/text-output.ts");

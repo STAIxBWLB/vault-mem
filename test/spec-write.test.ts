@@ -175,12 +175,19 @@ test("a held canonical-worktree lock refuses and preserves its owner; home canno
   expect(result.issues[0]!.code).toBe("HOME"); expect(existsSync(join(inRepo, "spec-mutations"))).toBe(false);
 }, 30_000);
 
-for (const mode of ["reread", "policy-drift", "final-policy", "tree-drift", "temp-write", "rename", "lock-replaced", "lock-open-replaced", "temp-corrupt", "temp-replaced"]) test(`interrupted/racing ${mode} keeps original spec bytes and cleans only owned temporaries`, () => {
+for (const mode of ["reread", "policy-drift", "final-policy", "final-home-spec", "final-home-vault", "tree-drift", "temp-write", "rename", "lock-replaced", "lock-open-replaced", "temp-corrupt", "temp-replaced"]) test(`interrupted/racing ${mode} keeps original spec bytes and cleans only owned temporaries`, () => {
   const f = fixture();
+  if (mode === "final-home-spec") f.git(["-c", "init.templateDir=", "init", "--quiet"], f.root);
+  if (mode === "final-home-vault") mkdirSync(join(f.root, "notes"));
   const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-write-fault.ts"), f.home, mode], { env: f.env, stdout: "pipe", stderr: "pipe", timeout: 20000 });
   expect(child.exitCode).toBe(0); const result = JSON.parse(child.stdout.toString()) as SpecWriteResult;
   expect(result).toMatchObject({ ok: false, changed: false });
   if (mode === "final-policy") expect(result.issues[0]!.code).toBe("REGISTRY_DRIFT");
+  if (mode.startsWith("final-home-")) {
+    expect(result.issues[0]!.code).toBe("HOME");
+    const registered = JSON.parse(readFileSync(join(f.home, CONFIG_FILE), "utf8"));
+    expect([...registered.vaults, ...registered.specs]).toContainEqual(expect.objectContaining({ id: "container", path: f.root }));
+  }
   expect(f.read()).toBe(mode === "reread" ? f.original + "External edit.\r\n" : f.original);
   const files = readdirSync(join(f.repo, "nested"));
   if (mode === "temp-replaced") {

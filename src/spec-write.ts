@@ -95,33 +95,46 @@ function screen(after: string, source: SpecSourceSpec, config: VmemConfig, path:
   if (issues.length) throw new Refusal([...new Map(issues.map(issue => [`${issue.code}:${issue.message}`, issue])).values()]);
 }
 
+interface SpecWriteGuard { config: VmemConfig; source: SpecSourceSpec; root: string; homeRoot: string; bindings: readonly (readonly [string, string])[]; path?: string }
+/** Every authorization check uses the fresh registry, both at startup and immediately before publication. */
+function guardSpecWrite(home: string, request: Pick<SpecUpdateRequest, "source" | "worktree">, options: SpecWriteOptions, previous?: SpecWriteGuard, prepare?: (guard: SpecWriteGuard) => string): SpecWriteGuard {
+  const config = loadRegistry(home), sources = config.specs ?? [], source = request.source === undefined ? sources[0] : sources.find(value => value.id === request.source);
+  const path = previous?.path, env = options.env ?? process.env, channel = options.channel ?? "cli";
+  if (!source) refuse(previous ? "REGISTRY_DRIFT" : "SOURCE", "spec source is not registered; use vmem specs list and select a registered source", path);
+  if (options.binding && !isDeepStrictEqual(source, options.binding)) refuse("REGISTRY_DRIFT", "spec source changed since MCP startup; restart the server and reread the spec before updating", path);
+  if (previous && (!isDeepStrictEqual(source, previous.source) || !isDeepStrictEqual(config.denyPaths, previous.config.denyPaths) || !isDeepStrictEqual(config.piiPatterns, previous.config.piiPatterns))) refuse("REGISTRY_DRIFT", "spec registry or screening policy changed during the write; reread the source policy and spec before retrying", path);
+  if (!["mcp", "cli"].includes(channel)) refuse("POLICY", "unknown spec write channel; use CLI or MCP", path);
+  const root = resolveSpecWorktree(source, request.worktree, env), homeRoot = canonicalPath(home);
+  if (isDenied(root, config.denyPaths ?? [])) refuse("PATH", "spec worktree is denied; select an allowed registered source", path);
+  const roots = [root, source.path, ...config.vaults.map(value => value.path), ...sources.map(value => value.path)];
+  if (roots.some(value => within(value, homeRoot))) refuse("HOME", "VMEM_HOME is inside a registered source/worktree; select a home outside repositories before writing", path);
+  const bindings = [...new Set([root, source.path])].map(value => [value, identity(value)] as const);
+  if (previous && (root !== previous.root || !isDeepStrictEqual(bindings, previous.bindings))) refuse("DRIFT", "spec worktree identity changed; restore the registered worktree and retry", path);
+  const guard = { config, source, root, homeRoot, bindings, path };
+  // Resolve the written path once so startup policy refusals retain path attribution.
+  if (prepare) guard.path = prepare(guard);
+  if (source.write === "none" || channel === "mcp" && source.write !== "mcp") refuse("POLICY", `spec write policy ${source.write} refuses channel ${channel}; select an allowed channel or have the owner update the source policy`, guard.path);
+  return guard;
+}
+
 /** Common policy/binding/lock/CAS/validation/atomic path. Future create/delete planners can share these guards. */
 export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" | "source" | "worktree" | "expectedSha">, plan: (snapshot: SpecSnapshot) => SpecMutation, options: SpecWriteOptions = {}): SpecWriteResult {
   const env = options.env ?? process.env, channel = options.channel ?? "cli";
   const result: SpecWriteResult = { ok: false, changed: false, actor: channel === "mcp" || AGENT_MARKERS.some(key => !!env[key]) ? "agent" : "person", id: request.id, issues: [] };
   let lockFd: number | undefined, lockFile: string | undefined, lockIdentity: string | undefined, temp: string | undefined, tempIdentity: string | undefined;
   try {
-    const config = loadRegistry(home), sources = config.specs ?? [], source = request.source === undefined ? sources[0] : sources.find(value => value.id === request.source);
-    if (!source) refuse("SOURCE", "spec source is not registered; use vmem specs list and select a registered source");
-    result.source = source.id;
-    if (options.binding && !isDeepStrictEqual(source, options.binding)) refuse("REGISTRY_DRIFT", "spec source changed since MCP startup; restart the server and reread the spec before updating");
-    if (!["mcp", "cli"].includes(channel)) refuse("POLICY", "unknown spec write channel; use CLI or MCP");
-    const root = resolveSpecWorktree(source, request.worktree, env); result.worktree = root;
-    if (isDenied(root, config.denyPaths ?? [])) refuse("PATH", "spec worktree is denied; select an allowed registered source");
-    const roots = [root, source.path, ...config.vaults.map(value => value.path), ...sources.map(value => value.path)];
-    const homeRoot = canonicalPath(home);
-    if (roots.some(value => within(value, homeRoot))) refuse("HOME", "VMEM_HOME is inside a registered source/worktree; select a home outside repositories before writing");
-    const bindings = [...new Set([root, source.path])].map(value => [value, identity(value)] as const);
+    let initial!: SpecSnapshot, first!: SpecMutation, commonIdentity!: string;
+    const startup = guardSpecWrite(home, request, options, undefined, guard => {
+      result.source = guard.source.id; result.worktree = guard.root;
+      initial = discoverSpecs(guard.source, { worktree: guard.root, env }); commonIdentity = identity(initial.commonDir); first = plan(initial);
+      result.path = first.path; plainPath(guard.root, first.path, guard.config.denyPaths ?? []);
+      return first.path;
+    });
+    const { config, source, root, homeRoot } = startup;
     const assertBinding = () => {
       if (lockFile && lockIdentity !== undefined && identity(lockFile) !== lockIdentity) refuse("LOCKED", "spec mutation lock changed ownership; inspect the lock under VMEM_HOME and retry after the other writer finishes", result.path);
-      const current = loadRegistry(home);
-      if (!isDeepStrictEqual(current.specs?.find(value => value.id === source.id), source) || request.source === undefined && current.specs?.[0]?.id !== source.id || !isDeepStrictEqual(current.denyPaths, config.denyPaths) || !isDeepStrictEqual(current.piiPatterns, config.piiPatterns)) refuse("REGISTRY_DRIFT", "spec registry or screening policy changed during the write; reread the source policy and spec before retrying", result.path);
-      if (bindings.some(([path, stamp]) => identity(path) !== stamp) || resolveSpecWorktree(source, root, env) !== root) refuse("DRIFT", "spec worktree identity changed; restore the registered worktree and retry", result.path);
+      guardSpecWrite(home, request, options, startup);
     };
-    const initial = discoverSpecs(source, { worktree: root, env }), commonIdentity = identity(initial.commonDir), first = plan(initial);
-    result.path = first.path;
-    plainPath(root, first.path, config.denyPaths ?? []);
-    if (source.write === "none" || channel === "mcp" && source.write !== "mcp") refuse("POLICY", `spec write policy ${source.write} refuses channel ${channel}; select an allowed channel or have the owner update the source policy`, first.path);
     if (request.expectedSha !== undefined && (!/^[a-f0-9]{64}$/.test(request.expectedSha) || hash(first.before) !== request.expectedSha)) refuse("EXPECTED_SHA", "expectedSha does not match the spec; reread vmem spec get and retry with its sha256", first.path);
     screen(first.after, source, config, first.path);
     if (first.before === first.after) { assertBinding(); result.ok = true; result.sha256 = hash(first.before); return result; }
