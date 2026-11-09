@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, readdirSync, readlinkSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { BUILTIN_DOMAINS, CONFIG_FILE, CONFIG_VERSION, MAX_CONFIG_BYTES, parseConfig, readConfig } from "../src/config.ts";
+import { BUILTIN_DOMAINS, CONFIG_FILE, CONFIG_VERSION, MAX_CONFIG_BYTES, mutationVault, parseConfig, readConfig } from "../src/config.ts";
 import { resolveHome } from "../src/home.ts";
 import { addVault, loadRegistry, recoverRegistry, removeVault, syncDirectory } from "../src/registry.ts";
 import { run } from "../src/cli.ts";
@@ -16,6 +16,46 @@ function fixture() {
 }
 afterEach(() => { for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 describe("configuration", () => {
+  test("canonTables is optional and preserves literal Unicode paths and explicit key columns without filesystem lookup", () => {
+    const { spec, vault } = fixture();
+    expect(parseConfig({ vaults: [spec] }).vaults[0]).not.toHaveProperty("canonTables");
+    const canonTables = [{ path: "notes/glossary.md" }, { path: "notes/인물.md", keyColumn: 64 }, { path: "notes/glossary.md", keyColumn: 2 }];
+    expect(parseConfig({ vaults: [{ ...spec, canonTables }] }).vaults[0]!.canonTables).toEqual(canonTables);
+    expect(existsSync(join(vault, "notes/glossary.md"))).toBe(false);
+    expect(parseConfig({ vaults: [{ ...spec, canonTables: [] }] }).vaults[0]!.canonTables).toEqual([]);
+    const bounded = Array.from({ length: 16 }, (_, index) => ({ path: `notes/table-${index}.md` }));
+    expect(parseConfig({ vaults: [{ ...spec, canonTables: bounded }] }).vaults[0]!.canonTables).toEqual(bounded);
+    const longest = `notes/${"a".repeat(247)}.md`;
+    expect(Buffer.byteLength(longest)).toBe(256);
+    expect(parseConfig({ vaults: [{ ...spec, canonTables: [{ path: longest }] }] }).vaults[0]!.canonTables![0]!.path).toBe(longest);
+  });
+  test("canonTables names each invalid shape, path, column and bound with its config repair", () => {
+    const { spec } = fixture();
+    const invalid: unknown[] = [null, {}, "notes/glossary.md", [null], ["notes/glossary.md"], [{}], [{ path: "notes/glossary.md", typo: true }],
+      Array.from({ length: 17 }, (_, index) => ({ path: `notes/table-${index}.md` })),
+      [{ path: "notes/glossary.md" }, { path: "notes/glossary.md", keyColumn: 1 }],
+      ...["/notes/a.md", "C:/notes/a.md", "../notes/a.md", "notes/../a.md", "notes/./a.md", "notes/.a.md", "notes/.md", "reports/a.md", "notes/nested/a.md", "notes/a.txt", "notes/a.md/", "notes/a\\b.md", "notes/a\nb.md", "notes/a\tb.md", `notes/${"a".repeat(248)}.md`, `notes/${"가".repeat(83)}.md`].map(path => [{ path }]),
+      ...[null, "1", 0, -1, 1.5, 65, NaN, Infinity].map(keyColumn => [{ path: "notes/glossary.md", keyColumn }]),
+    ];
+    for (const canonTables of invalid) {
+      expect(() => parseConfig({ vaults: [{ ...spec, canonTables }] })).toThrow(/canonTables.*fix canonTables in vmem.config.json/);
+    }
+  });
+  test("canonTables retains newer-format unknown fields but validates its known fields", () => {
+    const { spec } = fixture();
+    const value = { version: CONFIG_VERSION + 1, futureRoot: { mode: "synthetic" }, vaults: [{ ...spec, futureVault: true, canonTables: [{ path: "notes/glossary.md", keyColumn: 2, futureTable: { mode: "synthetic" } }] }] };
+    expect(parseConfig(value)).toEqual(value);
+    expect(() => parseConfig({ ...value, version: CONFIG_VERSION })).toThrow();
+    expect(() => parseConfig({ ...value, vaults: [{ ...spec, canonTables: [{ path: "reports/a.md", futureTable: true }] }] })).toThrow(/canonTables.path.*fix canonTables in vmem.config.json/);
+  });
+  test("canonTables mutation projection strips only advisory tables and keeps unknown future policy", () => {
+    const { spec } = fixture(), futurePolicy = { mode: "synthetic" };
+    const vault = { ...spec, pii: "deny" as const, domains: ["synthetic"], futurePolicy, canonTables: [{ path: "notes/glossary.md" }] };
+    const projected = mutationVault(vault);
+    expect(projected).toEqual({ ...spec, pii: "deny", domains: ["synthetic"], futurePolicy });
+    expect(vault.canonTables).toEqual([{ path: "notes/glossary.md" }]);
+    expect(mutationVault(spec)).toEqual(spec);
+  });
   test("missing config is empty without creating home", () => {
     const home = join(root(), "absent");
     expect(readConfig(home)).toEqual({ vaults: [] });
@@ -45,6 +85,27 @@ describe("configuration", () => {
   });
 });
 describe("registry", () => {
+  test("canonTables round-trips atomically in format 4 without changing the configured notes", () => {
+    const first = fixture(), second = fixture(), canonTables = [{ path: "notes/인물.md", keyColumn: 2 }];
+    const before = readFileSync(join(first.vault, "notes/keep.md"), "utf8");
+    addVault(first.home, { ...first.spec, canonTables });
+    expect(JSON.parse(readFileSync(join(first.home, CONFIG_FILE), "utf8"))).toMatchObject({ version: 4, vaults: [{ canonTables }] });
+    addVault(first.home, { ...second.spec, id: "other" });
+    removeVault(first.home, "other", true);
+    expect(loadRegistry(first.home)).toMatchObject({ version: 4, vaults: [{ canonTables }] });
+    expect(readFileSync(join(first.vault, "notes/keep.md"), "utf8")).toBe(before);
+    expect(readdirSync(first.home)).toEqual([CONFIG_FILE]);
+  });
+  test("registry format keeps specs and domains fallbacks when canonTables is absent", () => {
+    for (const kind of ["plain", "specs", "domains", "empty-canon"] as const) {
+      const f = fixture();
+      if (kind === "specs") { mkdirSync(f.home); writeFileSync(join(f.home, CONFIG_FILE), JSON.stringify({ vaults: [], specs: [] })); }
+      addVault(f.home, { ...f.spec, ...(kind === "domains" ? { domains: ["synthetic"] } : {}), ...(kind === "empty-canon" ? { canonTables: [] } : {}) });
+      const config = loadRegistry(f.home);
+      if (kind === "plain") expect(config).not.toHaveProperty("version");
+      else expect(config.version).toBe(kind === "specs" ? 2 : kind === "domains" ? 3 : 4);
+    }
+  });
   test("agent add, preview and confirm preserve vault files and config policy", () => {
     const { home, vault, spec } = fixture();
     mkdirSync(home); writeFileSync(join(home, CONFIG_FILE), JSON.stringify({ vaults: [], denyPaths: ["private"], piiPatterns: ["sensitive"] }));

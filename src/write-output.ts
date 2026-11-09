@@ -1,3 +1,4 @@
+import type { CanonRowMatch } from "./canon-tables.ts";
 /**
  * Text renderers for writes, two-step previews and promotion (#114): one result line, then changes, issues, the
  * log receipt and, for a preview, the exact confirm command. Note bodies and drafts are never printed; `--json` has them.
@@ -17,6 +18,7 @@ type Candidates = { projects: { project: string; candidates: { id: string; proje
 
 const line = (text: string, o: TextOptions, t?: Tone) => paragraph(text, o, t);
 const list = (label: string, items: readonly string[] | undefined) => items?.length ? [`${label}:`, ...items.map(item => `  - ${clean(item)}`)].join("\n") : undefined;
+const canonList = (rows: readonly CanonRowMatch[] | undefined) => list("canonical rows", rows?.map(row => `${row.path}:${row.line} ${row.key}: ${row.row}`));
 const short = (sha: string | null) => sha ? sha.slice(0, 12) : "-";
 const action = (c: ChangeReceipt) => c.beforeSha === null ? "create" : c.sha256 === null ? "delete" : "update";
 const errors = (issues: readonly WriteIssue[]) => issues.filter(issue => issue.severity === "error").length;
@@ -106,7 +108,7 @@ export function renderOrgPromote(r: OrgPromoteResult, o: TextOptions, ctx: Write
   const lint = r.lint ? line(`org lint: ${r.lint.passed ? "passed" : "failed"}${r.lint.summary ? ` (${r.lint.summary})` : ""}`, o, r.lint.passed ? "ok" : "fail") : undefined;
   const logs = r.logs ? [logLine(r.logs.target ?? undefined, o, "target log"), logLine(r.logs.source ?? undefined, o, "source log")].filter(Boolean).join("\n") : undefined;
   const confirm = r.ok && r.preview && r.fingerprint ? nextCommand("confirm", confirmCommand(ctx.argv, r.fingerprint), o) : undefined;
-  return blocks(line(head, o, t), issueTable(issues, o), list("dropped links", r.droppedLinks), lint, logs, confirm);
+  return blocks(line(head, o, t), issueTable(issues, o), list("dropped links", r.droppedLinks), canonList(r.canonRowMatches), list("canonical table warnings", r.canonTableWarnings), list("choices", r.choices), lint, logs, confirm);
 }
 
 /** `sync <vault>`. */
@@ -146,6 +148,6 @@ export function renderPromote(r: PromoteResult, o: TextOptions, ctx: WriteContex
   const info = fields([["linked", r.linked ?? ""]], o);
   const hint = edited && r.preview ? line("edited text is only previewed: save it and confirm with --body <file> and this fingerprint", o, "warn") : undefined;
   const command = r.ok && r.preview && !r.alreadyLinked && r.fingerprint ? confirmCommand(ctx.argv, r.fingerprint, edited ? ["--edit"] : []) : undefined;
-  return blocks([line(head, o, t), info].filter(Boolean).join("\n"), draft, issueTable(r.issues, o), list("possible duplicates", r.possibleDuplicates), list("choices", r.choices),
+  return blocks([line(head, o, t), info].filter(Boolean).join("\n"), draft, issueTable(r.issues, o), list("possible duplicates", r.possibleDuplicates), canonList(r.canonRowMatches), list("canonical table warnings", r.canonTableWarnings), list("choices", r.choices),
     logLine(r.note?.log, o), hint, command && nextCommand("confirm", edited ? command.replace(/ --confirm /, " --body <file> --confirm ") : command, o));
 }

@@ -152,3 +152,15 @@ test("a bound append reports any re-registration as LOG_DRIFT before policy and 
     expect(receipt.ok).toBe(false); expect(receipt.issues.map(i => i.code)).toEqual(["LOG_DRIFT"]);
   }
 });
+
+test("#167 advisory canonTables changes preserve a bound log append", () => {
+  const f = fixture();
+  const file = join(f.home, "vmem.config.json"), config = JSON.parse(readFileSync(file, "utf8"));
+  const binding = logBinding(structuredClone(config.vaults[0]), config);
+  config.version = 4; config.vaults[0].canonTables = [{ path: "notes/optional-table.md" }];
+  writeFileSync(file, JSON.stringify(config));
+  const result = appendLog(f.home, { vault: "test", event: { type: "EXTRACT", project: "-", source: "synthetic:advisory", note: "Synthetic event" } }, { env: {}, binding });
+  expect(result).toMatchObject({ ok: true, synced: true });
+  expect(result.issues).toEqual([]);
+  expect(readLog(f.home, { vault: "test" }).lines).toHaveLength(1);
+});

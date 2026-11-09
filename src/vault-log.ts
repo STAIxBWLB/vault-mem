@@ -1,3 +1,4 @@
+import { mutationVault } from "./config.ts";
 import { compileLogFilter } from "./log-filter.ts";
 import { closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readSync, realpathSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
@@ -87,7 +88,7 @@ export function logBinding(vault: VaultSpec, config: VmemConfig): LogBinding {
 /** True when the registered vault still equals the binding: spec, path policy and root identity. Never throws. */
 export function matchesBinding(config: VmemConfig, id: string, binding: LogBinding): boolean {
   const vault = config.vaults.find(v => v.id === id);
-  if (!vault || JSON.stringify(vault) !== JSON.stringify(binding.vault) || JSON.stringify(config.denyPaths ?? []) !== JSON.stringify(binding.denyPaths) || JSON.stringify(config.piiPatterns ?? []) !== JSON.stringify(binding.piiPatterns)) return false;
+  if (!vault || JSON.stringify(mutationVault(vault)) !== JSON.stringify(mutationVault(binding.vault)) || JSON.stringify(config.denyPaths ?? []) !== JSON.stringify(binding.denyPaths) || JSON.stringify(config.piiPatterns ?? []) !== JSON.stringify(binding.piiPatterns)) return false;
   try { const identity = lstatSync(vault.path); return Number(identity.dev) === binding.dev && Number(identity.ino) === binding.ino; } catch { return false; }
 }
 export function appendLog(home: string, request: LogRequest, options: { env?: NodeJS.ProcessEnv; now?: Date; binding?: LogBinding } = {}): LogReceipt {
@@ -108,7 +109,7 @@ export function appendLog(home: string, request: LogRequest, options: { env?: No
     const rootIdentity = lstatSync(ctx.vault.path);
     if (options.binding) {
       const bound = options.binding;
-      if (JSON.stringify(ctx.vault) !== JSON.stringify(bound.vault) || rootIdentity.dev !== bound.dev || rootIdentity.ino !== bound.ino || JSON.stringify(ctx.config.denyPaths ?? []) !== JSON.stringify(bound.denyPaths) || JSON.stringify(ctx.config.piiPatterns ?? []) !== JSON.stringify(bound.piiPatterns)) refuse("LOG_DRIFT", "vault identity or policy changed after mutation; log not appended");
+      if (JSON.stringify(mutationVault(ctx.vault)) !== JSON.stringify(mutationVault(bound.vault)) || rootIdentity.dev !== bound.dev || rootIdentity.ino !== bound.ino || JSON.stringify(ctx.config.denyPaths ?? []) !== JSON.stringify(bound.denyPaths) || JSON.stringify(ctx.config.piiPatterns ?? []) !== JSON.stringify(bound.piiPatterns)) refuse("LOG_DRIFT", "vault identity or policy changed after mutation; log not appended");
     }
     const formatted = formatLogEvent(request.event, { ...ctx, env: options.env ?? process.env, now: options.now });
     if (!formatted.line || formatted.issues.some(issue => issue.severity === "error")) { result.issues.push(...formatted.issues); return result; }

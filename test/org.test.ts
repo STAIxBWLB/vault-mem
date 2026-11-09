@@ -9,6 +9,7 @@ import { originCheck, syncVault, sameRemote } from "../src/sync.ts";
 import { readLog } from "../src/vault-log.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { run } from "../src/cli.ts";
+import { CONFIG_FILE } from "../src/config.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -36,6 +37,38 @@ function fixture() {
   return { root, home, personal, org, remote, env };
 }
 const snapshot = (dir: string) => git(dir, "status", "--porcelain", "--untracked-files=all");
+
+test("#167 AC4/AC5 org previews use only target canonical rows and advisory config does not change confirmation", () => {
+  const f = fixture(), now = new Date(2026, 0, 2, 1), options = { env: f.env, now };
+  const sourceFile = join(f.personal, "notes/shared-method.md");
+  writeFileSync(sourceFile, note("Shared Method", "ACME works with Mira North."));
+  writeFileSync(join(f.personal, "notes/people.md"), `${moc}\n| Key | Detail |\n| --- | --- |\n| ACME | PERSONAL_ONLY_ROW_DETAIL |\n| Mira North | PERSONAL_PERSON_ROW_DETAIL |\n`);
+  writeFileSync(join(f.org, "notes/glossary.md"), `${moc}\n| Key | Detail |\n| --- | --- |\n| **ACME** | Public synthetic organization. |\n`);
+  const configFile = join(f.home, CONFIG_FILE), initialConfig = JSON.parse(readFileSync(configFile, "utf8"));
+  initialConfig.denyPaths = [join(f.org, "notes/denied.md")]; writeFileSync(configFile, JSON.stringify(initialConfig));
+  const request = { from: "personal", note: "shared-method", to: "team" };
+  const baseline = promoteToOrg(f.home, request, options);
+  expect(baseline).toMatchObject({ ok: true, preview: true, applied: false });
+  expect(baseline).not.toHaveProperty("canonRowMatches");
+  const file = join(f.home, CONFIG_FILE), config = JSON.parse(readFileSync(file, "utf8"));
+  config.version = 4;
+  config.vaults.find((vault: { id: string }) => vault.id === "personal").canonTables = [{ path: "notes/people.md" }];
+  config.vaults.find((vault: { id: string }) => vault.id === "team").canonTables = [{ path: "notes/glossary.md" }, { path: "notes/absent.md" }, { path: "notes/denied.md" }];
+  writeFileSync(file, JSON.stringify(config));
+  const preview = promoteToOrg(f.home, request, options);
+  expect(preview).toMatchObject({ ok: true, preview: true, applied: false, canonRowMatches: [expect.objectContaining({ path: "notes/glossary.md", key: "ACME", row: "| **ACME** | Public synthetic organization. |" })], choices: ["link-existing notes/glossary.md"] });
+  expect(preview.fingerprint).toBe(baseline.fingerprint);
+  expect(preview.canonTableWarnings).toHaveLength(2);
+  expect(preview.canonTableWarnings).toContainEqual(expect.stringMatching(/canonTables: notes\/absent\.md not read \([^)]*(?:missing|unavailable|absent)[^)]*\)/i));
+  expect(preview.canonTableWarnings).toContainEqual(expect.stringMatching(/canonTables: notes\/denied\.md not read \([^)]*denied[^)]*\)/i));
+  for (const warning of preview.canonTableWarnings!) expect(warning).toMatch(/restore|check|repair|remove|fix/i);
+  expect(preview.issues).toEqual([]);
+  expect(JSON.stringify(preview)).not.toContain("PERSONAL_ONLY_ROW_DETAIL");
+  expect(JSON.stringify(preview)).not.toContain("PERSONAL_PERSON_ROW_DETAIL");
+  const done = promoteToOrg(f.home, { ...request, confirm: true, fingerprint: baseline.fingerprint }, options);
+  expect(done).toMatchObject({ ok: true, applied: true, canonTableWarnings: preview.canonTableWarnings });
+  expect(readFileSync(join(f.org, "notes/shared-method.md"), "utf8")).toBe(preview.text!);
+});
 
 test("preview shows full transformed text and dropped links and writes nothing; confirm writes org note, provenance and SYNC in both vaults", () => {
   const now = new Date(2026, 0, 2, 1);

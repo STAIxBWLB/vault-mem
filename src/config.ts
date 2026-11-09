@@ -3,6 +3,8 @@ import { isAbsolute, join } from "node:path";
 
 export const CONFIG_FILE = "vmem.config.json";
 export const MAX_CONFIG_BYTES = 64 * 1024;
+/** A flat note table; keyColumn is 1-based and bounded to 1..64. */
+export interface CanonTableSpec { path: string; keyColumn?: number }
 export interface VaultSpec {
   id: string;
   path: string;
@@ -12,6 +14,12 @@ export interface VaultSpec {
   remote?: string;
   registry?: string;
   domains?: string[];
+  canonTables?: CanonTableSpec[];
+}
+/** Advisory canonical tables do not participate in mutation identity or policy. */
+export function mutationVault(vault: VaultSpec): Omit<VaultSpec, "canonTables"> {
+  const { canonTables: _, ...mutation } = vault;
+  return mutation;
 }
 /** Canonical built-ins; vault declarations add ids without replacing these. */
 export const BUILTIN_DOMAINS: readonly string[] = Object.freeze(["research", "projects", "teaching", "operations", "people", "ai-practice"]);
@@ -36,9 +44,9 @@ export interface PiiSpec { email?: PiiCell; phone?: PiiCell; custom?: PiiCell; p
  * The config format this build writes. A build that adds a key bumps it. A config whose `version` is newer
  * than this build is read tolerantly: unknown keys are kept as they are and written back unchanged, so an
  * older vmem can share a config with a newer one. At or below this version unknown keys stay errors (typos).
- * An absent `version` means 1. Registry writes add format 2 when `specs` is present and format 3 when vault `domains` is present; otherwise they keep the existing version field.
+ * An absent `version` means 1. Registry writes add format 2 for `specs`, 3 for vault `domains`, and 4 for vault `canonTables`; otherwise they keep the existing version field.
  */
-export const CONFIG_VERSION = 3;
+export const CONFIG_VERSION = 4;
 export interface SpecSourceSpec { id: string; path: string; write: "mcp" | "cli" | "none"; pii: "allow" | "deny" }
 export interface VmemConfig { version?: number; home?: string; vaults: VaultSpec[]; specs?: SpecSourceSpec[]; denyPaths?: string[]; piiPatterns?: string[] }
 const controls = /[\x00-\x1f\x7f]/;
@@ -127,8 +135,27 @@ export function unenforceablePii(vault: VaultSpec): string | undefined {
   const members = piiExtensions(vault.pii);
   return members.length ? `vault ${vault.id}: PII policy has members this vmem cannot enforce (${members.slice(0, 8).join(", ")}); write with the newer vmem that wrote the policy` : undefined;
 }
+function parseCanonTables(value: unknown, tolerant: boolean): CanonTableSpec[] {
+  try {
+    if (!Array.isArray(value) || value.length > 16) throw new Error("vault.canonTables: expected at most 16 table entries");
+    const seen = new Set<string>();
+    return value.map(item => {
+      const keys = ["path", "keyColumn"], raw = object(item, keys, "vault.canonTables entry", tolerant);
+      const path = raw.path;
+      if (typeof path !== "string" || Buffer.byteLength(path) > 256 || !/^notes\/[^/]+\.md$/.test(path) || path.slice(6).startsWith(".") || path.includes("\\") || /[\p{Cc}]/u.test(path)) throw new Error("vault.canonTables.path: expected a literal flat notes/<name>.md path of at most 256 bytes without traversal, dot paths, backslashes or control characters");
+      const keyColumn = raw.keyColumn;
+      if (keyColumn !== undefined && (typeof keyColumn !== "number" || !Number.isInteger(keyColumn) || keyColumn < 1 || keyColumn > 64)) throw new Error("vault.canonTables.keyColumn: expected a 1-based integer column from 1 to 64");
+      const identity = JSON.stringify([path, keyColumn ?? 1]);
+      if (seen.has(identity)) throw new Error("vault.canonTables: duplicate path and key column; keep one entry per path and key column");
+      seen.add(identity);
+      return { ...unknown(raw, keys, tolerant), path, ...(keyColumn !== undefined ? { keyColumn } : {}) };
+    });
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : "vault.canonTables: invalid table entries"}; fix canonTables in vmem.config.json`);
+  }
+}
 export function parseVault(value: unknown, tolerant = false): VaultSpec {
-  const keys = ["id", "path", "kind", "write", "pii", "remote", "registry", "domains"], v = object(value, keys, "vault", tolerant);
+  const keys = ["id", "path", "kind", "write", "pii", "remote", "registry", "domains", "canonTables"], v = object(value, keys, "vault", tolerant);
   const id = string(v.id, "vault.id");
   if (!/^[a-z][a-z0-9-]{0,31}$/.test(id)) throw new Error("vault.id: invalid id");
   if (v.kind !== "personal" && v.kind !== "org") throw new Error("vault.kind: expected personal or org");
@@ -143,6 +170,7 @@ export function parseVault(value: unknown, tolerant = false): VaultSpec {
     }
     result.domains = [...v.domains];
   }
+  if (v.canonTables !== undefined) result.canonTables = parseCanonTables(v.canonTables, tolerant);
   return result;
 }
 /** Spec sources have their own registry shape; they are not vaults. */

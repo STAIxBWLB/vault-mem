@@ -45,6 +45,7 @@ function mutate<T>(home: string, update: (config: VmemConfig) => T): T {
     const config = loadRegistry(home), result = update(config);
     if (config.specs !== undefined) config.version = Math.max(config.version ?? 1, 2);
     if (config.vaults.some(vault => vault.domains !== undefined)) config.version = Math.max(config.version ?? 1, 3);
+    if (config.vaults.some(vault => vault.canonTables !== undefined)) config.version = Math.max(config.version ?? 1, 4);
     parseConfig(config);
     const text = JSON.stringify(config, null, 2) + "\n";
     if (Buffer.byteLength(text) > MAX_CONFIG_BYTES) throw new Error(`${join(home, CONFIG_FILE)}: serialized config exceeds 64 KiB`);

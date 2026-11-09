@@ -1,3 +1,4 @@
+import { canonRowsForVault, matchCanonRows, type CanonRowIndex, type CanonRowMatch } from "./canon-tables.ts";
 import { localDate } from "./local-date.ts";
 import { createHash } from "node:crypto";
 import type { VaultSpec } from "./config.ts";
@@ -31,6 +32,9 @@ export interface PromoteResult {
   fingerprint?: string;
   issues: WriteIssue[];
   possibleDuplicates?: string[];
+  /** Advisory canonical table rows; never part of a fingerprint or a write refusal. */
+  canonRowMatches?: CanonRowMatch[];
+  canonTableWarnings?: string[];
   /** Choices offered when the note may already exist in the vault. */
   choices?: string[];
   note?: WriteReceipt;
@@ -70,10 +74,10 @@ export function draftNote(entry: AmemCandidate, meta: PromoteMetadata, now = new
   const body = meta.body ?? `# ${title}\n\n${entry.text.trim()}\n\n## Relevant Notes\n\n${hints}\n## Topics\n\n${topics.map(topic => `- ${topic}`).join("\n")}\n`;
   return { stem, frontmatter, text: emitFrontmatter(parseFrontmatter(body), frontmatter) };
 }
-function vaultSpec(home: string, id: string): { spec: VaultSpec; all: VaultSpec[] } {
-  const all = loadRegistry(home).vaults, spec = all.find(v => v.id === id);
+function vaultSpec(home: string, id: string): { spec: VaultSpec; all: VaultSpec[]; denyPaths: string[] } {
+  const config = loadRegistry(home), all = config.vaults, spec = all.find(v => v.id === id);
   if (!spec) throw new Error("promote: unknown vault id");
-  return { spec, all };
+  return { spec, all, denyPaths: config.denyPaths ?? [] };
 }
 const fold = (value: string) => value.normalize("NFKC").toLowerCase().replace(/[-_\s]+/g, " ").trim();
 /** Existing notes with the same stem or title, plus close FTS title matches: the link-existing choices. */
@@ -87,14 +91,14 @@ function similar(home: string, spec: VaultSpec, all: VaultSpec[], title: string,
     return [...exact, ...hits].map(hit => `notes/${hit.path}`).filter((path, i, list) => list.indexOf(path) === i).slice(0, 5);
   } catch { return []; } finally { index.close(); }
 }
-function lookup(home: string, spec: VaultSpec, all: VaultSpec[], id: string, linkTo?: string): { promoted: string[]; target?: string } {
+function lookup(home: string, spec: VaultSpec, all: VaultSpec[], id: string, linkTo?: string, denyPaths: string[] = []): { promoted: string[]; target?: string; canon?: CanonRowIndex } {
   const index = new VaultIndex(home, spec, all.map(v => v.path));
   try {
     index.scan();
     const promoted = index.promotedFrom(`mem:${id}`).map(path => `notes/${path}`);
     let target: string | undefined;
     if (linkTo !== undefined) target = `notes/${index.show(linkTo, 1).path}`;
-    return { promoted, ...(target ? { target } : {}) };
+    return { promoted, ...(target ? { target } : {}), ...(spec.canonTables !== undefined ? { canon: canonRowsForVault(index, spec, denyPaths) } : {}) };
   } finally { index.close(); }
 }
 
@@ -109,14 +113,14 @@ export async function promoteFromAmem(home: string, request: PromoteRequest, opt
   const now = options.now ?? new Date();
   const base: PromoteResult = { ok: false, action: "create", applied: false, id: request.id, path: null, issues: [] };
   if (!ID.test(request.id)) return { ...base, issues: [issue("AMEM", "expected a 32-hex agent-mem entry id")] };
-  const { spec, all } = vaultSpec(home, request.vault);
+  const { spec, all, denyPaths } = vaultSpec(home, request.vault);
   if (spec.write === "none" || (request.channel === "mcp" && spec.write !== "mcp")) return { ...base, issues: [issue("POLICY", "vault write policy refuses this channel")] };
   const seam = await (options.seam ?? defaultSeam)({ env: options.env, ...(options.project ? { project: options.project } : {}), ...(options.cwd ? { cwd: options.cwd } : {}), piiPatterns: loadRegistry(home).piiPatterns });
   try {
     const entry = await seam.entry(request.id);
     if (!entry) return { ...base, issues: [issue("AMEM", "entry is not an available curated entry of this project")] };
     const linked = seam.linkedPath(request.id) ?? null;
-    const { promoted, target } = lookup(home, spec, all, request.id, request.linkTo);
+    const { promoted, target, canon } = lookup(home, spec, all, request.id, request.linkTo, denyPaths);
     // Link-only: an earlier promotion already created the note, or the caller chose an existing note.
     const existing = target ?? promoted[0];
     if (existing) {
@@ -141,6 +145,12 @@ export async function promoteFromAmem(home: string, request: PromoteRequest, opt
     const text = planned.ok ? stampContentChanges(operation, planOperation(operation, new Map()), localDate(now))[0]!.after! : draft.text;
     const result: PromoteResult = { ...base, ok: planned.ok, path, text, fingerprint, issues: planned.issues, linked,
       ...(possibleDuplicates.length ? { possibleDuplicates, choices: ["create", ...possibleDuplicates.map(p => `link-existing ${p}`)] } : {}) };
+    if (canon !== undefined) {
+      const matches = planned.ok ? matchCanonRows(canon, `${String(draft.frontmatter.title ?? "")}\n${parseFrontmatter(text).body}`) : [];
+      result.canonRowMatches = matches;
+      if (canon.warnings.length) result.canonTableWarnings = [...canon.warnings];
+      if (matches.length) result.choices = [...new Set([...(result.choices ?? ["create"]), ...matches.map(row => `link-existing ${row.path}`)])];
+    }
     if (request.confirm !== true || !planned.ok) return { ...result, preview: request.confirm !== true };
     if (request.fingerprint !== fingerprint) return { ...result, ok: false, issues: [issue("V09", "stale or missing preview fingerprint")] };
     const note = applyWrite(home, { vault: spec.id, operation, channel: request.channel ?? "cli",
