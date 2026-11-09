@@ -2,14 +2,12 @@ import { mock } from "bun:test";
 import * as fs from "node:fs";
 import { join } from "node:path";
 import type { SpecWriteResult } from "../../src/spec-write.ts";
-import type { SpecGitResult, SpecGitOptions } from "../../src/spec-git.ts";
 const [home, operation, effect, fingerprint] = process.argv.slice(2);
 if (!home || !operation || !effect) throw new Error("synthetic Markdown drift fixture needs home, operation and effect");
 const original = { ...fs }, configFile = join(home, "vmem.config.json"), config = JSON.parse(original.readFileSync(configFile, "utf8"));
 const root = config.specs[0].path, target = "new/deep/created.md", temps = new Set<number>(), registryReads = new Set<number>();
 const discoveries: { count: number; targetMember: boolean; ids: string[]; diagnosticPaths: string[] }[] = [];
 let lock: string | undefined, injected = false, phase: string | undefined, injectionDiscovery = 0, lockHeld = false;
-let git: (root: string, args: string[], options?: SpecGitOptions) => SpecGitResult;
 function inject(at: string): void {
   if (injected) return;
   if (discoveries.length !== 2 || !lock || !original.existsSync(lock)) throw new Error("synthetic drift injection requires the completed locked snapshot and owned mutation lock");
@@ -20,8 +18,7 @@ function inject(at: string): void {
   else if (effect === "spec-body") original.appendFileSync(join(root, "child.md"), "Concurrent spec detail.\n");
   else if (effect === "spec-reference") original.writeFileSync(join(root, "child.md"), original.readFileSync(join(root, "child.md"), "utf8").replace("parent: root\n", "parent: root\nreferences: [root]\n"));
   else if (effect === "target-membership") {
-    const blob = git(root, ["rev-parse", "HEAD:source.ts"], { env: process.env }).stdout.toString("utf8").trim();
-    git(root, ["update-index", "--add", "--cacheinfo", `100644,${blob},${target}`], { env: process.env });
+    original.writeFileSync(join(root, target), "# Foreign ordinary Markdown\n");
     original.unlinkSync(join(root, "ordinary.md"));
   } else throw new Error("unknown synthetic Markdown drift effect");
   injected = true;
@@ -52,7 +49,6 @@ mock.module("../../src/spec-source.ts", () => ({ ...source,
     return snapshot;
   },
 }));
-git = (await import("../../src/spec-git.ts")).specGit;
 const writes = await import("../../src/spec-write.ts");
 let result: SpecWriteResult;
 if (operation === "update") result = writes.updateSpec(home, { id: "root", set: { title: "Updated root" } }, { env: process.env });

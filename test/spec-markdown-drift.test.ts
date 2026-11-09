@@ -85,12 +85,14 @@ test("#180 create permits same-count ordinary Markdown rename without weakening 
   expect(parseFrontmatter(readFileSync(join(f.repo, target), "utf8")).data.id).toBe("created");
 });
 
-test("#180 create refuses same-count target membership drift and preserves the externally updated index", () => {
+test("#180 create refuses isolated same-count target membership drift and preserves the foreign file", () => {
   const f = fixture(), output = run(f, "create", "target-membership");
   expect(output.result).toMatchObject({ ok: false, changed: false, path: target });
   expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "DRIFT" }));
   expect(output.discoveries[1]!.count).toBe(output.discoveries[2]!.count);
   expect(output.discoveries[1]!.targetMember).toBe(false); expect(output.discoveries[2]!.targetMember).toBe(true);
-  expect(f.git(["ls-files", "--stage", "--", target])).toMatch(/^100644 /);
-  expect(existsSync(join(f.repo, "new"))).toBe(false);
+  expect(output.discoveries[1]!.ids).toEqual(output.discoveries[2]!.ids);
+  expect(output.discoveries[1]!.diagnosticPaths).toEqual([]); expect(output.discoveries[2]!.diagnosticPaths).toEqual([]);
+  expect(readFileSync(join(f.repo, target), "utf8")).toBe("# Foreign ordinary Markdown\n");
+  expect(readdirSync(join(f.repo, "new/deep"))).toEqual(["created.md"]);
 });
