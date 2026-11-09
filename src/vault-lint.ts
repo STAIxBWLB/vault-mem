@@ -45,6 +45,14 @@ function noteLinkTexts(source: string): string[] {
   return [...links(body), ...FIELDS.flatMap(field => links(fm?.[field]))];
 }
 /**
+ * A snapshot record entry read as data only. Link text and note path reach these lookups unchanged, and a plain
+ * object answers `constructor`, `toString` or `__proto__` from `Object.prototype`; a snapshot another caller built
+ * can still be a plain record, so inherited members must never resolve as a hint or as warnings.
+ */
+function ownValue<T>(record: Record<string, T> | undefined, key: string): T | undefined {
+  return record !== undefined && Object.hasOwn(record, key) ? record[key] : undefined;
+}
+/**
  * The dead link texts a snapshot can be hinted for, deduplicated in note and link order and capped at `maximum`.
  * Captured while the index is open (src/analysis-input.ts), because the lookup needs the title search and
  * `lintDetails` stays a pure transform.
@@ -100,14 +108,14 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
   let superseded = 0;
   for (const note of notes) {
     const rel = `notes/${note.stem}.md`, prefix = `\`${rel}\`: `, fm = note.fm;
-    for(const message of snapshot.sourceWarnings?.[note.path] ?? [])findings.L14.push(prefix+message);
+    for (const message of ownValue(snapshot.sourceWarnings, note.path) ?? []) findings.L14.push(prefix+message);
     const allLinks: [string,string][] = links(note.body).map(t => ["body",t]);
     if (fm) for (const field of FIELDS) for (const t of links(fm[field])) allLinks.push([field,t]);
     for (const [field,t] of allLinks) {
       const target = stem(t);
       if (stems.has(target)) { if (target !== note.stem) inlinks.set(target,inlinks.get(target)!+1); }
       else {
-        const hint = snapshot.linkHints?.[t];
+        const hint = ownValue(snapshot.linkHints, t);
         findings.L01.push(prefix + `\`[[${t}]]\` (${field}) → 대상 노트 없음` + (hint ? ` — suggested \`${hint.path}\` (score ${hint.score.toFixed(3)})` : ""));
       }
     }

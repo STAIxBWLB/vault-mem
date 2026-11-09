@@ -11,7 +11,11 @@ export interface AnalysisSnapshot {
   reports: Record<string, string>;
   /** Bounded auxiliary source-path existence warnings captured outside the pure lint transform. */
   sourceWarnings?: Record<string,string[]>;
-  /** At most one title hint per dead link text, captured with an open index outside the pure lint transform. */
+  /**
+   * At most one title hint per dead link text, captured with an open index outside the pure lint transform.
+   * Link text is arbitrary (`__proto__` included), so a producer stores it in a null-prototype record and a reader
+   * takes own keys only; `lintVault` accepts snapshots other callers built as plain records.
+   */
   linkHints?: Record<string, TitleSuggestion>;
 }
 export type LintCode = "L01" | "L02" | "L03" | "L09" | "L10" | "L11" | "L12" | "L13" | "L14" | "L15";

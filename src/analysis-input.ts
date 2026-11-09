@@ -81,7 +81,9 @@ export function analysisInput(home: string, id: string, options: { today?: strin
     }catch{ /* Invalid frontmatter remains visible to L02; do not infer missing source paths. */ }
     if(Object.keys(warnings).length)snapshot.sourceWarnings=warnings;
     if(options.hints){
-      const hints:Record<string,TitleSuggestion>={};
+      // A null prototype keeps the link text `__proto__` a stored key: on a plain object it would set the prototype,
+      // drop the hint and leave the object answering inherited members.
+      const hints:Record<string,TitleSuggestion>=Object.create(null);
       for(const text of deadLinkTexts(snapshot.notes)){const hint=index.suggestTitle(text);if(hint)hints[text]=hint;}
       if(Object.keys(hints).length)snapshot.linkHints=hints;
     }
