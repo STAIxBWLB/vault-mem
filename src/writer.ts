@@ -1,3 +1,4 @@
+import { localDate } from "./local-date.ts";
 import { appendLog, checkLogEvent, matchesBinding } from "./vault-log.ts";
 import type { LogEvent } from "./log-types.ts";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
@@ -9,7 +10,7 @@ import { loadRegistry, syncDirectory } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES, GRAMS_COLUMNS, gramPhrase, grams, splitTerms } from "./vault-index.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
-import { moveSourcePath, notePath, planOperation, refuse, WriteRefusal } from "./write-operations.ts";
+import { moveSourcePath, notePath, planOperation, stampContentChanges, refuse, WriteRefusal } from "./write-operations.ts";
 import { MAX_REPORT_BYTES, validateWrite } from "./write-validation.ts";
 import type { PiiSurface } from "./config.ts";
 import { unenforceablePii } from "./config.ts";
@@ -121,7 +122,7 @@ function duplicateWarnings(request: WriteRequest, notes: Map<string, string>, ch
 }
 /** Single mutation entry point. Preview/dry-run perform no writes, including locks and caches. */
 /** `options.binding` (internal callers composing several writes) refuses with VAULT_DRIFT unless the registry still matches it. */
-export function applyWrite(home: string, request: WriteRequest, options: { env?: NodeJS.ProcessEnv; piiSurface?: PiiSurface; binding?: LogBinding } = {}): WriteReceipt {
+export function applyWrite(home: string, request: WriteRequest, options: { env?: NodeJS.ProcessEnv; piiSurface?: PiiSurface; binding?: LogBinding; now?: Date } = {}): WriteReceipt {
   let lockFd: number | undefined, lockFile: string | undefined, lockIdentity: { ino: number; dev: number } | undefined;
   let index: VaultIndex | undefined;
   const temps = new Set<string>(), createdDirs: string[] = [], committed: PlannedChange[] = [];
@@ -168,8 +169,18 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     }
     changes = planOperation(request.operation, notes, reportBefore);
     for (const change of changes) if (isDenied(join(root, change.path), config.denyPaths)) refuse("V06", "planned mutation path is denied", change.path);
-    issues = validateWrite(changes, { vault, config, notes, operation: request.operation, ...(options.piiSurface ? { piiSurface: options.piiSurface } : {}) });
-    if (!issues.some(issue => issue.severity === "error")) issues.push(...duplicateWarnings(request, notes, changes));
+    const validation = { vault, config, notes, operation: request.operation, ...(options.piiSurface ? { piiSurface: options.piiSurface } : {}) };
+    // Validate the caller's candidate first: replacing `updated` must not hide a
+    // secret, oversized input or other refusal that existing validation catches.
+    issues = validateWrite(changes, validation);
+    if (!issues.some(issue => issue.severity === "error")) {
+      const stamped = stampContentChanges(request.operation, changes, localDate(options.now));
+      if (stamped.some((change, index) => change.after !== changes[index]?.after) || stamped.length !== changes.length) {
+        changes = stamped;
+        issues = validateWrite(changes, validation);
+      }
+      if (!issues.some(issue => issue.severity === "error")) issues.push(...duplicateWarnings(request, notes, changes));
+    }
     // The log event is not part of the fingerprint: move/delete take it on the confirm call only.
     const input = { vault: request.vault, channel: request.channel ?? "cli", operation: request.operation, expectedShas: request.expectedShas ?? {} };
     const identity = lstatSync(root);

@@ -126,6 +126,30 @@ function mayHaveDoi(source: string): boolean {
   const header = source.slice(0, closing.exec(source)?.index ?? source.length);
   return /(?:^|[{\n,])[ \t]*(?:doi|["']doi["'])[ \t]*:|[\\!&*?]/.test(header);
 }
+/** Shared date emission for validated note content, including promotion previews. */
+export function stampNoteContent(source: string, today: string, create: boolean): string {
+  const doc = parseFrontmatter(source);
+  const dates = { updated: today, ...(create && !Object.hasOwn(doc.data, "created") ? { created: today } : {}) };
+  try { return emitFrontmatter(doc, dates); }
+  catch (error) {
+    // Body edits already support valid flow mappings. Normalize only an uneditable
+    // mapping's header for date emission, preserving its semantics and body bytes.
+    if (!(error instanceof Error) || error.message !== "frontmatter: editing requires a block mapping") throw error;
+    const newline = /\r?\n/.exec(doc.frontmatter ?? "")?.[0] ?? "\n";
+    const header = emitFrontmatter(parseFrontmatter(""), { ...doc.data, ...dates }).replaceAll("\n", newline);
+    return source.slice(0, source.indexOf("---")) + header + doc.body;
+  }
+}
+/** Date actual content changes; read-only checks, reports and byte-preserving moves stay unchanged. */
+export function stampContentChanges(operation: WriteOp, changes: PlannedChange[], today: string): PlannedChange[] {
+  if (operation.op === "check" || operation.op === "report") return changes;
+  const moved = operation.op === "move" ? changes.find(change => change.after === null)?.before : undefined;
+  return changes.map(change => {
+    if (change.after === null || change.after === change.before || (operation.op === "move" && change.before === null && change.after === moved)) return change;
+    return { ...change, after: stampNoteContent(change.after, today, operation.op === "create") };
+  }).filter(change => change.before !== change.after);
+}
+
 /** Plan transformations in memory. This function never touches files. */
 export function planOperation(operation: WriteOp, notes: Map<string, string>, reportBefore?: string | null): PlannedChange[] {
   const planned = new Map<string, PlannedChange>();

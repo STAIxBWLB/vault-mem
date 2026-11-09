@@ -9,7 +9,7 @@ import { normalizeTarget, proseLines } from "./links.ts";
 import { loadRegistry } from "./registry.ts";
 import { VaultIndex } from "./vault-index.ts";
 import { applyWrite } from "./writer.ts";
-import { notePath, replaceTopicsSection } from "./write-operations.ts";
+import { planOperation, stampContentChanges, notePath, replaceTopicsSection } from "./write-operations.ts";
 import { screenContent } from "./write-validation.ts";
 import { appendLog, logBinding } from "./vault-log.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
@@ -162,6 +162,7 @@ export function lintPromoted(home: string, target: VaultSpec, path: string, text
  * Preview and refusal write nothing; confirm needs the fingerprint of the current preview.
  */
 export function promoteToOrg(home: string, request: OrgPromoteRequest, options: { env?: NodeJS.ProcessEnv; now?: Date } = {}): OrgPromoteResult {
+  const now = options.now ?? new Date();
   const result: OrgPromoteResult = { ok: false, applied: false, source: null, target: null, screen: { passed: false, issues: [] }, issues: [] };
   const fail = (found: WriteIssue) => ({ ...result, issues: [found] });
   const config = loadRegistry(home), all = config.vaults;
@@ -202,13 +203,13 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
     try { existing = parseFrontmatter(readSource(target, targetPath)).data; } catch { /* unreadable: treated as foreign */ }
     if (existing.promoted_from !== result.source || prior.includes(promotedTo)) return fail(issue("V08", `${target.id} already has ${targetPath}; move or delete it in the org vault first`, targetPath));
     const set = { promoted_to: prior.length ? [...prior, promotedTo] : promotedTo };
-    const plan = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env, binding: bindings.source });
+    const plan = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env, binding: bindings.source, now });
     const fingerprint = sha({ recover: plan.fingerprint, promotedTo });
     const recovery: OrgPromoteResult = { ...result, target: `${target.id}:${targetPath}`, screen: { passed: true, issues: [] }, fingerprint, recovery: "provenance-only" };
     if (!plan.ok) return { ...recovery, issues: plan.issues };
     if (request.confirm !== true) return { ...recovery, ok: true, preview: true };
     if (request.fingerprint !== fingerprint) return { ...recovery, issues: [issue("V09", "stale or missing preview fingerprint")] };
-    const provenance = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set }, channel: request.channel ?? "cli", log: false }, { env: options.env, binding: bindings.source });
+    const provenance = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set }, channel: request.channel ?? "cli", log: false }, { env: options.env, binding: bindings.source, now });
     return { ...recovery, ok: provenance.ok, applied: provenance.applied, provenance, issues: provenance.ok ? [] : provenance.issues };
   }
   const missingTopics = topics.filter(topic => !targetNotes.mocs.has(linkKey(topic)));
@@ -216,23 +217,28 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   const transformed = dropUnresolvedLinks(parsed.body, value => targetNotes.resolved.has(linkKey(value)));
   // Body Topics section follows the target topics.
   const body = replaceTopicsSection(transformed.body, topics);
-  const day = localDate(options.now ?? new Date());
+  const day = localDate(now);
   const frontmatter: Record<string, unknown> = { topics, promoted_from: result.source, promoted_at: day, promoted_to: undefined };
   // Wiki-valued fields that point outside the target vault are dropped as well.
   for (const key of ["project", "superseded_by", "supersedes", "source_ref"]) {
     const values = strings(parsed.data[key]);
     if (values.some(value => value.includes("[[") && !targetNotes.resolved.has(linkKey(value)))) { frontmatter[key] = undefined; transformed.dropped.push(`${key}:${values.join(",")}`); }
   }
-  const text = emitFrontmatter(parseFrontmatter(parsed.source.slice(0, parsed.source.length - parsed.body.length) + body), frontmatter);
+  let text = emitFrontmatter(parseFrontmatter(parsed.source.slice(0, parsed.source.length - parsed.body.length) + body), frontmatter);
   result.target = `${target.id}:${targetPath}`; result.text = text; result.droppedLinks = transformed.dropped;
   const screen = [...screenForOrg(text, parsed.data, target, config), ...screenDroppedLinks(home, source, all, transformed.dropped.filter(link => !link.includes(":")))];
   const refusing = screen.filter(found => found.severity === "error");
   result.screen = { passed: refusing.length === 0, issues: screen };
   if (refusing.length) return { ...result, issues: screen };
-  const planned = applyWrite(home, { vault: target.id, operation: { op: "create", path: targetPath, frontmatter: {}, body: text }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env, piiSurface: "promotion", binding: bindings.target });
+  const planned = applyWrite(home, { vault: target.id, operation: { op: "create", path: targetPath, frontmatter: {}, body: text }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env, piiSurface: "promotion", binding: bindings.target, now });
+  if (planned.ok) {
+    const operation = { op: "create" as const, path: targetPath, frontmatter: {}, body: text };
+    text = stampContentChanges(operation, planOperation(operation, new Map()), day)[0]!.after!;
+    result.text = text;
+  }
   const provenanceSet = { promoted_to: prior.length ? [...prior.filter(p => p !== promotedTo), promotedTo] : promotedTo };
   const provenanceText = emitFrontmatter(parsed, provenanceSet);
-  const provenancePlan = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set: provenanceSet }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env, binding: bindings.source });
+  const provenancePlan = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set: provenanceSet }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env, binding: bindings.source, now });
   result.fingerprint = sha({ target: planned.fingerprint, source: provenancePlan.fingerprint, text, provenanceText });
   // Org lint runs on the preview too (the note overlaid on the org snapshot), so a note that would fail lint is never written.
   const previewLint = lintPromoted(home, target, targetPath, text);
@@ -242,10 +248,10 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   if (request.confirm !== true) return { ...result, ok: true, preview: true, issues: [...planned.issues, ...provenancePlan.issues] };
   if (request.fingerprint !== result.fingerprint) return { ...result, issues: [issue("V09", "stale or missing preview fingerprint")] };
   const event = { type: "SYNC", project: request.logProject ?? "-", source: `${source.id}:${path}`, dest: `${target.id}:${targetPath}`, note: `promoted: ${typeof parsed.data.type === "string" ? parsed.data.type : "note"}` };
-  const note = applyWrite(home, { vault: target.id, operation: { op: "create", path: targetPath, frontmatter: {}, body: text }, channel: request.channel ?? "cli", log: false }, { env: options.env, piiSurface: "promotion", binding: bindings.target });
+  const note = applyWrite(home, { vault: target.id, operation: { op: "create", path: targetPath, frontmatter: {}, body: text }, channel: request.channel ?? "cli", log: false }, { env: options.env, piiSurface: "promotion", binding: bindings.target, now });
   // A create that committed and then failed a later step (cleanup) is still a written org note.
   if (!note.ok || !note.applied) return { ...result, applied: note.applied === true, note, issues: note.issues };
-  const provenance = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set: provenanceSet }, channel: request.channel ?? "cli", log: false }, { env: options.env, binding: bindings.source });
+  const provenance = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set: provenanceSet }, channel: request.channel ?? "cli", log: false }, { env: options.env, binding: bindings.source, now });
   const logs = { source: null as LogReceipt | null, target: null as LogReceipt | null };
   for (const [key, vault] of [["target", target], ["source", source]] as const) {
     try { logs[key] = appendLog(home, { vault: vault.id, event, channel: request.channel ?? "cli" }, { env: options.env, binding: bindings[key] }); }

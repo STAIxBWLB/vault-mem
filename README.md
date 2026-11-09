@@ -136,6 +136,8 @@ Link resolution uses NFC and case-insensitive filename stems only, as Obsidian a
 
 # Validated writes
 
+Every changed note content write stamps `updated` with the local calendar date (`YYYY-MM-DD`, using the same clock as vault logs). This includes create, append, patch, frontmatter edits, both sides of supersession, promotion and other content rewrites. Create also fills `created` when the key is absent; an existing or caller-supplied value is preserved with its existing validation. The writer validates the original candidate before stamping, then validates the final content, so automatic dates cannot hide a refusal. Previews include the dates without writing; a preview crossing a date boundary needs a fresh fingerprint. Checks, reports, no-ops and byte-preserving moves do not stamp note content. A valid flow-mapping header is converted to a block mapping when it cannot be edited in place; body bytes and metadata values are preserved.
+
 All mutations use `applyWrite(home, request)`: per-vault `mutation.lock`, current-SHA checks, in-memory planning, final-snapshot validation/screening, same-directory flushed temporary files and atomic renames, directory flushes, derived-index refresh and a structured receipt. `write: mcp` allows CLI and MCP writes; `cli` allows CLI only; `none` refuses mutations. `check` is read-only and works with `none`. No command requires a TTY or rejects agent environments.
 
 ```sh

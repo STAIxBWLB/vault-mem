@@ -38,8 +38,9 @@ function fixture() {
 const snapshot = (dir: string) => git(dir, "status", "--porcelain", "--untracked-files=all");
 
 test("preview shows full transformed text and dropped links and writes nothing; confirm writes org note, provenance and SYNC in both vaults", () => {
+  const now = new Date(2026, 0, 2, 1);
   const f = fixture(), before = { personal: readFileSync(join(f.personal, "notes", "shared-method.md"), "utf8"), org: snapshot(f.org) };
-  const preview = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env });
+  const preview = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env, now });
   expect(preview).toMatchObject({ ok: true, preview: true, applied: false, source: "personal:notes/shared-method.md", target: "team:notes/shared-method.md", screen: { passed: true }, droppedLinks: ["private-idea"] });
   expect(preview.text).toContain("Uses [[org-only]] and a private idea and [[research]].");
   expect(preview.lint).toMatchObject({ passed: true, issues: [] });
@@ -48,10 +49,12 @@ test("preview shows full transformed text and dropped links and writes nothing; 
   expect(snapshot(f.org)).toBe(before.org);
   expect(existsSync(join(f.personal, "log")) || existsSync(join(f.org, "log"))).toBe(false);
 
-  expect(promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team", confirm: true, fingerprint: "0".repeat(64) }, { env: f.env }).issues[0]!.code).toBe("V09");
-  const done = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team", confirm: true, fingerprint: preview.fingerprint }, { env: f.env });
+  expect(promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team", confirm: true, fingerprint: "0".repeat(64) }, { env: f.env, now }).issues[0]!.code).toBe("V09");
+  const done = promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team", confirm: true, fingerprint: preview.fingerprint }, { env: f.env, now });
   expect(done).toMatchObject({ ok: true, applied: true, lint: { passed: true } });
   expect(readFileSync(join(f.org, "notes", "shared-method.md"), "utf8")).toBe(preview.text!);
+  expect(parseFrontmatter(preview.text!).data).toMatchObject({ created: "2026-01-02", updated: "2026-01-02" });
+  expect(parseFrontmatter(readFileSync(join(f.personal, "notes", "shared-method.md"), "utf8")).data.updated).toBe("2026-01-02");
   expect(parseFrontmatter(readFileSync(join(f.personal, "notes", "shared-method.md"), "utf8")).data.promoted_to).toBe("team:notes/shared-method.md");
   for (const vault of ["personal", "team"]) {
     const log = readLog(f.home, { vault });
@@ -62,8 +65,8 @@ test("preview shows full transformed text and dropped links and writes nothing; 
   expect(git(f.org, "rev-parse", "HEAD")).toBe(git(f.remote, "rev-parse", "main"));
   expect(snapshot(f.org)).toContain("notes/shared-method.md");
   // Repeat promotion needs --again, and the existing org copy is never overwritten.
-  expect(promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env }).issues[0]!.code).toBe("AGAIN");
-  expect(promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team", again: true }, { env: f.env }).issues[0]!.code).toBe("V08");
+  expect(promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team" }, { env: f.env, now }).issues[0]!.code).toBe("AGAIN");
+  expect(promoteToOrg(f.home, { from: "personal", note: "shared-method", to: "team", again: true }, { env: f.env, now }).issues[0]!.code).toBe("V08");
 });
 
 test("fail-closed screen refuses secrets, PII, people records, correspondence and meeting sources without writing", () => {

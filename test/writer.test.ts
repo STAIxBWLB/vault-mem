@@ -35,7 +35,112 @@ function disk(root: string): Record<string, string> {
   visit(root); return result;
 }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-const create = (): WriteOp => ({ op: "create", path: "new-finding", frontmatter: { title: "New Finding", description: "A separate synthetic result.", type: "insight", domain: "research", topics: ["[[research]]"] } });
+const create = (): Extract<WriteOp, { op: "create" }> => ({ op: "create", path: "new-finding", frontmatter: { title: "New Finding", description: "A separate synthetic result.", type: "insight", domain: "research", topics: ["[[research]]"] } });
+const contentNow = new Date(2026, 0, 2, 1), contentDate = "2026-01-02";
+const writeAtDate = (f: ReturnType<typeof fixture>, operation: WriteOp) => applyWrite(f.home, { vault: "test", operation }, { now: contentNow });
+
+test("AC1 create stamps created and updated with the captured local date", () => {
+  const f = fixture(), result = writeAtDate(f, create());
+  expect(result).toMatchObject({ ok: true, applied: true });
+  const data = parseFrontmatter(readFileSync(join(f.notes, "new-finding.md"), "utf8")).data;
+  expect(data.created).toBe(contentDate); expect(data.updated).toBe(contentDate);
+  expect(parseFrontmatter(readFileSync(join(f.notes, "old.md"), "utf8")).data.updated).toBeUndefined();
+});
+
+test("AC1 create preserves supplied legacy created metadata, including embedded body frontmatter", () => {
+  for (const source of ["metadata", "body"] as const) {
+    const f = fixture(), operation = create(), legacy = `legacy ${source} creation label`;
+    if (source === "metadata") Object.assign(operation.frontmatter, { created: legacy, updated: "2000-01-01" });
+    else operation.body = note("Embedded Creation", "Embedded source draft.", { created: legacy, updated: "2000-01-01" });
+    expect(writeAtDate(f, operation)).toMatchObject({ ok: true, applied: true });
+    const data = parseFrontmatter(readFileSync(join(f.notes, "new-finding.md"), "utf8")).data;
+    expect(data.created).toBe(legacy); expect(data.updated).toBe(contentDate);
+  }
+});
+
+test("AC1 append refreshes updated and preserves an existing created value", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  writeFileSync(file, note("Old Finding", "Original text.", { created: "legacy creation label", updated: "2026-01-01" }));
+  expect(writeAtDate(f, { op: "append", path: "old", section: "Evidence", markdown: "New dated evidence." })).toMatchObject({ ok: true, applied: true });
+  const after = parseFrontmatter(readFileSync(file, "utf8"));
+  expect(after.data).toMatchObject({ created: "legacy creation label", updated: contentDate });
+  expect(after.body).toContain("New dated evidence.");
+});
+
+test("AC1 patch stamps updated without synthesizing created on an existing note", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  expect(writeAtDate(f, { op: "patch", path: "old", oldString: "Original text.", newString: "Dated replacement." })).toMatchObject({ ok: true, applied: true });
+  const after = parseFrontmatter(readFileSync(file, "utf8"));
+  expect(after.data.updated).toBe(contentDate); expect(after.data.created).toBeUndefined();
+  expect(after.body).toContain("Dated replacement.");
+});
+
+for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} stamps a valid flow-mapping header without changing metadata or unrelated body bytes`, () => {
+  const f = fixture(), file = join(f.notes, "old.md"), newline = operation === "patch" ? "\r\n" : "\n";
+  const metadata = { title: "Flow Header", description: "Synthetic flow metadata evidence.", type: "insight", domain: "research", topics: ["[[research]]"], aliases: ["Flow Alias"], created: "legacy flow creation", updated: "2026-01-01" };
+  const body = ["# Flow Header", "", "Original flow text.", "", "## Topics", "", "- [[research]]", ""].join(newline);
+  const original = "﻿---" + newline + JSON.stringify(metadata) + newline + "---" + newline + body;
+  writeFileSync(file, original);
+  const result = writeAtDate(f, operation === "patch"
+    ? { op: "patch", path: "old", oldString: "Original flow text.", newString: "Changed flow text." }
+    : { op: "append", path: "old", section: "Evidence", markdown: "Added flow evidence." });
+  expect(result).toMatchObject({ ok: true, applied: true });
+  const text = readFileSync(file, "utf8"), after = parseFrontmatter(text);
+  expect(after.data).toEqual({ ...metadata, updated: contentDate });
+  expect(after.body).toBe(operation === "patch" ? body.replace("Original flow text.", "Changed flow text.") : body.replace("## Topics", "## Evidence\n\nAdded flow evidence.\n\n## Topics"));
+  expect(Buffer.from(text).subarray(0, 3)).toEqual(Buffer.from(original).subarray(0, 3));
+  if (operation === "patch") expect(text.replaceAll("\r\n", "")).not.toContain("\n");
+});
+
+test("AC1 frontmatter stamps updated after a valid metadata change", () => {
+  const f = fixture();
+  expect(writeAtDate(f, { op: "frontmatter", path: "old", set: { confidence: "likely", updated: "2000-01-01" } })).toMatchObject({ ok: true, applied: true });
+  const after = parseFrontmatter(readFileSync(join(f.notes, "old.md"), "utf8"));
+  expect(after.data).toMatchObject({ confidence: "likely", updated: contentDate });
+  expect(after.data.created).toBeUndefined();
+});
+
+test("AC1 supersede stamps updated on both changed notes", () => {
+  const f = fixture();
+  expect(writeAtDate(f, { op: "supersede", old: "old", next: "next" })).toMatchObject({ ok: true, applied: true });
+  for (const name of ["old.md", "next.md"]) {
+    const data = parseFrontmatter(readFileSync(join(f.notes, name), "utf8")).data;
+    expect(data.updated).toBe(contentDate); expect(data.created).toBeUndefined();
+  }
+});
+
+test("AC1 no-op, read/check and report paths leave yesterday's note metadata untouched", () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  const original = note("Old Finding", "Original text.", { updated: "2026-01-01" }); writeFileSync(file, original);
+  for (const operation of [
+    { op: "frontmatter", path: "old", set: { title: "Old Finding" } },
+    { op: "patch", path: "old", oldString: "Original text.", newString: "Original text." },
+  ] satisfies WriteOp[]) {
+    expect(writeAtDate(f, operation)).toMatchObject({ ok: true, applied: false, changes: [] });
+    expect(readFileSync(file, "utf8")).toBe(original);
+  }
+  const checked = writeAtDate(f, { op: "check", path: "old", text: original });
+  expect(checked).toMatchObject({ ok: true, applied: false });
+  expect(checked.changes).toEqual([expect.objectContaining({ path: "notes/old.md", beforeSha: sha256(original), sha256: sha256(original) })]);
+  expect(run(["show", "test", "old", "--json"], f.env).code).toBe(0);
+  const report = note("Report snapshot", "Report bytes stay exact.", { updated: "1999-01-01" });
+  expect(writeAtDate(f, { op: "report", path: "reports/date-check.md", text: report })).toMatchObject({ ok: true, applied: true });
+  expect(readFileSync(join(f.vault, "reports/date-check.md"), "utf8")).toBe(report);
+  expect(readFileSync(file, "utf8")).toBe(original);
+});
+
+test("AC1 stamping cannot hide secret-looking caller-supplied updated metadata from validation", () => {
+  const f = fixture(), before = readFileSync(join(f.notes, "old.md"), "utf8"), operation = create();
+  operation.frontmatter.updated = "password: synthetic-value";
+  for (const candidate of [operation, { op: "frontmatter", path: "old", set: { updated: "password: synthetic-value" } }] satisfies WriteOp[]) {
+    const result = writeAtDate(f, candidate);
+    expect(result).toMatchObject({ ok: false, applied: false });
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: "V06", severity: "error" }));
+    expect(JSON.stringify(result)).not.toContain("synthetic-value");
+  }
+  expect(existsSync(join(f.notes, "new-finding.md"))).toBe(false);
+  expect(readFileSync(join(f.notes, "old.md"), "utf8")).toBe(before);
+});
 test("dry-run, read-only check and refusal make no filesystem changes including locks/cache", () => {
   const f = fixture(), before = disk(f.root);
   expect(f.request(create(), { dryRun: true }).ok).toBe(true); expect(disk(f.root)).toEqual(before);

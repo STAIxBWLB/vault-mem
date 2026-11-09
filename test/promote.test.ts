@@ -13,6 +13,7 @@ import { readLog } from "../src/vault-log.ts";
 import { runAsync } from "../src/cli.ts";
 import { serveMcp } from "../src/mcp.ts";
 import { createVaultMcp } from "../src/mcp-vault.ts";
+import { parseFrontmatter } from "../src/frontmatter.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -33,6 +34,38 @@ async function fixture(options: { generation?: boolean } = {}) {
   const meta = { type: "decision", domain: "research", topics: ["storage"], stem: "explicit-generation-witnesses" };
   return { root, memoryDir, home, vault, id, other, env, meta, run: (args: string[]) => runAsync(args, env) };
 }
+
+test("AC1 promotion uses one local date and its preview text is exactly the written note", async () => {
+  const f = await fixture(), now = new Date(2026, 0, 2, 1), options = { env: f.env, project, now };
+  const request = { vault: "mine", id: f.id, ...f.meta };
+  const preview = await promoteFromAmem(f.home, request, options);
+  expect(preview).toMatchObject({ ok: true, preview: true, applied: false, action: "create" });
+  expect(parseFrontmatter(preview.text!).data).toMatchObject({ created: "2026-01-02", updated: "2026-01-02", promoted_at: "2026-01-02" });
+  const done = await promoteFromAmem(f.home, { ...request, confirm: true, fingerprint: preview.fingerprint }, options);
+  expect(done).toMatchObject({ ok: true, applied: true });
+  const text = readFileSync(join(f.vault, "notes", "explicit-generation-witnesses.md"), "utf8");
+  expect(text).toBe(preview.text!);
+  expect(parseFrontmatter(text).data).toMatchObject({ created: "2026-01-02", updated: "2026-01-02" });
+});
+
+test("AC1 reference promotion previews the normalized DOI and aliased source exactly as persisted", async () => {
+  for (const source of [
+    { yaml: 'source: &origin "work/research/synthetic.md"', expected: "research/synthetic.md" },
+    { yaml: 'source: [&origin "work/research/first.md", *origin, "work/research/second.md"]', expected: ["research/first.md", "research/first.md", "research/second.md"] },
+  ]) {
+    const f = await fixture(), now = new Date(2026, 0, 2, 1), options = { env: f.env, project, now };
+    const body = `---\ndoi: 10.1234/UPPER.CASE\n${source.yaml}\n---\n# Prefer explicit generation witnesses\n\nCustom reference body.\n\n## Topics\n\n- [[storage]]\n`;
+    const request = { vault: "mine", id: f.id, ...f.meta, type: "reference", body };
+    const preview = await promoteFromAmem(f.home, request, options);
+    expect(preview).toMatchObject({ ok: true, preview: true, applied: false });
+    const expected = parseFrontmatter(preview.text!).data;
+    expect(expected).toMatchObject({ type: "reference", doi: "10.1234/upper.case", source: source.expected, created: "2026-01-02", updated: "2026-01-02" });
+    expect(parseFrontmatter(preview.text!).body).toBe(parseFrontmatter(body).body);
+    const done = await promoteFromAmem(f.home, { ...request, confirm: true, fingerprint: preview.fingerprint }, options);
+    expect(done).toMatchObject({ ok: true, applied: true });
+    expect(readFileSync(join(f.vault, "notes", "explicit-generation-witnesses.md"), "utf8")).toBe(preview.text!);
+  }
+});
 
 test("candidates honor project, limit and policy; previews write nothing; confirm creates, logs LEARN and links", async () => {
   const f = await fixture();
