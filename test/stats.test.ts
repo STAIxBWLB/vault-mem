@@ -11,7 +11,8 @@ import { addVault, removeVault } from "../src/registry.ts";
 import { serveMcp } from "../src/mcp.ts";
 import { createVaultMcp } from "../src/mcp-vault.ts";
 import { VaultIndex } from "../src/vault-index.ts";
-import { vaultStats } from "../src/vault-stats.ts";
+import { MAX_AUX_BYTES, analysisReadWithSize } from "../src/analysis-input.ts";
+import { RATIO_LIMITS, noteSourceRatio, vaultStats } from "../src/vault-stats.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -265,6 +266,42 @@ test("#82 fix: a file that would take the source total past the byte cap is left
   const over = vaultStats(f.home, "mine", { now, limits: { sources: 10000, bytes: 119 } }).ratio;
   expect({ sources: over.sources, skipped: over.skipped }).toEqual({ sources: 1, skipped: 2 });
   expect(over.largest).toEqual([{ path: "three.md", ratio: round3(note / 60) }]);
+});
+
+test("#82 fix: the caps bound the reads a pass makes, not only the bytes it counts", () => {
+  const f = workspace(), src = join(f.dir, "src");
+  mkdirSync(src, { recursive: true });
+  for (const name of ["a", "b", "c", "d"]) writeFileSync(join(src, `${name}.txt`), "x".repeat(60));
+  const rows = [{ path: "four.md", bytes: 500, source: ["src/a.txt", "src/b.txt", "src/c.txt", "src/d.txt"] }];
+  const calls: number[] = [], read = (file: string, maximum: number) => { calls.push(maximum); return analysisReadWithSize(file, maximum); };
+  // 120 bytes fit two 60-byte files exactly, and the third and fourth are never opened: the budget is spent.
+  const two = noteSourceRatio(rows, f.dir, [], { sources: 10000, bytes: 120 }, read);
+  expect({ sources: two.sources, skipped: two.skipped }).toEqual({ sources: 2, skipped: 2 });
+  expect(calls).toEqual([120, 60]);
+  // Under a 100-byte cap each read asks only for the 40 bytes left, so the later files are refused from their size.
+  calls.length = 0;
+  const one = noteSourceRatio(rows, f.dir, [], { sources: 10000, bytes: 100 }, read);
+  expect({ sources: one.sources, skipped: one.skipped }).toEqual({ sources: 1, skipped: 3 });
+  expect(calls).toEqual([100, 40, 40, 40]);
+  // A whole default budget still asks for at most the 2 MiB per-file bound, never the full 64 MiB.
+  calls.length = 0;
+  noteSourceRatio(rows, f.dir, [], RATIO_LIMITS, read);
+  expect(calls[0]).toBe(MAX_AUX_BYTES);
+  // Every attempt counts against the file cap, so three missing files under a cap of two open exactly two.
+  calls.length = 0;
+  const missing = noteSourceRatio([{ path: "m.md", bytes: 1, source: ["src/x1.txt", "src/x2.txt", "src/x3.txt"] }], f.dir, [], { sources: 2, bytes: 10000 }, read);
+  expect(calls.length).toBe(2);
+  expect({ sources: missing.sources, skipped: missing.skipped }).toEqual({ sources: 0, skipped: 3 });
+});
+
+test("#82 fix: a note whose only readable source is empty says so instead of claiming nothing was readable", () => {
+  const f = workspace(), src = join(f.dir, "src");
+  mkdirSync(src, { recursive: true });
+  writeFileSync(join(src, "empty.txt"), "");
+  writeFileSync(join(f.notes, "empty.md"), cited('["src/empty.txt"]'));
+  const ratio = vaultStats(f.home, "mine", { now: new Date(2026, 10, 4, 12, 0) }).ratio;
+  expect({ notes: ratio.notes, sources: ratio.sources, skipped: ratio.skipped }).toEqual({ notes: 0, sources: 1, skipped: 1 });
+  expect(run(["stats", "mine"], { VMEM_HOME: f.home }).text).toContain("no cited source had a nonzero size; 1 source reference skipped");
 });
 
 test("#82 fix: sourced notes past the note cap are counted, in the index, the ratio and the text output", () => {

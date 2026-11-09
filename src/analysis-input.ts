@@ -12,16 +12,18 @@ import type { TitleSuggestion } from "./links.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry } from "./registry.ts";
 import { VaultIndex } from "./vault-index.ts";
+/** Largest auxiliary input one read takes, and the default bound of `analysisRead` and `analysisReadWithSize`. */
+export const MAX_AUX_BYTES = 2 * 1024 * 1024;
 /** Read bounded auxiliary inputs without following links. Never read note files here. */
-export function analysisRead(file: string, maximum = 2 * 1024 * 1024): string | null {
+export function analysisRead(file: string, maximum = MAX_AUX_BYTES): string | null {
   return analysisReadWithSize(file, maximum)?.text ?? null;
 }
 /**
  * The same bounded read, also reporting the byte size the file has on disk. `text` decodes lossily: an invalid byte
  * becomes U+FFFD, so a byte count taken from the string overstates a file that is not UTF-8. Anything counting bytes
- * of a file must use `bytes`.
+ * of a file must use `bytes`. A file larger than `maximum` is refused from its fstat size, before any of it is read.
  */
-export function analysisReadWithSize(file: string, maximum = 2 * 1024 * 1024): { text: string; bytes: number } | null {
+export function analysisReadWithSize(file: string, maximum = MAX_AUX_BYTES): { text: string; bytes: number } | null {
   let fd: number;
   try {
     if (realpathSync(dirname(file)) !== dirname(file)) throw new Error("analysis: linked input directory");

@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { analysisReadWithSize } from "./analysis-input.ts";
+import { MAX_AUX_BYTES, analysisReadWithSize } from "./analysis-input.ts";
 import { localDate } from "./local-date.ts";
 import { LOG_TYPES } from "./log-format.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
@@ -18,13 +18,15 @@ export const MAX_RATIO_SOURCE_BYTES = 64 * 1024 * 1024;
 /** The caps one ratio call works within; the defaults are the two bounds above, and a test lowers them. */
 export interface RatioLimits { sources: number; bytes: number }
 export const RATIO_LIMITS: RatioLimits = { sources: MAX_RATIO_SOURCES, bytes: MAX_RATIO_SOURCE_BYTES };
+/** One bounded source read; `noteSourceRatio` takes one so a test can count the reads a pass really makes. */
+export type SourceFileRead = (file: string, maximum: number) => { bytes: number } | null;
 /** Notes listed as the largest, and the ratio above which a note is larger than the sources it cites. */
 export const RATIO_LARGEST_SHOWN = 5;
 export const RATIO_OVER_ONE = 1;
 export interface VaultRatio {
   /** Notes whose sources could be read and total more than zero bytes. */
   notes: number;
-  /** Source files counted for those notes, within the per-call bounds. */
+  /** Source files read within the per-call bounds; a zero-byte file is read and counted but leaves its note out of the ratio. */
   sources: number;
   /** Source references left out of the ratio; `skippedNonFile` of them are not workspace files at all. */
   skipped: number;
@@ -66,26 +68,33 @@ const percentile = (sorted: readonly number[], p: number) => sorted[Math.min(sor
  * Note-to-source byte ratio over notes that declare a frontmatter `source`. Each entry is one note: its own byte size
  * over the summed size of the sources that could be read. The reader is `analysisReadWithSize`, so every file keeps its
  * bound, no link is followed, and the bytes counted are the file's own on-disk size rather than the size of its decoded
- * text, which overstates a file that is not UTF-8. A memory id, a URL, a denied or missing path, a file past the 2 MiB
- * auxiliary bound and anything past the per-call caps is left out and counted, which keeps the pass read-only and
- * bounded. The per-note truncation count belongs to the index, so `vaultStats` adds it to this pass's result.
+ * text, which overstates a file that is not UTF-8. The caps bound the I/O, not just the counted total: a read asks only
+ * for the bytes the budget has left, the reader refuses a larger file from its fstat size without reading it, and once
+ * the budget is spent no further file is opened. Every read attempt, successful or not, counts against the file cap, so
+ * a run of failures or over-budget files cannot outrun it. A memory id, a URL, a denied, missing or oversized path and
+ * anything the caps leave out is skipped and counted, which keeps the pass read-only and bounded. The per-note
+ * truncation count belongs to the index, so `vaultStats` adds it to this pass's result.
  */
-export function noteSourceRatio(rows: readonly SourcedNote[], root: string | undefined, denyPaths: string[], limits: RatioLimits = RATIO_LIMITS): Omit<VaultRatio, "truncatedNotes"> {
+export function noteSourceRatio(rows: readonly SourcedNote[], root: string | undefined, denyPaths: string[], limits: RatioLimits = RATIO_LIMITS, readFile: SourceFileRead = analysisReadWithSize): Omit<VaultRatio, "truncatedNotes"> {
   const ratios: { path: string; ratio: number }[] = [];
-  let sources = 0, skipped = 0, skippedNonFile = 0, bytesRead = 0;
+  let sources = 0, skipped = 0, skippedNonFile = 0, bytesRead = 0, attempts = 0;
   for (const row of rows) {
     let refs: SourceReference[];
     try { refs = sourceReferences(row.source); } catch { skipped++; continue; }
     let size = 0, used = 0;
     for (const ref of refs) {
       if (ref.kind !== "path") { skipped++; skippedNonFile++; continue; }
-      // Stop before reading once a cap is used up, so an exhausted call does no further I/O.
-      if (!root || sources >= limits.sources || bytesRead >= limits.bytes) { skipped++; continue; }
+      const remaining = limits.bytes - bytesRead;
+      // Stop before opening anything once a cap is used up, so an exhausted call does no further I/O.
+      if (!root || attempts >= limits.sources || remaining <= 0) { skipped++; continue; }
+      // Counted before the read, so a failed or over-budget attempt cannot slip past the file cap.
+      attempts++;
       const file = resolve(root, ref.value);
-      let read: { text: string; bytes: number } | null;
-      try { read = isDenied(canonicalPath(file), denyPaths) ? null : analysisReadWithSize(file); } catch { read = null; }
-      // A file that would take the total past the byte cap is left out whole, never counted in part.
-      if (read === null || bytesRead + read.bytes > limits.bytes) { skipped++; continue; }
+      let read: { bytes: number } | null;
+      // Ask for no more than the budget has left: the reader refuses a larger file from its fstat size, unread.
+      try { read = isDenied(canonicalPath(file), denyPaths) ? null : readFile(file, Math.min(MAX_AUX_BYTES, remaining)); } catch { read = null; }
+      // A denied, missing or over-budget file is a skip, and one that would pass the cap is left out whole.
+      if (read === null || read.bytes > remaining) { skipped++; continue; }
       size += read.bytes; bytesRead += read.bytes; sources++; used++;
     }
     // A note whose sources are all empty has no ratio; count the note itself as skipped rather than dividing by zero.
