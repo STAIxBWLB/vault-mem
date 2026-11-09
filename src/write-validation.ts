@@ -47,7 +47,7 @@ export function screenContent(text: string, vault: VaultSpec, config: VmemConfig
 }
 
 /** Quoted escapes must not hide semantic metadata from the same content policy. */
-function screenMetadata(data:Record<string,unknown>,context:ValidationContext,path:string):WriteIssue[]{
+export function screenMetadata(data:Record<string,unknown>,context:Pick<ValidationContext,"vault"|"config"|"piiSurface">,path:string):WriteIssue[]{
   const found=new Map<string,WriteIssue>(),active=new WeakSet<object>();let nodes=0,bytes=0;
   const inspect=(text:string)=>{
     bytes+=Buffer.byteLength(text);if(bytes>MAX_BYTES*4)throw new Error("budget");

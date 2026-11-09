@@ -22,6 +22,7 @@ export function argumentError(value: unknown, raw: unknown, path = ""): string |
     if (value.length < (s.minLength ?? 0)) return fail(`shorter than ${s.minLength}`);
     if (value.length > (s.maxLength ?? FRAME_BYTES)) return fail(`longer than ${s.maxLength ?? FRAME_BYTES}`);
     if (value.includes("\0")) return fail("NUL is not allowed");
+    if (s.pattern && !new RegExp(s.pattern).test(value)) return fail("does not match the required pattern");
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return fail("expected finite number");

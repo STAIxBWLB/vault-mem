@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add `vmem_spec_update` and `vmem spec update` from the shared spec command schema: lossless frontmatter set/unset/list edits with an immutable id, per-worktree locks outside the repository, expected-SHA protection, shared secret/PII screens and an in-memory introduced-error gate. Receipts include the actor; no commit, branch, push or source log is created. Spec create/delete remain unimplemented (#97, T4a).
+
 - Skill mining parses `Record` capture excerpts through agent-mem 0.23.0, preserving record kinds and using anchors as matching context under the existing screens, masks and bounds. Malformed or partially parsed excerpts are dropped as whole rows and counted in `dropped.malformedRecord`; `Title` and tool rows stay excluded. Truncated capture shards remain reported because the API has no excluded-Record count. Promotion drafting remains separate (#163).
 
 - Raise the exact bundled `@staix/agent-mem` pin from 0.17.0 to 0.23.0, bringing reader-floor enforcement and current generation-profile support to the amem seam. Record mining and promotion drafting remain separate follow-ups; no home migration or placement activation is performed.
