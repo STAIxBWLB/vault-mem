@@ -36,7 +36,7 @@ export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_read", "vmem
   "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_stats", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Server `initialize` instructions: purpose, navigation order and the write contract. Pinned by a test, under 400 bytes. */
-export const VMEM_INSTRUCTIONS = "vmem is a vault of durable, linked knowledge: notes with frontmatter, wiki-links and an append-only log. Navigate it by searching first with vmem_search, then reading the best match with vmem_read, using section for one H2. Writes are validated and receipted: a refusal lists issues, and a failure after publication keeps applied true, so read applied and changes before retrying.";
+export const VMEM_INSTRUCTIONS = "vmem is a vault of durable, linked knowledge: notes with frontmatter, wiki-links and an append-only log. Search first with vmem_search, then read the best match with vmem_read, using section for one H2. Writes are validated and receipted: a refusal lists issues, and a failure after publication can leave changes behind, so read the receipt and its issues before retrying.";
 
 /** Tool definitions for a fixed vault set: `vault` is an enum of the registered ids. */
 export function vaultTools(ids: readonly string[], orgIds: readonly string[] = []): McpTool[] {

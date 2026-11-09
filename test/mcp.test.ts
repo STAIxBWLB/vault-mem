@@ -62,7 +62,7 @@ test("tools/list: vault enum is the registered ids, default is first personal, e
 });
 
 test("#165: initialize sends pinned vault instructions under 400 bytes", async () => {
-  expect(VMEM_INSTRUCTIONS).toBe("vmem is a vault of durable, linked knowledge: notes with frontmatter, wiki-links and an append-only log. Navigate it by searching first with vmem_search, then reading the best match with vmem_read, using section for one H2. Writes are validated and receipted: a refusal lists issues, and a failure after publication keeps applied true, so read applied and changes before retrying.");
+  expect(VMEM_INSTRUCTIONS).toBe("vmem is a vault of durable, linked knowledge: notes with frontmatter, wiki-links and an append-only log. Search first with vmem_search, then read the best match with vmem_read, using section for one H2. Writes are validated and receipted: a refusal lists issues, and a failure after publication can leave changes behind, so read the receipt and its issues before retrying.");
   expect(Buffer.byteLength(VMEM_INSTRUCTIONS)).toBeLessThan(400);
   const f = fixture(), server = createVaultMcp(f.home);
   expect(server.instructions).toBe(VMEM_INSTRUCTIONS);
