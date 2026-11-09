@@ -8,9 +8,9 @@ import { PLAIN, type TextOptions } from "./text-output.ts";
 import { renderSpec } from "./spec-output.ts";
 import type { SpecWriteResult } from "./spec-write.ts";
 
-/** Spec definitions retain read annotations for reads; create/update are policy-gated mutations. */
+/** Spec definitions retain read annotations for reads; create/update/delete are policy-gated mutations. */
 export const specTools = (): McpTool[] => SPEC_COMMANDS.map(item => ({ name: item.name, description: item.description, inputSchema: item.inputSchema,
-  annotations: { readOnlyHint: item.command !== "update" && item.command !== "create", destructiveHint: false, idempotentHint: item.command !== "create", openWorldHint: false } }));
+  annotations: { readOnlyHint: !["create", "update", "delete"].includes(item.command), destructiveHint: item.command === "delete", idempotentHint: item.command !== "create" && item.command !== "delete", openWorldHint: false } }));
 
 export function createSpecMcp(home: string, env: NodeJS.ProcessEnv = process.env): { tools: McpTool[]; handlers: Record<string, McpHandler> } {
   const registered = loadRegistry(home).specs ?? [];
@@ -37,7 +37,7 @@ export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.
   if (!item) throw new Error("spec: unknown command; use vmem spec --help");
   const values: Record<string, unknown> = {}, positional: string[] = [];
   const properties = item.inputSchema.properties as Record<string, { type: string }>;
-  const takesId = item.command === "get" || item.command === "graph" || item.command === "update";
+  const takesId = item.command === "get" || item.command === "graph" || item.command === "update" || item.command === "delete";
   const positionalKey = item.command === "create" ? "path" : takesId ? "id" : item.command === "grep" ? "query" : undefined;
   const flags = new Map(Object.keys(properties).filter(key => key !== positionalKey).map(key => ["--" + key.replace(/[A-Z]/g, value => "-" + value.toLowerCase()), key]));
   const seen = new Set<string>(); let json = false, repo: string | undefined, positionalOnly = false;
@@ -74,6 +74,6 @@ export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.
   const result = repo !== undefined
     ? validateSpecRepo(repo, { requireFresh: values.requireFresh as boolean | undefined, limit: values.limit as number | undefined, env }).report
     : executeSpecCommand(resolveHome(env).home, item.command, values, env);
-  const code = (item.command === "validate" || item.command === "update" || item.command === "create") && !(result as { ok: boolean }).ok ? 1 : 0;
+  const code = ["validate", "create", "update", "delete"].includes(item.command) && !(result as { ok: boolean }).ok ? 1 : 0;
   return { text: json ? JSON.stringify(result) : renderSpec(item.command, result, text, { args, values, ...(repo !== undefined ? { repo } : {}) }), code };
 }

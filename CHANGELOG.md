@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add `vmem_spec_delete` and `vmem spec delete`: read-only previews list every backlink kind and child, with a path/SHA/list fingerprint. Confirm recomputes under the shared mutation lock, refuses stale acknowledgements and allows only listed dangling links to the removed id. Other introduced errors remain blocked before result limits. All three spec write tools are implemented (#97, T4c).
+
 - Add `vmem_spec_create` and `vmem spec create` with ordered frontmatter, type-specific headings and draft defaults. Creation shares spec write policy, secret/PII screens, actor attribution, mutation locks and the introduced-error gate; unsafe, ignored or existing targets refuse without overwrite. Delete remains unimplemented (#97, T4b).
 
 - Add `vmem_spec_update` and `vmem spec update` from the shared spec command schema: lossless frontmatter set/unset/list edits with an immutable id, per-worktree locks outside the repository, expected-SHA protection, shared secret/PII screens and an in-memory introduced-error gate. Receipts include the actor; no commit, branch, push or source log is created. Spec create/delete remain unimplemented (#97, T4a).

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { createSpec, updateSpec, type SpecCreateRequest, type SpecUpdateRequest, type SpecWriteOptions } from "./spec-write.ts";
+import { createSpec, deleteSpec, updateSpec, type SpecCreateRequest, type SpecDeleteRequest, type SpecUpdateRequest, type SpecWriteOptions } from "./spec-write.ts";
 import { argumentError } from "./mcp.ts";
 import { specCommandSchema, type SpecCommand } from "./spec-command-table.ts";
 import { loadRegistry } from "./registry.ts";
@@ -111,11 +111,12 @@ function grep(index: SpecIndex, snapshot: SpecSnapshot, args: Record<string, unk
 
 /** Shared provider for CLI and MCP; read caches and mutation locks stay outside registered sources. */
 export function executeSpecCommand(home: string, command: SpecCommand, args: Record<string, unknown>, env: NodeJS.ProcessEnv = process.env, options: Pick<SpecWriteOptions, "channel" | "binding"> = {}): unknown {
-  if (!["get", "graph", "grep", "validate", "create", "update"].includes(command)) throw new Error("spec provider: unknown command; choose get, graph, grep, validate, create or update");
+  if (!["get", "graph", "grep", "validate", "create", "update", "delete"].includes(command)) throw new Error("spec provider: unknown command; choose get, graph, grep, validate, create, update or delete");
   const invalid = argumentError(args, specCommandSchema(command));
   if (invalid) throw new Error(`spec ${command}: ${invalid}; use vmem spec ${command} --help to correct the arguments`);
   if (command === "update") return updateSpec(home, args as unknown as SpecUpdateRequest, { env, ...options });
   if (command === "create") return createSpec(home, args as unknown as SpecCreateRequest, { env, ...options });
+  if (command === "delete") return deleteSpec(home, args as unknown as SpecDeleteRequest, { env, ...options });
   if (command === "grep") for (const field of ["parent", "dependsOn"] as const) {
     if (args[field] !== undefined && specReference(args[field]) === undefined) throw new Error(`spec grep: ${field} filter resolves to no id; pass an id or [[id]]`);
   }

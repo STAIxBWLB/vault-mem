@@ -185,7 +185,7 @@ export function validateSpecs(snapshot: SpecSnapshot, options: SpecValidationOpt
     get truncated() { return budget.truncated; } };
 }
 /** Existing error identities are retained even when their display sample was truncated. */
-export function introducedSpecErrors(current: SpecSnapshot, prospective: SpecSnapshot, options: SpecValidationOptions = {}): SpecValidationIssue[] {
+export function introducedSpecErrors(current: SpecSnapshot, prospective: SpecSnapshot, options: SpecValidationOptions = {}, allowedDanglingLinks: readonly { path: string; field: string; target: string }[] = []): SpecValidationIssue[] {
   const limit = reportLimit(options.limit);
   const pathsById = (input: SpecSnapshot) => {
     const paths = new Map<string, Set<string>>();
@@ -227,8 +227,11 @@ export function introducedSpecErrors(current: SpecSnapshot, prospective: SpecSna
     if (count === 0) return true;
     old.set(key, count - 1); return false;
   });
-  const result = display(next.map(record => record.issue), limit, { bytes: 1024, truncated: false });
-  if (next.length && !result.length) throw new Error("spec validation: introduced error metadata exceeds the report budget; reduce metadata before writing");
+  // Deletion acknowledgements apply before display limits, never to a sampled result.
+  const allowed = new Set(allowedDanglingLinks.map(link => JSON.stringify([link.path, link.field, link.target])));
+  const reportable = next.map(record => record.issue).filter(issue => issue.code !== "dangling_link" || !allowed.has(JSON.stringify([issue.path, issue.field, issue.target])));
+  const result = display(reportable, limit, { bytes: 1024, truncated: false });
+  if (reportable.length && !result.length) throw new Error("spec validation: introduced error metadata exceeds the report budget; reduce metadata before writing");
   return result;
 }
 /** Registry-free CI logic; no home/config/cache creation and no authored freshness fields. */
