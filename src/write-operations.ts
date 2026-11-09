@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeSource } from "./source.ts";
-import { parseFrontmatter, emitFrontmatter } from "./frontmatter.ts";
+import { parseFrontmatter, emitFrontmatter, frontmatterReferences } from "./frontmatter.ts";
 import { LINK_RELATIONS, normalizeTarget, proseLines, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
 import type { PatchEdit, PlannedChange, WriteIssue, WriteOp } from "./write-types.ts";
 export class WriteRefusal extends Error {
@@ -130,21 +130,33 @@ function mayHaveDoi(source: string): boolean {
 export function stampNoteContent(source: string, today: string, create: boolean, warning?: (message: string) => void): string {
   const doc = parseFrontmatter(source);
   const dates = { updated: today, ...(create && !Object.hasOwn(doc.data, "created") ? { created: today } : {}) };
-  try { return emitFrontmatter(doc, dates); }
+  const references = frontmatterReferences(doc);
+  const skipReferences = (cause: string) => {
+    warning?.(`automatic dates were not set: ${cause}; replace the alias with a literal value or repair the header, then retry the authored write`);
+    return source;
+  };
+  let candidate: string;
+  try { candidate = emitFrontmatter(doc, dates); }
   catch (error) {
-    // Body edits already support valid flow mappings. Normalize only an uneditable
-    // mapping's header for date emission, preserving its semantics and body bytes.
     if (!(error instanceof Error) || error.message !== "frontmatter: editing requires a block mapping") throw error;
+    // Canonicalizing a flow or merge-key header would erase its reference graph.
+    if (references.length) return skipReferences("rewriting this header would change YAML anchor/alias relationships");
     const newline = /\r?\n/.exec(doc.frontmatter ?? "")?.[0] ?? "\n";
     try {
       const header = emitFrontmatter(parseFrontmatter(""), { ...doc.data, ...dates }).replaceAll("\n", newline);
-      return source.slice(0, source.indexOf("---")) + header + doc.body;
+      candidate = source.slice(0, source.indexOf("---")) + header + doc.body;
     } catch (cause) {
       if (!(cause instanceof Error) || cause.message !== "frontmatter: changed values must be JSON-compatible") throw cause;
       warning?.("automatic dates were not set: the header contains values that cannot round-trip through JSON (such as .inf, .nan or -0); rewrite the header as an editable block mapping or replace those values, then retry to set updated (and missing created on create)");
       return source;
     }
   }
+  try {
+    const stamped = parseFrontmatter(candidate);
+    if (!isDeepStrictEqual(references, frontmatterReferences(stamped))) return skipReferences("date emission would change YAML anchor/alias relationships");
+    if (!isDeepStrictEqual(stamped.data, { ...doc.data, ...dates })) return skipReferences("date emission would alter other metadata or YAML anchor/alias values");
+  } catch { return skipReferences("the stamped YAML header would not parse (an anchor or alias may have been removed)"); }
+  return candidate;
 }
 /** Date authored content only; mechanical rewrites retain their existing freshness. */
 export function stampContentChanges(operation: WriteOp, changes: PlannedChange[], today: string, issues: WriteIssue[] = []): PlannedChange[] {

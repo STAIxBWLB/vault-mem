@@ -64,16 +64,18 @@ function doubleQuoted(source:string,start:number):{value:string;end:number} {
   throw new Error("YAML: unterminated quoted scalar");
 }
 
+export interface YamlReference { kind: "anchor" | "alias"; name: string; binding: number }
 /**
  * Parse structural YAML with Bun, replacing only double-quoted scalar nodes in its semantic input.
  * Original source and byte offsets remain the caller's property. Opaque scalars also avoid asking
  * older Bun YAML versions to parse decoded control characters or unsupported Unicode escapes.
  */
-export function parseYamlWithQuotedEscapes(source:string):unknown {
+export function parseYamlWithQuotedEscapes(source:string,references?:YamlReference[]):unknown {
   const prefix=`vmem-quoted-${randomUUID()}-`,values=new Map<string,string>();
   const replacements:{start:number;end:number;token:string}[]=[];
   let offset=0,lineStart=0,flow=0,nodeStart=true,blockIndent:number|null=null;
   let effectiveIndent=0,mappingOnLine=false,plain=false,plainIndent=0;
+  const bindings=references ? new Map<string,number>() : undefined; let declaration=0;
   while(offset<source.length) {
     if(offset===lineStart) {
       const end=source.indexOf("\n",offset),line=source.slice(offset,end===-1 ? undefined : end),indent=line.match(/^[ \t]*/)![0].length;
@@ -106,8 +108,16 @@ export function parseYamlWithQuotedEscapes(source:string):unknown {
       blockIndent=mappingOnLine ? effectiveIndent : lineStart===offset ? 0 : source.slice(lineStart).match(/^[ \t]*/)![0].length;
       const end=source.indexOf("\n",offset);offset=end===-1 ? source.length : end;plain=false;continue;
     }
+    if(nodeStart && character === "*" && references) {
+      const name=/^\*[^\s,[\]{}]*/.exec(source.slice(offset))![0].slice(1);
+      references.push({kind:"alias",name,binding:bindings!.get(name) ?? -1});
+    }
     if(nodeStart && (character === "&" || character === "!")) {
-      const prefix=/^[&!][^\s,[\]{}]*/.exec(source.slice(offset))![0];offset+=prefix.length;continue;
+      const prefix=/^[&!][^\s,[\]{}]*/.exec(source.slice(offset))![0];
+      if(character === "&" && references) {
+        const name=prefix.slice(1),binding=declaration++;bindings!.set(name,binding);references.push({kind:"anchor",name,binding});
+      }
+      offset+=prefix.length;continue;
     }
     if(nodeStart && (character === "[" || character === "{")) {flow++;offset++;nodeStart=true;plain=false;continue;}
     if(flow && (character === "]" || character === "}")) {flow--;offset++;nodeStart=false;plain=false;continue;}

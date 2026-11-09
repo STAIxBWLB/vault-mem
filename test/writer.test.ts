@@ -110,6 +110,45 @@ for (const [op, value] of [["patch", ".inf"], ["append", ".inf"], ["link", ".inf
   expect(text).toContain(op === "patch" ? "Changed legacy text." : op === "append" ? "Added legacy evidence." : op === "link" ? "[[next]] (supports)" : "Supersedes [[old]]");
 });
 
+for (const operation of ["patch", "append"] as const) for (const [name, fields] of [
+  ["updated anchor referenced by created", 'updated: &day "2020-01-01"\ncreated: *day\n'],
+  ["updated alias referencing created", 'created: &day "2020-01-01"\nupdated: *day\n'],
+  ["unreferenced updated anchor", 'updated: &day "2020-01-01"\ncreated: "2019-01-01"\n'],
+] as const) test(`AC1 ${operation} preserves ${name} and warns instead of breaking its header`, () => {
+  const f = fixture(), file = join(f.notes, "old.md"), base = parseFrontmatter(note("Old Finding", "Original anchored text."));
+  const header = base.frontmatter!.replace(/---\n$/, fields + "---\n"), original = header + base.body;
+  writeFileSync(file, original);
+  const result = writeAtDate(f, operation === "patch"
+    ? { op: "patch", path: "old", oldString: "Original anchored text.", newString: "Changed anchored text." }
+    : { op: "append", path: "old", section: "Evidence", markdown: "Added anchored evidence." });
+  expect(result).toMatchObject({ ok: true, applied: true });
+  const warning = result.issues.find(issue => issue.code === "V01" && issue.severity === "warning" && /anchor|alias/i.test(issue.message));
+  expect(warning).toMatchObject({ path: "notes/old.md" });
+  expect(warning!.message).toContain("replace the alias with a literal value");
+  expect(result.issues.some(issue => issue.code === "IO" || issue.severity === "error")).toBe(false);
+  const text = readFileSync(file, "utf8");
+  expect(text.startsWith(header)).toBe(true);
+  expect(parseFrontmatter(text).data).toEqual(parseFrontmatter(original).data);
+  expect(parseFrontmatter(text).data.updated).toBe("2020-01-01");
+  expect(parseFrontmatter(text).body).toContain(operation === "patch" ? "Changed anchored text." : "Added anchored evidence.");
+});
+
+for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} can stamp a date beside unrelated anchored metadata without changing its alias graph`, () => {
+  const f = fixture(), file = join(f.notes, "old.md"), base = parseFrontmatter(note("Old Finding", "Original unrelated-anchor text."));
+  const anchor = 'aliases: &labels ["Unrelated Alias"]\ntags: *labels\n';
+  const original = base.frontmatter!.replace(/---\n$/, anchor + "---\n") + base.body;
+  writeFileSync(file, original);
+  const result = writeAtDate(f, operation === "patch"
+    ? { op: "patch", path: "old", oldString: "Original unrelated-anchor text.", newString: "Changed unrelated-anchor text." }
+    : { op: "append", path: "old", section: "Evidence", markdown: "Added unrelated-anchor evidence." });
+  expect(result).toMatchObject({ ok: true, applied: true });
+  const text = readFileSync(file, "utf8"), after = parseFrontmatter(text);
+  expect(text).toContain(anchor);
+  expect(after.data).toEqual({ ...parseFrontmatter(original).data, updated: contentDate });
+  expect(result.issues.some(issue => /automatic dates were not set/.test(issue.message) || issue.code === "IO" || issue.severity === "error")).toBe(false);
+  expect(after.body).toContain(operation === "patch" ? "Changed unrelated-anchor text." : "Added unrelated-anchor evidence.");
+});
+
 test("AC1 frontmatter stamps updated after a valid metadata change", () => {
   const f = fixture();
   expect(writeAtDate(f, { op: "frontmatter", path: "old", set: { confidence: "likely", updated: "2000-01-01" } })).toMatchObject({ ok: true, applied: true });
