@@ -139,3 +139,34 @@ test("multiple configured columns still report each physical row once with its l
   const indexed = index({ "notes/two.md": source }, [{ path: "notes/two.md" }, { path: "notes/two.md", keyColumn: 2 }]);
   expect(matchCanonRows(indexed, "ACME Acme Labs BETA Beta Group").map(row => [row.key, row.line])).toEqual([["Beta Group", 4], ["Acme Labs", 3]]);
 });
+
+test("#189 fix: the GFM delimiter row accepts one hyphen per cell with optional alignment colons", () => {
+  const sources = {
+    "notes/one.md": ["| Key | Meaning |", "|-|-|", "| Short Entity | One hyphen |"].join("\n"),
+    "notes/two.md": ["| Key | Meaning |", "|--|--|", "| Double Entity | Two hyphens |"].join("\n"),
+    "notes/colon.md": ["| Key | Meaning |", "| :-: | - |", "| Colon Entity | Alignment colons |"].join("\n"),
+  };
+  // Each short separator is a real table, so the data row under it is indexed and no table warning is raised.
+  const indexed = index(sources);
+  expect(indexed.warnings).toEqual([]);
+  expect(matchCanonRows(indexed, "Short Entity Double Entity Colon Entity").map(row => [row.path, row.key, row.line])).toEqual([
+    ["notes/two.md", "Double Entity", 3], ["notes/one.md", "Short Entity", 3], ["notes/colon.md", "Colon Entity", 3],
+  ]);
+  // The delimiter row is consumed as the header's second line, never indexed as a keyed row of its own.
+  expect(matchCanonRows(indexed, "Meaning")).toEqual([]);
+});
+
+test("#189 fix: a readable configured note with no table warns once, naming the path, and blocks nothing", () => {
+  const indexed = index({
+    "notes/prose.md": "---\ntitle: Glossary\n---\n# Terms\n\nNo table here, just prose.\n",
+    "notes/narrow.md": ["| Meaning |", "| - |", "| One column, so the configured key column does not exist |"].join("\n"),
+    "notes/good.md": table(["| Good Entity | Kept |"]),
+  }, [{ path: "notes/prose.md" }, { path: "notes/narrow.md", keyColumn: 2 }, { path: "notes/good.md" }]);
+  expect(indexed.warnings).toHaveLength(1);
+  expect(indexed.warnings[0]).toContain("notes/prose.md");
+  expect(indexed.warnings[0]).toMatch(/no recognizable Markdown table/);
+  expect(indexed.warnings[0]).toMatch(/check.*retry preview/);
+  // A table whose key column is missing is still a table: it yields no rows and earns no warning of its own.
+  expect(indexed.warnings.join(" ")).not.toContain("notes/narrow.md");
+  expect(matchCanonRows(indexed, "Good Entity").map(row => row.key)).toEqual(["Good Entity"]);
+});
