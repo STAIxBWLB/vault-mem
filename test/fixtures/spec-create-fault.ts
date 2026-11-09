@@ -7,13 +7,16 @@ if (!home || !mode) throw new Error("synthetic create fault fixture needs home a
 const original = { ...fs }, configFile = join(home, "vmem.config.json"), config = JSON.parse(original.readFileSync(configFile, "utf8"));
 const root = config.specs[0].path, target = join(root, "new/deep/SPEC.md"), temps = new Set<number>(), modes = new Set<number>(), synced = new Set<number>(), tempReads = new Set<number>();
 const fault = mode.replace(/^mcp-/, "");
-let injected = false, published = false, lockDescriptor: number | undefined;
+if (fault === "umask-027") process.umask(0o027);
+const expectedFileMode = 0o666 & ~process.umask(), descriptorPaths = new Map<number, string>(), syncPaths: string[] = [];
+let injected = false, published = false, updating = false, lockDescriptor: number | undefined;
 let registerContainer: (() => void) | undefined;
 mock.module("node:fs", () => ({ ...original,
   openSync: (...args: Parameters<typeof fs.openSync>) => {
     const file = String(args[0]);
     if (fault === "lock-permission" && file.endsWith(".lock") && file.includes("/spec-mutations/")) throw Object.assign(new Error("synthetic non-writable lock directory"), { code: "EACCES" });
     const fd = original.openSync(...args);
+    descriptorPaths.set(fd, file);
     if (file.includes(".spec-")) {
       temps.add(fd);
       if ((Number(args[1]) & (original.constants.O_WRONLY | original.constants.O_RDWR)) === 0) tempReads.add(fd);
@@ -29,9 +32,13 @@ mock.module("node:fs", () => ({ ...original,
     if (mode === "temp-write" && temps.has(Number(args[0]))) throw new Error("synthetic create staging fault");
     return original.writeFileSync(...args);
   },
-  fchmodSync: (fd: number, mode: number) => { original.fchmodSync(fd, mode); if (temps.has(fd) && mode === 0o600) modes.add(fd); },
+  fchmodSync: (fd: number, mode: number) => { original.fchmodSync(fd, mode); if (temps.has(fd) && mode === expectedFileMode) modes.add(fd); },
   fsyncSync: (fd: number) => {
-    if (fault === "dir-fsync" && published && original.fstatSync(fd).isDirectory()) throw new Error("synthetic create directory sync failure");
+    if (published && original.fstatSync(fd).isDirectory()) {
+      const file = descriptorPaths.get(fd)!; syncPaths.push(file);
+      if (fault === "dir-fsync") throw new Error("synthetic create directory sync failure");
+      if (fault === "ancestor-sync" && file === join(root, "new")) throw new Error("synthetic created ancestor sync failure");
+    }
     if (!injected && temps.has(fd) && mode === "tree-drift") { injected = true; original.appendFileSync(join(root, "SPEC.md"), "External tree edit.\n"); }
     original.fsyncSync(fd); if (temps.has(fd) && modes.has(fd)) synced.add(fd);
   },
@@ -51,7 +58,7 @@ mock.module("node:fs", () => ({ ...original,
     if (fault === "lock-close" && published && fd === lockDescriptor) throw new Error("synthetic create lock close failure");
   },
   renameSync: (...args: Parameters<typeof fs.renameSync>) => {
-    if (String(args[0]).includes(".spec-")) throw new Error("unexpected create rename fallback");
+    if (!updating && String(args[0]).includes(".spec-")) throw new Error("unexpected create rename fallback");
     original.renameSync(...args);
   },
 }));
@@ -66,7 +73,15 @@ if (fault.startsWith("final-home-")) {
 const request = { path: "new/deep/SPEC.md", id: "child", type: "module", title: "Attempted create", parent: "root" };
 const { createSpecMcp } = await import("../../src/mcp-spec.ts");
 const result = (mode.startsWith("mcp-") ? createSpecMcp(home, process.env).handlers.vmem_spec_create!(request) : createSpec(home, request, { env: process.env })) as SpecWriteResult;
-if (fault === "dir-fsync" || fault === "lock-close") {
+if (fault === "umask-027" && result.ok) {
+  const fileMode = original.statSync(target).mode & 0o777;
+  const directoryModes = [join(root, "new"), join(root, "new/deep")].map(file => original.statSync(file).mode & 0o777);
+  original.chmodSync(target, 0o664); updating = true;
+  const { updateSpec } = await import("../../src/spec-write.ts");
+  const update = updateSpec(home, { id: "child", set: { title: "Updated mode fixture" } }, { env: process.env });
+  console.log(JSON.stringify({ result, fileMode, directoryModes, update, updateMode: original.statSync(target).mode & 0o777 }));
+} else if (fault === "dir-fsync" || fault === "ancestor-sync" || fault === "lock-close") {
   const { renderSpecUpdate } = await import("../../src/spec-output.ts"), { PLAIN } = await import("../../src/text-output.ts");
-  console.log(JSON.stringify({ result, text: renderSpecUpdate(result, PLAIN, "create") }));
-} else console.log(JSON.stringify(result));
+  console.log(JSON.stringify({ result, text: renderSpecUpdate(result, PLAIN, "create"), syncPaths }));
+} else if (fault === "sync-order") console.log(JSON.stringify({ result, syncPaths }));
+else console.log(JSON.stringify(result));

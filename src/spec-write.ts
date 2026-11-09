@@ -82,11 +82,27 @@ function readBounded(file: string, path: string): { source: string; mode: number
 
 function readPlain(root: string, path: string, denyPaths: string[]) { return readBounded(plainPath(root, path, denyPaths), path); }
 
+/** The prospective file must belong to the same tree that discovery will scan. */
+function guardCreateRepository(root: string, path: string, ancestors: string[], deepest: string, env: NodeJS.ProcessEnv): void {
+  if (ancestors.length) {
+    const physical = new Set(ancestors.map(ancestor => canonicalPath(join(root, ancestor))));
+    // The first component covers every indexed ancestor, including missing gitlink workdirs.
+    const spellings = new Set(ancestors.slice(0, 1).flatMap(ancestor => [ancestor, relative(root, canonicalPath(join(root, ancestor))).split(sep).join("/")]).flatMap(ancestor => [ancestor, ancestor.normalize("NFC"), ancestor.normalize("NFD")]));
+    const entries = specGit(root, ["ls-files", "--stage", "-z", "--", ...[...spellings].map(ancestor => `:(icase,literal)${ancestor}`)], { env, maxBuffer: 16 * 1024 * 1024 }).stdout.toString("utf8").split("\0");
+    for (const entry of entries) {
+      const tab = entry.indexOf("\t");
+      if (entry.startsWith("160000 ") && tab >= 0 && physical.has(canonicalPath(join(root, entry.slice(tab + 1))))) refuse("PATH", "spec path crosses a submodule gitlink; create the spec in that repository's own source", path);
+    }
+  }
+  const top = specGit(canonicalPath(deepest), ["rev-parse", "--show-toplevel"], { env }).stdout.toString("utf8").replace(/\r?\n$/, "");
+  if (canonicalPath(top) !== root) refuse("PATH", "spec path crosses into a nested repository; create the spec in that repository's own source", path);
+}
+
 /** Missing parent directories are allowed; every existing component must be plain. Never follows a dangling link. */
 function createPath(root: string, path: string, denyPaths: string[], env: NodeJS.ProcessEnv): string {
   const parts = pathParts(path);
   if (lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory()) refuse("PATH", "worktree root changed; restore the original plain root and retry", path);
-  let file = root;
+  let file = root, deepest = root;
   for (const [index, part] of parts.entries()) {
     file = join(file, part);
     let stat;
@@ -94,22 +110,24 @@ function createPath(root: string, path: string, denyPaths: string[], env: NodeJS
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; continue; }
     if (stat.isSymbolicLink() || !stat.isDirectory() || index === parts.length - 1) refuse("PATH", "create requires an absent target and plain directory components; choose a new in-worktree path", path);
     if (!within(root, realpathSync(file))) refuse("PATH", "spec parent leaves the worktree; choose a contained plain path", path);
+    deepest = file;
   }
   if (deniedSpecPath(file, denyPaths)) refuse("PATH", "spec path is denied; choose an allowed path", path);
+  guardCreateRepository(root, path, parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")), deepest, env);
   if (specGit(root, ["check-ignore", "--quiet", "--no-index", "--", path], { env, allowedExitCodes: [0, 1] }).status === 0) refuse("PATH", "spec path is git-ignored; choose a non-ignored path or adjust the ignore policy before retrying", path);
   return file;
 }
 function readMutation(root: string, change: SpecMutation, denyPaths: string[], env: NodeJS.ProcessEnv): { source: string | null; mode: number; identity: string | null } {
   if (change.before !== null) return readPlain(root, change.path, denyPaths);
   createPath(root, change.path, denyPaths, env);
-  return { source: null, mode: 0o600, identity: null };
+  return { source: null, mode: 0o666 & ~process.umask(), identity: null };
 }
 function ensureCreateParents(root: string, path: string, denyPaths: string[], env: NodeJS.ProcessEnv, owned: Map<string, string>): void {
   let parent = root;
   for (const part of pathParts(path).slice(0, -1)) {
     createPath(root, path, denyPaths, env);
     parent = join(parent, part);
-    try { mkdirSync(parent, { mode: 0o700 }); owned.set(parent, identity(parent)); }
+    try { mkdirSync(parent, { mode: 0o777 & ~process.umask() }); owned.set(parent, identity(parent)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   }
   createPath(root, path, denyPaths, env);
@@ -142,6 +160,9 @@ function cleanupCreatedDirs(owned: Map<string, string>, result: SpecWriteResult)
     try { if (identity(dir) !== stamp) throw new Error("directory ownership changed"); rmdirSync(dir); }
     catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "owned empty parent directory cleanup failed; inspect the target's parent directories before retrying", ...(result.path ? { path: result.path } : {}) }); }
   }
+}
+function syncCreatedParents(owned: ReadonlyMap<string, string>): void {
+  for (const dir of [...owned.keys()].reverse()) syncDirectory(dirname(dir));
 }
 
 /** Pure prospective tree, shared by frontmatter update and future create/delete operations. No prospective file is read from disk. */
@@ -251,7 +272,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     if (latest.source !== change.before || latest.identity !== original.identity || staged.source !== change.after || staged.identity !== tempIdentity) refuse("DRIFT", "spec target or staged file changed before commit; reread the spec and retry the update", change.path);
     assertBinding();
     publishSpec(temp, file, change, result); temp = undefined;
-    syncDirectory(parent); result.ok = true;
+    syncDirectory(parent); syncCreatedParents(createdDirs); result.ok = true;
   } catch (error) {
     result.issues = error instanceof Refusal ? error.issues : [{ code: "IO", severity: "error", message: `spec write failed (${writeErrorCause(error)}); inspect the written file and source binding, check permissions and free space for the target and VMEM_HOME lock directory, repair the reported cause and retry`, ...(result.path ? { path: result.path } : {}) }];
     result.path ??= result.issues.find(issue => issue.path)?.path;
