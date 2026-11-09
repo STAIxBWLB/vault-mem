@@ -8,6 +8,7 @@ import type { PiiMatrix, PiiRow } from "./pii.ts";
 import { effectivePii, type RecoveryReport } from "./registry.ts";
 import type { SetupReport } from "./setup.ts";
 import { blocks, clean, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions } from "./text-output.ts";
+import { MAX_RATIO_NOTES } from "./vault-index.ts";
 import type { VaultStats } from "./vault-stats.ts";
 
 type Check = { ok: boolean; issue?: string };
@@ -64,8 +65,9 @@ export function renderStats(r: VaultStats, o: TextOptions): string {
   const ratioBody = ratio.notes
     ? fields([["notes", plural(ratio.notes, "note")], ["sources", plural(ratio.sources, "file")], ["median", ratio.median ?? ""], ["p90", ratio.p90 ?? ""],
       ["over 1", plural(ratio.overOne, "note")], ["skipped", `${plural(ratio.skipped, "source reference")}${notFile}`],
+      ["truncated", ratio.truncatedNotes ? `${plural(ratio.truncatedNotes, "note")} past the ${MAX_RATIO_NOTES}-note cap` : ""],
       ["largest", ratio.largest.map(entry => `${entry.path} ${entry.ratio}`).join("; ")]], o)
-    : paragraph(`no note cites a readable workspace file${ratio.skipped ? `; ${plural(ratio.skipped, "source reference")} skipped` : ""}`, o);
+    : paragraph(`no note cites a readable workspace file${ratio.skipped ? `; ${plural(ratio.skipped, "source reference")} skipped` : ""}${ratio.truncatedNotes ? `; ${plural(ratio.truncatedNotes, "note")} past the ${MAX_RATIO_NOTES}-note cap` : ""}`, o);
   const log = r.log.total === null ? paragraph("unreadable; see the issues below", o, "fail", "  ")
     : fields([["total", r.log.total], ...Object.entries(r.log.byType ?? {}).filter(([, n]) => n > 0).sort(([a, x], [b, y]) => y - x || a.localeCompare(b))], o);
   return blocks(`${heading(r.vault, o)}  ${plural(r.notes.total, "note")} as of ${r.asOf}`,

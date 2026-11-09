@@ -30,7 +30,7 @@
 
 - CI now exposes the `ci-ok` aggregate over the check matrix, requires release tags to be on main with a green main-push Check on the same commit, provides the guarded `release:tag` script, and pins checkout v6 consistently across workflows (#153).
 
-- Vault statistics add the note text size in bytes and words, in total and by type and domain, and a note-to-source byte ratio: for notes whose frontmatter `source` names readable workspace files, the note's size over theirs, reported as median and p90 with the notes larger than their sources and the five largest. Non-file sources, denied or missing paths, files past the 2 MiB read bound and anything past the per-call bounds are skipped and counted. Stats stay read-only (#165 part 5).
+- Vault statistics add the note text size in bytes and words, in total and by type and domain, and a note-to-source byte ratio: for notes whose frontmatter `source` names readable workspace files, the note's size over theirs, reported as median and p90 with the notes larger than their sources and the five largest. Each source counts at its own size on disk rather than at the size of its decoded text. Non-file sources, denied or missing paths, files past the 2 MiB read bound, a file that would take the 64 MiB source total past its cap, and anything past the per-call bounds are skipped and counted, and `truncatedNotes` counts the sourced notes the index's 10000-note cap left out. Stats stay read-only (#165 part 5).
 
 ## [0.5.1] - 2026-11-05
 

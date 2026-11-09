@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { analysisRead } from "./analysis-input.ts";
+import { analysisReadWithSize } from "./analysis-input.ts";
 import { localDate } from "./local-date.ts";
 import { LOG_TYPES } from "./log-format.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
@@ -12,20 +12,28 @@ import type { VaultSpec } from "./config.ts";
 
 export const STATS_DEFAULT_DAYS = 30;
 export const STATS_MAX_DAYS = 3650;
-/** Source files the ratio pass reads per call, and how many source bytes it reads in total. */
+/** Source files the ratio pass reads per call, and how many source bytes it counts in total. */
 export const MAX_RATIO_SOURCES = 10000;
 export const MAX_RATIO_SOURCE_BYTES = 64 * 1024 * 1024;
+/** The caps one ratio call works within; the defaults are the two bounds above, and a test lowers them. */
+export interface RatioLimits { sources: number; bytes: number }
+export const RATIO_LIMITS: RatioLimits = { sources: MAX_RATIO_SOURCES, bytes: MAX_RATIO_SOURCE_BYTES };
 /** Notes listed as the largest, and the ratio above which a note is larger than the sources it cites. */
 export const RATIO_LARGEST_SHOWN = 5;
 export const RATIO_OVER_ONE = 1;
 export interface VaultRatio {
   /** Notes whose sources could be read and total more than zero bytes. */
   notes: number;
-  /** Source files read for those notes, within the per-call bounds. */
+  /** Source files counted for those notes, within the per-call bounds. */
   sources: number;
   /** Source references left out of the ratio; `skippedNonFile` of them are not workspace files at all. */
   skipped: number;
   skippedNonFile: number;
+  /**
+   * Sourced notes the index kept out of the pass (`MAX_RATIO_NOTES`), counted rather than dropped silently. The
+   * index stops collecting at the cap, so the median, p90 and the rest describe the notes it returned, not all of them.
+   */
+  truncatedNotes: number;
   /** Median and nearest-rank p90 of the per-note ratio: note bytes over the bytes of its readable sources. */
   median: number | null;
   p90: number | null;
@@ -56,11 +64,13 @@ const middle = (sorted: readonly number[]) => {
 const percentile = (sorted: readonly number[], p: number) => sorted[Math.min(sorted.length, Math.max(1, Math.ceil((p / 100) * sorted.length))) - 1]!;
 /**
  * Note-to-source byte ratio over notes that declare a frontmatter `source`. Each entry is one note: its own byte size
- * over the summed size of the sources that could be read. The reader is `analysisRead`, so every file keeps its bound
- * and no link is followed; a memory id, a URL, a denied or missing path and anything past the per-call budget is left
- * out and counted, which keeps the pass read-only and bounded.
+ * over the summed size of the sources that could be read. The reader is `analysisReadWithSize`, so every file keeps its
+ * bound, no link is followed, and the bytes counted are the file's own on-disk size rather than the size of its decoded
+ * text, which overstates a file that is not UTF-8. A memory id, a URL, a denied or missing path, a file past the 2 MiB
+ * auxiliary bound and anything past the per-call caps is left out and counted, which keeps the pass read-only and
+ * bounded. The per-note truncation count belongs to the index, so `vaultStats` adds it to this pass's result.
  */
-export function noteSourceRatio(rows: readonly SourcedNote[], root: string | undefined, denyPaths: string[]): VaultRatio {
+export function noteSourceRatio(rows: readonly SourcedNote[], root: string | undefined, denyPaths: string[], limits: RatioLimits = RATIO_LIMITS): Omit<VaultRatio, "truncatedNotes"> {
   const ratios: { path: string; ratio: number }[] = [];
   let sources = 0, skipped = 0, skippedNonFile = 0, bytesRead = 0;
   for (const row of rows) {
@@ -69,13 +79,14 @@ export function noteSourceRatio(rows: readonly SourcedNote[], root: string | und
     let size = 0, used = 0;
     for (const ref of refs) {
       if (ref.kind !== "path") { skipped++; skippedNonFile++; continue; }
-      if (!root || sources >= MAX_RATIO_SOURCES || bytesRead >= MAX_RATIO_SOURCE_BYTES) { skipped++; continue; }
+      // Stop before reading once a cap is used up, so an exhausted call does no further I/O.
+      if (!root || sources >= limits.sources || bytesRead >= limits.bytes) { skipped++; continue; }
       const file = resolve(root, ref.value);
-      let text: string | null;
-      try { text = isDenied(canonicalPath(file), denyPaths) ? null : analysisRead(file); } catch { text = null; }
-      if (text === null) { skipped++; continue; }
-      const bytes = Buffer.byteLength(text);
-      size += bytes; bytesRead += bytes; sources++; used++;
+      let read: { text: string; bytes: number } | null;
+      try { read = isDenied(canonicalPath(file), denyPaths) ? null : analysisReadWithSize(file); } catch { read = null; }
+      // A file that would take the total past the byte cap is left out whole, never counted in part.
+      if (read === null || bytesRead + read.bytes > limits.bytes) { skipped++; continue; }
+      size += read.bytes; bytesRead += read.bytes; sources++; used++;
     }
     // A note whose sources are all empty has no ratio; count the note itself as skipped rather than dividing by zero.
     if (!used) continue;
@@ -94,9 +105,9 @@ export function noteSourceRatio(rows: readonly SourcedNote[], root: string | und
 /**
  * Read-only vault statistics over the derived index (refreshed like every read tool) and the log streamed by `readLog`:
  * no vault file or log is written and no vault or log lock is taken. Note sizes come from the same index pass, and the
- * ratio reads only workspace files a note cites, through `analysisRead` and its bounds.
+ * ratio reads only workspace files a note cites, through `analysisReadWithSize` and its bounds.
  */
-export function vaultStats(home: string, id: string, options: { days?: number; now?: Date; expectedVault?: VaultSpec } = {}): VaultStats {
+export function vaultStats(home: string, id: string, options: { days?: number; now?: Date; expectedVault?: VaultSpec; limits?: RatioLimits } = {}): VaultStats {
   const days = options.days ?? STATS_DEFAULT_DAYS, now = options.now ?? new Date();
   if (!Number.isInteger(days) || days < 1 || days > STATS_MAX_DAYS) throw new Error(`stats: days must be an integer 1..${STATS_MAX_DAYS}; omit it for the ${STATS_DEFAULT_DAYS}-day default`);
   const registry = loadRegistry(home), vault = registry.vaults.find(v => v.id === id);
@@ -108,7 +119,8 @@ export function vaultStats(home: string, id: string, options: { days?: number; n
   const index = new VaultIndex(home, vault, registry.vaults.map(v => v.path));
   let notes: ReturnType<VaultIndex["noteStats"]>;
   try { index.scan(); notes = index.noteStats([start(7).getTime(), start(30).getTime()]); } finally { index.close(); }
-  const size = notes.size, ratio = noteSourceRatio(notes.sourced, sourceWorkspaceRoot(vault), registry.denyPaths ?? []);
+  const size = notes.size, pass = noteSourceRatio(notes.sourced, sourceWorkspaceRoot(vault), registry.denyPaths ?? [], options.limits);
+  const ratio: VaultRatio = { ...pass, truncatedNotes: notes.truncatedSourced };
   const since = localDate(start(days)), byType: Record<string, number> = Object.fromEntries(LOG_TYPES.map(type => [type, 0]));
   let total = 0;
   const log = readLog(home, { vault: vault.id, limit: 1, visit: line => {

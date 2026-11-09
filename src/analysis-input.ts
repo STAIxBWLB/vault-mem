@@ -14,6 +14,14 @@ import { loadRegistry } from "./registry.ts";
 import { VaultIndex } from "./vault-index.ts";
 /** Read bounded auxiliary inputs without following links. Never read note files here. */
 export function analysisRead(file: string, maximum = 2 * 1024 * 1024): string | null {
+  return analysisReadWithSize(file, maximum)?.text ?? null;
+}
+/**
+ * The same bounded read, also reporting the byte size the file has on disk. `text` decodes lossily: an invalid byte
+ * becomes U+FFFD, so a byte count taken from the string overstates a file that is not UTF-8. Anything counting bytes
+ * of a file must use `bytes`.
+ */
+export function analysisReadWithSize(file: string, maximum = 2 * 1024 * 1024): { text: string; bytes: number } | null {
   let fd: number;
   try {
     if (realpathSync(dirname(file)) !== dirname(file)) throw new Error("analysis: linked input directory");
@@ -27,7 +35,7 @@ export function analysisRead(file: string, maximum = 2 * 1024 * 1024): string | 
     while (size < bytes.length) { const n = readSync(fd, bytes, size, bytes.length-size, null); size += n; if (!n) break; }
     const after = fstatSync(fd);
     if (size !== before.size || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new Error("analysis: input changed during read");
-    return bytes.subarray(0,size).toString("utf8");
+    return { text: bytes.subarray(0,size).toString("utf8"), bytes: size };
   } finally { closeSync(fd); }
 }
 function permitted(file: string, config: VmemConfig): void {

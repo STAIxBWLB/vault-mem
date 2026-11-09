@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { run } from "../src/cli.ts";
+import { renderStats } from "../src/cli-output.ts";
 import { commandUsage } from "../src/commands-table.ts";
 import { textOptions } from "../src/text-output.ts";
 import { addVault, removeVault } from "../src/registry.ts";
@@ -229,7 +230,59 @@ test("#165 part 5: without a registered workspace the ratio reads nothing and sa
   const f = fixture(), now = new Date(2026, 10, 4, 12, 0);
   writeFileSync(join(f.notes, "one.md"), cited('["src/notes.txt"]'));
   const stats = vaultStats(f.home, "mine", { now });
-  expect(stats.ratio).toEqual({ notes: 0, sources: 0, skipped: 1, skippedNonFile: 0, median: null, p90: null, overOne: 0, largest: [] });
+  expect(stats.ratio).toEqual({ notes: 0, sources: 0, skipped: 1, skippedNonFile: 0, truncatedNotes: 0, median: null, p90: null, overOne: 0, largest: [] });
   expect(run(["stats", "mine"], { VMEM_HOME: f.home }).text).toContain("no note cites a readable workspace file; 1 source reference skipped");
+});
+
+test("#82 fix: a source counts at its own byte size, not at the size of its decoded text", () => {
+  const f = workspace(), src = join(f.dir, "src");
+  mkdirSync(src, { recursive: true });
+  // Two bytes on disk; decoding the invalid 0x80 as U+FFFD makes the string measure four.
+  writeFileSync(join(src, "raw.bin"), Buffer.from([0x41, 0x80]));
+  expect(Buffer.byteLength(readFileSync(join(src, "raw.bin"), "utf8"))).toBe(4);
+  const text = cited('["src/raw.bin"]');
+  writeFileSync(join(f.notes, "raw.md"), text);
+  const ratio = vaultStats(f.home, "mine", { now: new Date(2026, 10, 4, 12, 0) }).ratio;
+  const round3 = (value: number) => Math.round(value * 1000) / 1000;
+  expect({ notes: ratio.notes, sources: ratio.sources, skipped: ratio.skipped }).toEqual({ notes: 1, sources: 1, skipped: 0 });
+  // The denominator is the 2 bytes the file holds, not the 4 bytes its decoded text would report.
+  expect(ratio.median).toBe(round3(Buffer.byteLength(text) / 2));
+  expect(ratio.largest).toEqual([{ path: "raw.md", ratio: round3(Buffer.byteLength(text) / 2) }]);
+});
+
+test("#82 fix: a file that would take the source total past the byte cap is left out whole and counted", () => {
+  const f = workspace(), src = join(f.dir, "src");
+  mkdirSync(src, { recursive: true });
+  for (const name of ["a", "b", "c"]) writeFileSync(join(src, `${name}.txt`), "x".repeat(60));
+  const text = cited('["src/a.txt", "src/b.txt", "src/c.txt"]'), note = Buffer.byteLength(text);
+  writeFileSync(join(f.notes, "three.md"), text);
+  const now = new Date(2026, 10, 4, 12, 0), round3 = (value: number) => Math.round(value * 1000) / 1000;
+  // 60 + 60 fits a 120-byte cap exactly; the third file would make 180 and is skipped instead of overshooting.
+  const at = vaultStats(f.home, "mine", { now, limits: { sources: 10000, bytes: 120 } }).ratio;
+  expect({ notes: at.notes, sources: at.sources, skipped: at.skipped }).toEqual({ notes: 1, sources: 2, skipped: 1 });
+  expect(at.largest).toEqual([{ path: "three.md", ratio: round3(note / 120) }]);
+  // One byte under, no second file fits at all, so the counted total stays inside the cap either way.
+  const over = vaultStats(f.home, "mine", { now, limits: { sources: 10000, bytes: 119 } }).ratio;
+  expect({ sources: over.sources, skipped: over.skipped }).toEqual({ sources: 1, skipped: 2 });
+  expect(over.largest).toEqual([{ path: "three.md", ratio: round3(note / 60) }]);
+});
+
+test("#82 fix: sourced notes past the note cap are counted, in the index, the ratio and the text output", () => {
+  const f = workspace(), src = join(f.dir, "src");
+  mkdirSync(src, { recursive: true });
+  writeFileSync(join(src, "note.txt"), "x".repeat(10));
+  for (const name of ["a", "b", "c"]) writeFileSync(join(f.notes, `${name}.md`), cited('["src/note.txt"]'));
+  const index = new VaultIndex(f.home, { id: "mine", path: f.vault, kind: "personal", write: "mcp" }, [f.vault], { memory: true, reuseCache: false });
+  try {
+    index.scan();
+    const cut = index.noteStats([0, 0], 2);
+    expect(cut.sourced.map(entry => entry.path)).toEqual(["a.md", "b.md"]);
+    expect(cut.truncatedSourced).toBe(1);
+    expect(index.noteStats([0, 0]).truncatedSourced).toBe(0);
+  } finally { index.close(); }
+  const stats = vaultStats(f.home, "mine", { now: new Date(2026, 10, 4, 12, 0) }), options = textOptions(undefined);
+  expect(stats.ratio.truncatedNotes).toBe(0);
+  expect(renderStats(stats, options)).not.toContain("past the 10000-note cap");
+  expect(renderStats({ ...stats, ratio: { ...stats.ratio, truncatedNotes: 7 } }, options)).toContain("truncated  7 notes past the 10000-note cap");
 });
 

@@ -536,12 +536,12 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
   /**
    * Note counts by type, domain and frontmatter `status` ("(none)" when empty), how many notes have an mtime at or
    * after each cutoff (epoch ms), note text size in bytes and words by type and domain, and the notes that declare a
-   * frontmatter `source` (at most `MAX_RATIO_NOTES`, in path order) as the input of the note-to-source ratio.
-   * Streams rows; returns no note text.
+   * frontmatter `source` (at most `sourcedLimit`, in path order) as the input of the note-to-source ratio, with
+   * `truncatedSourced` counting the sourced notes that cap kept out. Streams rows; returns no note text.
    */
-  noteStats(cutoffs: readonly number[]): {
+  noteStats(cutoffs: readonly number[], sourcedLimit = MAX_RATIO_NOTES): {
     total: number; byType: Record<string, number>; byDomain: Record<string, number>; byStatus: Record<string, number>; modified: number[];
-    size: { total: NoteSize; byType: Record<string, NoteSize>; byDomain: Record<string, NoteSize> }; sourced: SourcedNote[];
+    size: { total: NoteSize; byType: Record<string, NoteSize>; byDomain: Record<string, NoteSize> }; sourced: SourcedNote[]; truncatedSourced: number;
   } {
     const add = (map: Map<string, number>, value: string, count = 1) => { const key = value ? boundedText(value, 256).content : "(none)"; map.set(key, (map.get(key) ?? 0) + count); };
     const sorted = (map: Map<string, number>) => Object.fromEntries([...map].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
@@ -558,7 +558,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     const sortedSize = (map: Map<string, NoteSize>) => Object.fromEntries([...map].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
     // Status, size and `source` are not columns: stream each stored source once, parsing only its frontmatter.
     const byStatus = new Map<string, number>(), modified = cutoffs.map(() => 0), sourced: SourcedNote[] = [];
-    let total = 0;
+    let total = 0, truncatedSourced = 0;
     const rows = this.db.prepare<{ metadata: string; source: string; path: string; type: string; domain: string }, []>("SELECT metadata,source,path,type,domain FROM notes ORDER BY path");
     try {
       for (const row of rows.iterate()) {
@@ -569,13 +569,13 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
         let data: Record<string, unknown> = {};
         try { data = parseFrontmatter(row.source).data; } catch { /* counted as (none) and skipped by the ratio pass */ }
         add(byStatus, text(data.status));
-        if (data.source !== undefined && sourced.length < MAX_RATIO_NOTES) sourced.push({ path: row.path, bytes, source: data.source });
+        if (data.source !== undefined) { if (sourced.length < sourcedLimit) sourced.push({ path: row.path, bytes, source: data.source }); else truncatedSourced++; }
         const mtime = stampMtime(row.metadata);
         cutoffs.forEach((cutoff, i) => { if (mtime !== null && mtime >= cutoff) modified[i]!++; });
       }
     } finally { rows.finalize(); }
     return { total, byType: grouped("type"), byDomain: grouped("domain"), byStatus: sorted(byStatus), modified,
-      size: { total: size.total, byType: sortedSize(size.byType), byDomain: sortedSize(size.byDomain) }, sourced };
+      size: { total: size.total, byType: sortedSize(size.byType), byDomain: sortedSize(size.byDomain) }, sourced, truncatedSourced };
   }
   /** Links that resolve to the target note, ordered by source. */
   backlinks(target: string, limit = 50): ResolvedLink[] {
