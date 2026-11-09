@@ -92,6 +92,22 @@ test("MCP spec update refuses a changed startup registry binding before writing"
   expect(readFileSync(f.file, "utf8")).toBe(before);
 });
 
+test("MCP mutation policy, validation and lookup refusals carry the shared refused marker", () => {
+  const f = fixture(), server = createSpecMcp(f.home, f.env), before = readFileSync(f.file, "utf8");
+  for (const [request, code] of [
+    [{ id: "root", set: { parent: "missing-parent" } }, "dangling_link"],
+    [{ id: "missing-id" }, "TARGET"],
+  ] as const) {
+    const receipt = server.handlers.vmem_spec_update!(request) as { ok: boolean; changed: boolean; refused?: boolean; issues: { code: string }[] };
+    expect(receipt).toMatchObject({ ok: false, changed: false, refused: true });
+    expect(receipt.issues.some(issue => issue.code === code)).toBe(true);
+  }
+  const denied = fixture("cli");
+  expect(createSpecMcp(denied.home, denied.env).handlers.vmem_spec_update!({ id: "root" })).toMatchObject({ ok: false, changed: false, refused: true });
+  expect(server.handlers.vmem_spec_update!({ id: "root" })).toMatchObject({ ok: true, changed: false });
+  expect(readFileSync(f.file, "utf8")).toBe(before);
+});
+
 
 test("spec update accepts SHA-1 and SHA-256 verification commits in either hex case", () => {
   const schema = specCommandSchema("update");

@@ -31,6 +31,10 @@ class Refusal extends Error {
   constructor(readonly issues: SpecWriteIssue[]) { super(issues[0]?.message ?? "spec mutation refused; inspect the write issues before retrying"); }
 }
 function refuse(code: string, message: string, path?: string): never { throw new Refusal([{ code, severity: "error", message, ...(path === undefined ? {} : { path }) }]); }
+function writeErrorCause(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return `${typeof code === "string" ? `${code}: ` : ""}${error instanceof Error ? error.message : String(error)}`;
+}
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value) && [null, Object.prototype].includes(Object.getPrototypeOf(value));
 const within = (root: string, file: string) => { const path = relative(root, file); return path === "" || !isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`); };
 const identity = (file: string) => { const stat = lstatSync(file, { bigint: true }); return `${stat.dev}:${stat.ino}`; };
@@ -146,7 +150,11 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     if (lstatSync(lockDir).isSymbolicLink() || realpathSync(lockDir) !== lockDir) refuse("LOCKED", "spec lock directory is not plain; restore a private lock directory under VMEM_HOME and retry", first.path);
     lockFile = join(lockDir, `${hash(root)}.lock`);
     try { lockFd = openSync(lockFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
-    catch { lockFile = undefined; refuse("LOCKED", "spec mutation lock is unavailable; wait for the other mutation, or inspect the interrupted writer's owned lock under VMEM_HOME before retrying", first.path); }
+    catch (error) {
+      lockFile = undefined;
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "EEXIST") refuse("LOCKED", "spec mutation lock already exists; wait for the other mutation, or inspect the interrupted writer's owned lock under VMEM_HOME before retrying", first.path);
+      refuse("IO", `spec mutation lock open failed (${writeErrorCause(error)}); check permissions and free space for the lock directory under VMEM_HOME, then retry`, first.path);
+    }
     const ownedLock = fstatSync(lockFd, { bigint: true }); lockIdentity = `${ownedLock.dev}:${ownedLock.ino}`;
     writeFileSync(lockFd, JSON.stringify({ pid: process.pid, token: randomUUID() }) + "\n"); fsyncSync(lockFd);
     assertBinding();
@@ -171,7 +179,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     renameSync(temp, file); temp = undefined; result.changed = true; result.sha256 = hash(change.after);
     syncDirectory(parent); result.ok = true;
   } catch (error) {
-    result.issues = error instanceof Refusal ? error.issues : [{ code: "IO", severity: "error", message: `spec update failed (${error instanceof Error ? error.message : "unavailable file"}); inspect the written file and source binding, repair access and retry`, ...(result.path ? { path: result.path } : {}) }];
+    result.issues = error instanceof Refusal ? error.issues : [{ code: "IO", severity: "error", message: `spec update failed (${writeErrorCause(error)}); inspect the written file and source binding, check permissions and free space for the target and VMEM_HOME lock directory, repair the reported cause and retry`, ...(result.path ? { path: result.path } : {}) }];
     result.path ??= result.issues.find(issue => issue.path)?.path;
   } finally {
     if (temp) {
@@ -212,7 +220,7 @@ function updateFrontmatter(document: SpecCandidate, request: SpecUpdateRequest):
     if (current !== undefined || next.length) changes[key] = next;
   }
   try { return emitFrontmatter(parseFrontmatter(document.source), changes); }
-  catch (error) { refuse("FRONTMATTER", `frontmatter cannot be edited losslessly (${error instanceof Error ? error.message : "invalid block mapping"}); repair its block mapping and retry`, path); }
+  catch (error) { refuse("FRONTMATTER", `frontmatter cannot be edited losslessly (${writeErrorCause(error)}); repair its block mapping and retry`, path); }
 }
 export function updateSpec(home: string, request: SpecUpdateRequest, options: SpecWriteOptions = {}): SpecWriteResult {
   return mutateSpec(home, request, snapshot => {

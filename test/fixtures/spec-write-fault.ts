@@ -1,6 +1,7 @@
 import { mock } from "bun:test";
 import * as fs from "node:fs";
 import { dirname, join } from "node:path";
+import type { SpecWriteResult } from "../../src/spec-write.ts";
 const [home, mode] = process.argv.slice(2);
 if (!home || !mode) throw new Error("synthetic spec fault fixture needs home and mode");
 const original = { ...fs }, configFile = join(home, "vmem.config.json"), config = JSON.parse(original.readFileSync(configFile, "utf8"));
@@ -9,7 +10,11 @@ let injected = false, published = false, lock: string | undefined, lockDescripto
 let registerContainer: (() => void) | undefined;
 mock.module("node:fs", () => ({ ...original,
   openSync: (...args: Parameters<typeof fs.openSync>) => {
-    const file = String(args[0]), fd = original.openSync(...args);
+    const file = String(args[0]);
+    const lockErrors: Record<string, string> = { "lock-permission": "EACCES", "lock-space": "ENOSPC", "lock-descriptors": "EMFILE" };
+    if (lockErrors[mode] && file.includes("/spec-mutations/") && file.endsWith(".lock")) throw Object.assign(new Error("synthetic lock directory failure"), { code: lockErrors[mode] });
+    if (mode === "temp-permission" && file.includes(".spec-")) throw Object.assign(new Error("synthetic target directory failure"), { code: "EACCES" });
+    const fd = original.openSync(...args);
     if (file.includes(".spec-")) {
       temps.add(fd); temp = file;
       if ((Number(args[1]) & (original.constants.O_WRONLY | original.constants.O_RDWR)) === 0) tempReads.add(fd);
@@ -46,7 +51,7 @@ mock.module("node:fs", () => ({ ...original,
       if (mode.startsWith("final-home-")) registerContainer!();
     }
     original.closeSync(fd);
-    if (mode === "lock-close" && published && fd === lockDescriptor) throw new Error("synthetic lock close failure");
+    if (mode.endsWith("lock-close") && published && fd === lockDescriptor) throw new Error("synthetic lock close failure");
   },
   unlinkSync: (...args: Parameters<typeof fs.unlinkSync>) => {
     if (mode === "lock-cleanup" && String(args[0]).includes("/spec-mutations/")) throw new Error("synthetic lock cleanup failure");
@@ -61,8 +66,10 @@ if (mode.startsWith("final-home-")) {
     else addVault(home, { id: "container", path: dirname(home), kind: "personal", write: "none", pii: "deny" });
   };
 }
-const result = updateSpec(home, { id: "child", set: { title: "Attempted edit" } }, { env: process.env });
-if (mode === "dir-fsync" || mode === "lock-cleanup" || mode === "lock-close") {
+const request = { id: "child", set: { title: "Attempted edit" } };
+const { createSpecMcp } = await import("../../src/mcp-spec.ts");
+const result = (mode.startsWith("mcp-") ? createSpecMcp(home, process.env).handlers.vmem_spec_update!(request) : updateSpec(home, request, { env: process.env })) as SpecWriteResult;
+if (mode === "dir-fsync" || mode === "lock-cleanup" || mode.endsWith("lock-close")) {
   const { renderSpecUpdate } = await import("../../src/spec-output.ts"), { PLAIN } = await import("../../src/text-output.ts");
   console.log(JSON.stringify({ result, text: renderSpecUpdate(result, PLAIN) }));
 } else console.log(JSON.stringify(result));

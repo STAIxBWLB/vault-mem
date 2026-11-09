@@ -175,7 +175,7 @@ test("a held canonical-worktree lock refuses and preserves its owner; home canno
   expect(result.issues[0]!.code).toBe("HOME"); expect(existsSync(join(inRepo, "spec-mutations"))).toBe(false);
 }, 30_000);
 
-for (const mode of ["reread", "policy-drift", "final-policy", "final-home-spec", "final-home-vault", "tree-drift", "temp-write", "rename", "lock-replaced", "lock-open-replaced", "temp-corrupt", "temp-replaced"]) test(`interrupted/racing ${mode} keeps original spec bytes and cleans only owned temporaries`, () => {
+for (const mode of ["reread", "policy-drift", "final-policy", "final-home-spec", "final-home-vault", "tree-drift", "temp-write", "temp-permission", "lock-permission", "lock-space", "lock-descriptors", "rename", "lock-replaced", "lock-open-replaced", "temp-corrupt", "temp-replaced"]) test(`interrupted/racing ${mode} keeps original spec bytes and cleans only owned temporaries`, () => {
   const f = fixture();
   if (mode === "final-home-spec") f.git(["-c", "init.templateDir=", "init", "--quiet"], f.root);
   if (mode === "final-home-vault") mkdirSync(join(f.root, "notes"));
@@ -183,6 +183,13 @@ for (const mode of ["reread", "policy-drift", "final-policy", "final-home-spec",
   expect(child.exitCode).toBe(0); const result = JSON.parse(child.stdout.toString()) as SpecWriteResult;
   expect(result).toMatchObject({ ok: false, changed: false });
   if (mode === "final-policy") expect(result.issues[0]!.code).toBe("REGISTRY_DRIFT");
+  const causes: Record<string, string> = { "temp-permission": "EACCES", "lock-permission": "EACCES", "lock-space": "ENOSPC", "lock-descriptors": "EMFILE" };
+  if (causes[mode]) {
+    expect(result.issues[0]!.code).toBe("IO");
+    expect(result.issues[0]!.message).toContain(causes[mode]!);
+    expect(result.issues[0]!.message).toContain("permissions and free space");
+    expect(result.issues[0]!.message).not.toContain("wait for the other mutation");
+  }
   if (mode.startsWith("final-home-")) {
     expect(result.issues[0]!.code).toBe("HOME");
     const registered = JSON.parse(readFileSync(join(f.home, CONFIG_FILE), "utf8"));
@@ -199,7 +206,7 @@ for (const mode of ["reread", "policy-drift", "final-policy", "final-home-spec",
   else expect(locks).toEqual([]);
 }, 30_000);
 
-for (const mode of ["dir-fsync", "lock-cleanup", "lock-close"]) test(`post-rename ${mode} reports updated with errors and retains changed bytes`, () => {
+for (const mode of ["dir-fsync", "lock-cleanup", "lock-close", "mcp-lock-close"]) test(`post-rename ${mode} reports updated with errors and retains changed bytes`, () => {
   const f = fixture();
   const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-write-fault.ts"), f.home, mode], { env: f.env, stdout: "pipe", stderr: "pipe", timeout: 20000 });
   expect(child.exitCode, child.stderr.toString()).toBe(0);
@@ -208,9 +215,13 @@ for (const mode of ["dir-fsync", "lock-cleanup", "lock-close"]) test(`post-renam
   expect(output.text).toContain("updated with errors"); expect(output.text).not.toContain(": refused");
   expect(parseFrontmatter(f.read()).data.title).toBe("Attempted edit");
   expect(output.result.sha256).toBe(sha(f.read()));
-  if (mode === "lock-close") {
+  if (mode.endsWith("lock-close")) {
     expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "CLEANUP", message: expect.stringContaining("descriptor close") }));
     expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
+  }
+  if (mode.startsWith("mcp-")) {
+    expect(output.result.actor).toBe("agent");
+    expect(output.result).not.toHaveProperty("refused");
   }
 }, 30_000);
 

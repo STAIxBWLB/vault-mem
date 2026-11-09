@@ -6,6 +6,7 @@ import { resolveHome } from "./home.ts";
 import { loadRegistry } from "./registry.ts";
 import { PLAIN, type TextOptions } from "./text-output.ts";
 import { renderSpec } from "./spec-output.ts";
+import type { SpecWriteResult } from "./spec-write.ts";
 
 /** Spec definitions retain read annotations for reads; update is a policy-gated mutation. */
 export const specTools = (): McpTool[] => SPEC_COMMANDS.map(item => ({ name: item.name, description: item.description, inputSchema: item.inputSchema,
@@ -15,14 +16,17 @@ export function createSpecMcp(home: string, env: NodeJS.ProcessEnv = process.env
   const registered = loadRegistry(home).specs ?? [];
   const tools = specTools();
   const handlers: Record<string, McpHandler> = {};
-  for (const item of SPEC_COMMANDS) handlers[item.name] = args => {
+  for (const [index, item] of SPEC_COMMANDS.entries()) handlers[item.name] = args => {
     const invalid = argumentError(args, item.inputSchema);
     if (invalid) throw new Error(`${invalid}; see vmem spec ${item.command} --help to correct the arguments`);
     const selected = registered.find(source => source.id === (args.source ?? registered[0]?.id));
     if (!selected) throw new Error("spec source: no matching source in the server's startup registry; pass the source argument with a registered id, or register with vmem specs add and restart the MCP server");
     const current = loadRegistry(home).specs?.find(source => source.id === selected.id);
     if (!current || JSON.stringify(current) !== JSON.stringify(selected)) throw new Error("spec source: registry changed since server startup; restart the MCP server before retrying the spec command");
-    return executeSpecCommand(home, item.command, { ...args, source: selected.id }, env, { channel: "mcp", binding: selected });
+    const result = executeSpecCommand(home, item.command, { ...args, source: selected.id }, env, { channel: "mcp", binding: selected });
+    if (tools[index]!.annotations.readOnlyHint !== false) return result;
+    const receipt = result as SpecWriteResult;
+    return !receipt.ok && !receipt.changed ? { ...receipt, refused: true } : receipt;
   };
   return { tools, handlers };
 }
