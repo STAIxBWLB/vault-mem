@@ -12,6 +12,7 @@ import { introducedSpecErrors, type SpecValidationIssue } from "./spec-validate.
 import { MAX_NOTE_BYTES } from "./vault-index.ts";
 import { screenContent, screenMetadata } from "./write-validation.ts";
 import { specGit } from "./spec-git.ts";
+import { buildSpecGraph, type SpecEdge, type SpecNode } from "./spec-graph.ts";
 
 export const SPEC_UPDATE_SCALAR_FIELDS = ["title", "type", "status", "parent", "superseded-by", "verified-against"] as const;
 export const SPEC_UPDATE_LIST_FIELDS = ["depends-on", "references", "implements", "covers", "tags", "paths"] as const;
@@ -25,14 +26,18 @@ export interface SpecCreateRequest {
   status?: string; parent?: string; "superseded-by"?: string; "verified-against"?: string;
   "depends-on"?: string[]; references?: string[]; implements?: string[]; covers?: string[]; tags?: string[]; paths?: string[];
 }
+export interface SpecDeleteRequest { id: string; source?: string; worktree?: string; confirm?: boolean; fingerprint?: string }
+export interface SpecDeleteResult extends SpecWriteResult { preview?: boolean; fingerprint?: string; backlinks?: SpecEdge[]; children?: SpecNode[] }
+interface SpecDeletePreview { preview: boolean; fingerprint: string; sha256: string; backlinks: SpecEdge[]; children: SpecNode[] }
 export interface SpecWriteIssue { code: string; severity: "error" | "warning"; message: string; path?: string; target?: string; originalTarget?: string; field?: string }
 export interface SpecWriteResult {
   ok: boolean; changed: boolean; actor: "agent" | "person"; source?: string; worktree?: string; id?: string; path?: string; sha256?: string; issues: SpecWriteIssue[];
 }
 export interface SpecWriteOptions { env?: NodeJS.ProcessEnv; channel?: "cli" | "mcp"; binding?: SpecSourceSpec }
-export interface SpecMutation { path: string; before: string | null; after: string }
-type SpecWriteOperation = "create" | "update";
+export interface SpecMutation { path: string; before: string | null; after: string | null; deletion?: SpecDeletePreview; expectedFingerprint?: string }
+type SpecWriteOperation = "create" | "update" | "delete";
 function retrySpecOperation(operation: SpecWriteOperation): string {
+  if (operation === "delete") return "request a fresh preview with vmem spec delete, review its backlinks and children, then confirm the delete with that fingerprint";
   return operation === "create" ? "reread the source tree and retry the create" : "reread vmem spec get and retry the update with its sha256 (--expected-sha)";
 }
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
@@ -146,6 +151,7 @@ function checkExpectedSha(change: SpecMutation, expectedSha: string | undefined)
 }
 /** A new target is published without replacement; an update replaces its checked original. */
 function publishSpec(temp: string, file: string, change: SpecMutation, result: SpecWriteResult): void {
+  if (change.after === null) throw new Error("deletion cannot publish a temporary file");
   if (change.before === null) {
     try { linkSync(temp, file); }
     catch (error) {
@@ -208,6 +214,17 @@ function screen(after: string, source: SpecSourceSpec, config: VmemConfig, path:
     .filter(issue => issue.severity === "error").map(issue => ({ ...issue, path, message: `${issue.message}; remove the content matched by ${issue.code} from ${path} and retry the ${operation}` }));
   if (issues.length) throw new Refusal([...new Map(issues.map(issue => [`${issue.code}:${issue.message}`, issue])).values()]);
 }
+function screenMutation(change: SpecMutation, source: SpecSourceSpec, config: VmemConfig, operation: SpecWriteOperation): void {
+  if (change.after !== null) screen(change.after, source, config, change.path, operation);
+}
+function allowedDeleteLinks(snapshot: SpecSnapshot, change: SpecMutation): { path: string; field: string; target: string }[] {
+  if (!change.deletion) return [];
+  const paths = new Map(snapshot.specs.map(document => [document.id, document.path]));
+  return (change.deletion?.backlinks ?? []).filter(edge => edge.kind !== "body_link").map(edge => ({ path: paths.get(edge.source)!, field: edge.kind, target: edge.target }));
+}
+function checkDeletionConfirmation(change: SpecMutation): void {
+  if (change.deletion?.preview === false && change.expectedFingerprint !== change.deletion.fingerprint) refuse("FINGERPRINT", "delete preview is missing or stale; request a fresh preview and acknowledge its listed backlinks and children before confirming", change.path);
+}
 
 interface SpecWriteGuard { config: VmemConfig; source: SpecSourceSpec; root: string; homeRoot: string; bindings: readonly (readonly [string, string])[]; path?: string }
 /** Every authorization check uses the fresh registry, both at startup and immediately before publication. */
@@ -243,7 +260,8 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     const startup = guardSpecWrite(home, request, context, undefined, guard => {
       result.source = guard.source.id; result.worktree = guard.root;
       initial = discoverSpecs(guard.source, { worktree: guard.root, env }); commonIdentity = identity(initial.commonDir); first = plan(initial);
-      result.path = first.path; readMutation(guard.root, first, guard.config.denyPaths ?? [], env, operation);
+      result.path = first.path; const firstRead = readMutation(guard.root, first, guard.config.denyPaths ?? [], env, operation);
+      if (firstRead.source !== first.before) refuse("DRIFT", `spec ${operation} changed during its initial read; ${retrySpecOperation(operation)}`, first.path);
       return first.path;
     });
     const { config, source, root, homeRoot } = startup;
@@ -251,9 +269,12 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
       if (lockFile && lockIdentity !== undefined && identity(lockFile) !== lockIdentity) refuse("LOCKED", `spec mutation lock changed ownership; inspect the lock under VMEM_HOME and retry the ${operation} after the other writer finishes`, result.path);
       guardSpecWrite(home, request, context, startup);
     };
+    checkDeletionConfirmation(first);
     checkExpectedSha(first, request.expectedSha);
-    screen(first.after, source, config, first.path, operation);
-    if (first.before === first.after) { assertBinding(); result.ok = true; result.sha256 = hash(first.after); return result; }
+    screenMutation(first, source, config, operation);
+    if (first.deletion) Object.assign(result, first.deletion);
+    if (first.deletion?.preview) { assertBinding(); result.ok = true; return result; }
+    if (first.before === first.after && first.after !== null) { assertBinding(); result.ok = true; result.sha256 = hash(first.after); return result; }
     mkdirSync(homeRoot, { recursive: true, mode: 0o700 });
     const lockDir = join(homeRoot, "spec-mutations"); mkdirSync(lockDir, { recursive: true, mode: 0o700 });
     if (lstatSync(lockDir).isSymbolicLink() || realpathSync(lockDir) !== lockDir) refuse("LOCKED", "spec lock directory is not plain; restore a private lock directory under VMEM_HOME and retry", first.path);
@@ -268,13 +289,23 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     writeFileSync(lockFd, JSON.stringify({ pid: process.pid, token: randomUUID() }) + "\n"); fsyncSync(lockFd);
     assertBinding();
     const current = discoverSpecs(source, { worktree: root, env }), change = plan(current);
+    checkDeletionConfirmation(change);
     if (current.commonDir !== initial.commonDir || identity(initial.commonDir) !== commonIdentity || change.path !== first.path || change.before !== first.before) refuse("DRIFT", `spec ${operation} changed since the request read; ${retrySpecOperation(operation)}`, first.path);
     const original = readMutation(root, change, config.denyPaths ?? [], env, operation);
     if (original.source !== change.before) refuse("DRIFT", `spec ${operation} changed under the mutation lock; ${retrySpecOperation(operation)}`, change.path);
     const prospective = prospectiveSpecSnapshot(current, new Map([[change.path, change.after]]));
-    screen(change.after, source, config, change.path, operation);
-    const introduced = introducedSpecErrors(current, prospective, { env });
+    screenMutation(change, source, config, operation);
+    const introduced = introducedSpecErrors(current, prospective, { env }, allowedDeleteLinks(current, change));
     if (introduced.length) throw new Refusal(attributeSpecErrors(introduced, change.path, operation));
+    if (change.after === null) {
+      assertBinding();
+      if (!isDeepStrictEqual(discoverSpecs(source, { worktree: root, env }), current)) refuse("DRIFT", "spec tree changed while validating deletion; request a fresh delete preview and retry", change.path);
+      const latest = readMutation(root, change, config.denyPaths ?? [], env, operation);
+      if (latest.source !== change.before || latest.identity !== original.identity) refuse("DRIFT", "spec changed before deletion; request a fresh preview and retry", change.path);
+      const file = plainPath(root, change.path, config.denyPaths ?? []);
+      assertBinding();
+      unlinkSync(file); result.changed = true; syncDirectory(dirname(file)); result.ok = true; return result;
+    }
     const file = prepareMutationTarget(root, change, config.denyPaths ?? [], env, createdDirs), parent = dirname(file), parentIdentity = identity(parent);
     const candidateTemp = join(parent, `.spec-${randomUUID()}.tmp`);
     const fd = openSync(candidateTemp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, original.mode);
@@ -372,3 +403,25 @@ const SPEC_HEADINGS: Readonly<Record<string, readonly string[]>> = {
   goal: ["Scope", "Decisions", "Success and evidence"], architecture: ["Boundaries", "Decisions"],
   module: ["Responsibility", "Interfaces", "Decisions"], submodule: ["Responsibility", "Interfaces", "Decisions"],
 };
+
+/** Complete acknowledgements, not a paged read: oversize previews refuse rather than omit a backlink. */
+function deletionPreview(snapshot: SpecSnapshot, document: SpecCandidate, preview: boolean): SpecDeletePreview {
+  const graph = buildSpecGraph(snapshot), id = String(document.frontmatter.id);
+  const backlinks = graph.edges.filter(edge => edge.target === id).sort((a, b) => compare(a.source, b.source) || compare(a.kind, b.kind) || compare(a.target, b.target));
+  const childIds = new Set(backlinks.filter(edge => edge.kind === "parent").map(edge => edge.source));
+  const children = graph.nodes.filter(node => childIds.has(node.id)).sort((a, b) => compare(a.id, b.id) || compare(a.path, b.path));
+  const sha256 = hash(document.source), fingerprint = hash(JSON.stringify({ worktree: snapshot.root, path: document.path, sha256, backlinks, children }));
+  const result = { preview, fingerprint, sha256, backlinks, children };
+  if (Buffer.byteLength(JSON.stringify(result)) > 224 * 1024) refuse("LIMIT", "complete delete acknowledgement exceeds the response budget; repair or remove backlinks before requesting a fresh preview", document.path);
+  return result;
+}
+export function deleteSpec(home: string, request: SpecDeleteRequest, options: SpecWriteOptions = {}): SpecDeleteResult {
+  return mutateSpec(home, request, snapshot => {
+    if (Object.keys(request).some(key => !["id", "source", "worktree", "confirm", "fingerprint"].includes(key)) || typeof request.id !== "string" || !request.id.trim() || request.confirm !== undefined && typeof request.confirm !== "boolean") refuse("INPUT", "use a spec id, optional source/worktree and boolean confirm with the preview fingerprint");
+    if (request.fingerprint !== undefined && (typeof request.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(request.fingerprint))) refuse("FINGERPRINT", "invalid delete fingerprint; request a fresh delete preview before confirming");
+    const document = snapshot.specs.find(candidate => candidate.id === request.id);
+    if (!document) refuse("TARGET", "spec id was not found; choose an id from vmem spec grep in the selected source");
+    const deletion = deletionPreview(snapshot, document, request.confirm !== true);
+    return { path: document.path, before: document.source, after: null, deletion, expectedFingerprint: request.fingerprint };
+  }, options);
+}

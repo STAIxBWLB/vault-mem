@@ -29,13 +29,13 @@ function fixture(write: "mcp" | "cli" | "none" = "mcp") {
 const input = { path: "child.md", id: "child", type: "module", title: "Created child", parent: "root" };
 const cli = ["create", "child.md", "--id", "child", "--type", "module", "--title", "Created child", "--parent", "root"];
 
-test("create shares a bounded closed schema, advertises mutation and keeps delete absent", () => {
+test("create shares a bounded closed schema and advertises mutation", () => {
   const f = fixture(), server = createSpecMcp(f.home, f.env), schema = specCommandSchema("create");
   expect(server.tools.find(tool => tool.name === "vmem_spec_create")).toMatchObject({
     inputSchema: SPEC_COMMANDS.find(item => item.command === "create")!.inputSchema,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
   });
-  expect(server.tools.some(tool => tool.name === "vmem_spec_delete")).toBe(false);
+  expect(server.tools.find(tool => tool.name === "vmem_spec_delete")!.annotations.destructiveHint).toBe(true);
   expect(COMMANDS.find(item => item.name === "spec create")!.mutates).toBe(true);
   expect(commandUsage("spec create")).toContain("<path> --id ID");
   expect(completionScript("bash")).toContain("--verified-against");

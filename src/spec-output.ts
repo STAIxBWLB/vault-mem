@@ -3,7 +3,7 @@
  * and never adds content to it; data goes through `clean()` in tables and fields, and bodies keep their lines with
  * terminal escape sequences stripped.
  */
-import type { SpecWriteResult } from "./spec-write.ts";
+import type { SpecDeleteResult, SpecWriteResult } from "./spec-write.ts";
 import type { SpecCommand } from "./spec-command-table.ts";
 import type { SpecEdge, SpecNode } from "./spec-graph.ts";
 import type { SpecFreshnessEntry } from "./spec-freshness.ts";
@@ -123,7 +123,21 @@ export function renderSpecUpdate(r: SpecWriteResult, o: TextOptions, command: "c
       issue.originalTarget !== undefined ? `original target: ${issue.originalTarget}` : undefined].filter(Boolean).join("; ") })), o));
 }
 
+/** Deletion previews show every acknowledged relation and a command bound to that exact preview. */
+export function renderSpecDelete(r: SpecDeleteResult, o: TextOptions): string {
+  const verdict = !r.ok ? "refused" : r.preview ? "preview" : r.changed ? "deleted" : "unchanged";
+  const backlinks = r.backlinks ?? [], children = r.children ?? [];
+  const confirm = r.ok && r.preview && r.fingerprint && r.id !== undefined
+    ? ["vmem", "spec", "delete", ...(r.source ? ["--source", r.source] : []), ...(r.worktree ? ["--worktree", r.worktree] : []), "--confirm", "--fingerprint", r.fingerprint, "--", r.id].map(shellWord).join(" ") : undefined;
+  return blocks(heading(`spec delete ${r.id ?? ""}: ${verdict}`.trim(), o),
+    fields([["source", r.source], ["worktree", r.worktree], ["path", r.path], ["sha256", r.sha256], ["actor", r.actor], ["fingerprint", r.fingerprint]], o),
+    r.preview && (backlinks.length ? blocks(heading("Backlinks", o), table(["SOURCE", "EDGE", "TARGET"], backlinks.map(edge => [edge.source, edge.kind, edge.target]), o)) : paragraph("Backlinks: none", o)),
+    r.preview && (children.length ? blocks(heading("Children", o), table(["ID", "TYPE", "PATH", "TITLE"], children.map(child => [child.id, child.type, child.path, child.title]), o)) : paragraph("Children: none", o)),
+    issueTable(r.issues, o), confirm && nextCommand("confirm", confirm, o));
+}
+
 export function renderSpec(command: SpecCommand, result: unknown, o: TextOptions, context: SpecTextContext): string {
+  if (command === "delete") return renderSpecDelete(result as SpecDeleteResult, o);
   if (command === "update" || command === "create") return renderSpecUpdate(result as SpecWriteResult, o, command);
   if (command === "get") return renderSpecGet(result as SpecGetResult, o, context);
   if (command === "graph") return renderSpecGraph(result as SpecGraphResult, o, context);
