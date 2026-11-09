@@ -34,6 +34,9 @@ function refuse(code: string, message: string, path?: string): never { throw new
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value) && [null, Object.prototype].includes(Object.getPrototypeOf(value));
 const within = (root: string, file: string) => { const path = relative(root, file); return path === "" || !isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`); };
 const identity = (file: string) => { const stat = lstatSync(file, { bigint: true }); return `${stat.dev}:${stat.ino}`; };
+function deniedSpecPath(file: string, denyPaths: string[]): boolean {
+  return isDenied(canonicalPath(file), denyPaths) || isDenied(file, denyPaths);
+}
 
 /** Read without following links or accepting a torn/oversized file. Parent paths are checked before every write stage. */
 function plainPath(root: string, path: string, denyPaths: string[] = []): string {
@@ -44,7 +47,7 @@ function plainPath(root: string, path: string, denyPaths: string[] = []): string
     file = join(file, part); const stat = lstatSync(file);
     if (stat.isSymbolicLink() || (index === path.split("/").length - 1 ? !stat.isFile() : !stat.isDirectory())) refuse("PATH", "spec path has a symlink or non-plain component; restore the plain in-worktree file and retry", path);
   }
-  if (!within(root, realpathSync(file)) || isDenied(file, denyPaths)) refuse("PATH", "spec path is denied or leaves the worktree; choose an allowed plain spec file", path);
+  if (!within(root, realpathSync(file)) || deniedSpecPath(file, denyPaths)) refuse("PATH", "spec path is denied or leaves the worktree; choose an allowed plain spec file", path);
   return file;
 }
 function readBounded(file: string, path: string): { source: string; mode: number; identity: string } {
@@ -105,7 +108,7 @@ function guardSpecWrite(home: string, request: Pick<SpecUpdateRequest, "source" 
   if (previous && (!isDeepStrictEqual(source, previous.source) || !isDeepStrictEqual(config.denyPaths, previous.config.denyPaths) || !isDeepStrictEqual(config.piiPatterns, previous.config.piiPatterns))) refuse("REGISTRY_DRIFT", "spec registry or screening policy changed during the write; reread the source policy and spec before retrying", path);
   if (!["mcp", "cli"].includes(channel)) refuse("POLICY", "unknown spec write channel; use CLI or MCP", path);
   const root = resolveSpecWorktree(source, request.worktree, env), homeRoot = canonicalPath(home);
-  if (isDenied(root, config.denyPaths ?? [])) refuse("PATH", "spec worktree is denied; select an allowed registered source", path);
+  if (deniedSpecPath(root, config.denyPaths ?? [])) refuse("PATH", "spec worktree is denied; select an allowed registered source", path);
   const roots = [root, source.path, ...config.vaults.map(value => value.path), ...sources.map(value => value.path)];
   if (roots.some(value => within(value, homeRoot))) refuse("HOME", "VMEM_HOME is inside a registered source/worktree; select a home outside repositories before writing", path);
   const bindings = [...new Set([root, source.path])].map(value => [value, identity(value)] as const);
@@ -176,7 +179,8 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
       catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "spec temporary cleanup could not prove owned-file removal; inspect the .spec-*.tmp file in the target directory before retrying (a replacement is preserved)", ...(result.path ? { path: result.path } : {}) }); }
     }
     if (lockFd !== undefined) {
-      closeSync(lockFd);
+      try { closeSync(lockFd); }
+      catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "spec lock descriptor close failed; inspect the write receipt and lock state before retrying", ...(result.path ? { path: result.path } : {}) }); }
       try { if (lockFile && identity(lockFile) === lockIdentity) unlinkSync(lockFile); }
       catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "spec lock cleanup failed; inspect the owned lock under VMEM_HOME before retrying", ...(result.path ? { path: result.path } : {}) }); }
     }

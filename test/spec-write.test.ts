@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CONFIG_FILE, type SpecSourceSpec } from "../src/config.ts";
@@ -199,7 +199,7 @@ for (const mode of ["reread", "policy-drift", "final-policy", "final-home-spec",
   else expect(locks).toEqual([]);
 }, 30_000);
 
-for (const mode of ["dir-fsync", "lock-cleanup"]) test(`post-rename ${mode} reports updated with errors and retains changed bytes`, () => {
+for (const mode of ["dir-fsync", "lock-cleanup", "lock-close"]) test(`post-rename ${mode} reports updated with errors and retains changed bytes`, () => {
   const f = fixture();
   const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-write-fault.ts"), f.home, mode], { env: f.env, stdout: "pipe", stderr: "pipe", timeout: 20000 });
   expect(child.exitCode, child.stderr.toString()).toBe(0);
@@ -208,4 +208,26 @@ for (const mode of ["dir-fsync", "lock-cleanup"]) test(`post-rename ${mode} repo
   expect(output.text).toContain("updated with errors"); expect(output.text).not.toContain(": refused");
   expect(parseFrontmatter(f.read()).data.title).toBe("Attempted edit");
   expect(output.result.sha256).toBe(sha(f.read()));
+  if (mode === "lock-close") {
+    expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "CLEANUP", message: expect.stringContaining("descriptor close") }));
+    expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
+  }
+}, 30_000);
+
+test("case aliases are refused when only the canonical target matches denyPaths", () => {
+  const f = fixture(), source = '---\nid: case\ntype: module\ntitle: Case fixture\nparent: root\n---\n';
+  f.git(["config", "core.ignorecase", "true"]); f.put("Case.md", source);
+  f.git(["add", "Case.md"]); f.git(["commit", "-qm", "Synthetic case alias"]);
+  renameSync(join(f.repo, "Case.md"), join(f.repo, "case-temp.md")); renameSync(join(f.repo, "case-temp.md"), join(f.repo, "case.md"));
+  const configFile = join(f.home, CONFIG_FILE), config = JSON.parse(readFileSync(configFile, "utf8"));
+  config.denyPaths = [join(f.repo, "case.md")]; writeFileSync(configFile, JSON.stringify(config));
+  const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-write-deny-alias.ts"), f.home], { env: f.env, stdout: "pipe", stderr: "pipe", timeout: 20000 });
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  const output = JSON.parse(child.stdout.toString()) as { result: SpecWriteResult; lexicalDenied: boolean; canonicalDenied: boolean; canonical: string };
+  expect(output.lexicalDenied).toBe(false); expect(output.canonicalDenied).toBe(true);
+  expect(output.canonical).toBe(join(f.repo, "case.md"));
+  expect(output.result).toMatchObject({ ok: false, changed: false, path: "Case.md" });
+  expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "PATH" }));
+  expect(readFileSync(join(f.repo, "case.md"), "utf8")).toBe(source);
+  expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
 }, 30_000);

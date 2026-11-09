@@ -5,7 +5,7 @@ const [home, mode] = process.argv.slice(2);
 if (!home || !mode) throw new Error("synthetic spec fault fixture needs home and mode");
 const original = { ...fs }, configFile = join(home, "vmem.config.json"), config = JSON.parse(original.readFileSync(configFile, "utf8"));
 const root = config.specs[0].path, target = join(root, "nested/SPEC.md"), temps = new Set<number>(), tempReads = new Set<number>();
-let injected = false, published = false, lock: string | undefined, temp: string | undefined;
+let injected = false, published = false, lock: string | undefined, lockDescriptor: number | undefined, temp: string | undefined;
 let registerContainer: (() => void) | undefined;
 mock.module("node:fs", () => ({ ...original,
   openSync: (...args: Parameters<typeof fs.openSync>) => {
@@ -15,7 +15,7 @@ mock.module("node:fs", () => ({ ...original,
       if ((Number(args[1]) & (original.constants.O_WRONLY | original.constants.O_RDWR)) === 0) tempReads.add(fd);
     }
     if (file.includes("/spec-mutations/") && file.endsWith(".lock")) {
-      lock = file;
+      lock = file; lockDescriptor = fd;
       if (mode === "lock-open-replaced") { original.unlinkSync(lock); original.writeFileSync(lock, "foreign replacement\n"); }
       if (mode === "reread") original.appendFileSync(target, "External edit.\r\n");
       if (mode === "policy-drift") { config.specs[0].write = "none"; original.writeFileSync(configFile, JSON.stringify(config)); }
@@ -46,6 +46,7 @@ mock.module("node:fs", () => ({ ...original,
       if (mode.startsWith("final-home-")) registerContainer!();
     }
     original.closeSync(fd);
+    if (mode === "lock-close" && published && fd === lockDescriptor) throw new Error("synthetic lock close failure");
   },
   unlinkSync: (...args: Parameters<typeof fs.unlinkSync>) => {
     if (mode === "lock-cleanup" && String(args[0]).includes("/spec-mutations/")) throw new Error("synthetic lock cleanup failure");
@@ -61,7 +62,7 @@ if (mode.startsWith("final-home-")) {
   };
 }
 const result = updateSpec(home, { id: "child", set: { title: "Attempted edit" } }, { env: process.env });
-if (mode === "dir-fsync" || mode === "lock-cleanup") {
+if (mode === "dir-fsync" || mode === "lock-cleanup" || mode === "lock-close") {
   const { renderSpecUpdate } = await import("../../src/spec-output.ts"), { PLAIN } = await import("../../src/text-output.ts");
   console.log(JSON.stringify({ result, text: renderSpecUpdate(result, PLAIN) }));
 } else console.log(JSON.stringify(result));
