@@ -133,3 +133,9 @@ test("unavailable canonical inputs carry one cause and repair warning each witho
   expect(indexed.warnings.join(" ")).not.toContain("synthetic private diagnostic");
   expect(matchCanonRows(indexed, "Good Entity")).toHaveLength(1);
 });
+
+test("multiple configured columns still report each physical row once with its longest matching key", () => {
+  const source = "| Key | Alias | Meaning |\n| --- | --- | --- |\n| ACME | Acme Labs | Synthetic |\n| BETA | Beta Group | Synthetic |";
+  const indexed = index({ "notes/two.md": source }, [{ path: "notes/two.md" }, { path: "notes/two.md", keyColumn: 2 }]);
+  expect(matchCanonRows(indexed, "ACME Acme Labs BETA Beta Group").map(row => [row.key, row.line])).toEqual([["Beta Group", 4], ["Acme Labs", 3]]);
+});

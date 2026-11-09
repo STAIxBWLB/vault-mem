@@ -34,7 +34,7 @@ function tree(root: string): unknown {
 
 test("spec config uses separate defaults and strict fields, supports specs-only input and shared ids", () => {
   const f = fixture(), path = f.repo("repo");
-  expect(CONFIG_VERSION).toBe(3);
+  expect(CONFIG_VERSION).toBe(4);
   const entry = { id: "source", path, write: "none", pii: "deny" } as const;
   expect(parseSpec({ id: "source", path })).toEqual(entry);
   expect(parseConfig({ specs: [{ id: "source", path }] })).toEqual({ vaults: [], specs: [entry] });

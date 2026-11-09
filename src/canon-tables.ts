@@ -166,7 +166,12 @@ export function matchCanonRows(index: CanonRowIndex, draft: string): CanonRowMat
   if (typeof draft !== "string" || Buffer.byteLength(draft) > MAX_NOTE_BYTES) return [];
   const best = new Map<number, KeyRow>();
   find(index.exact, draft, best); find(index.latin, foldLatin(draft), best);
-  return [...best.values()].sort((a, b) => b.length - a.length || a.row - b.row).slice(0, 5).map(match => {
+  const seen = new Set<string>();
+  return [...best.values()].sort((a, b) => b.length - a.length || a.row - b.row).filter(match => {
+    const row = index.rows[match.row]!, identity = JSON.stringify([row.path, row.line]);
+    if (seen.has(identity)) return false;
+    seen.add(identity); return true;
+  }).slice(0, 5).map(match => {
     const row = index.rows[match.row]!; return { path: row.path, line: row.line, key: match.key, row: row.row };
   });
 }
