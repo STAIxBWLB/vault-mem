@@ -92,6 +92,24 @@ for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} sta
   if (operation === "patch") expect(text.replaceAll("\r\n", "")).not.toContain("\n");
 });
 
+for (const [op, value] of [["patch", ".inf"], ["append", ".inf"], ["link", ".inf"], ["supersede", ".inf"], ["patch", ".nan"], ["patch", "-0"]] as const) test(`AC1 ${op} preserves legacy non-JSON flow value ${value} and warns when dates cannot be stamped`, () => {
+  const f = fixture(), path = op === "supersede" ? "next" : "old", file = join(f.notes, `${path}.md`);
+  const fields = { title: "Legacy Flow Reference", description: "Synthetic legacy bibliographic evidence.", type: "reference", domain: "research", topics: ["[[research]]"], year: "non-json", updated: "2026-01-01" };
+  const header = `---\n${JSON.stringify(fields).replace('"year":"non-json"', `"year":${value}`)}\n---\n`;
+  writeFileSync(file, header + "# Legacy Flow Reference\n\nOriginal legacy text.\n\n## Topics\n\n- [[research]]\n");
+  const operation: WriteOp = op === "patch" ? { op, path, oldString: "Original legacy text.", newString: "Changed legacy text." }
+    : op === "append" ? { op, path, section: "Evidence", markdown: "Added legacy evidence." }
+    : op === "link" ? { op, from: "old", to: "next", relation: "supports" }
+    : { op, old: "old", next: "next" };
+  const result = writeAtDate(f, operation);
+  expect(result).toMatchObject({ ok: true, applied: true });
+  expect(result.issues).toContainEqual(expect.objectContaining({ code: "V01", severity: "warning", path: `notes/${path}.md`, message: expect.stringMatching(/automatic dates were not set.*cannot round-trip.*rewrite.*block mapping.*retry/) }));
+  expect(result.issues.some(issue => issue.code === "IO")).toBe(false);
+  const text = readFileSync(file, "utf8"); expect(text.startsWith(header)).toBe(true);
+  expect(parseFrontmatter(text).data.updated).toBe("2026-01-01");
+  expect(text).toContain(op === "patch" ? "Changed legacy text." : op === "append" ? "Added legacy evidence." : op === "link" ? "[[next]] (supports)" : "Supersedes [[old]]");
+});
+
 test("AC1 frontmatter stamps updated after a valid metadata change", () => {
   const f = fixture();
   expect(writeAtDate(f, { op: "frontmatter", path: "old", set: { confidence: "likely", updated: "2000-01-01" } })).toMatchObject({ ok: true, applied: true });

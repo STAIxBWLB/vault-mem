@@ -127,7 +127,7 @@ function mayHaveDoi(source: string): boolean {
   return /(?:^|[{\n,])[ \t]*(?:doi|["']doi["'])[ \t]*:|[\\!&*?]/.test(header);
 }
 /** Shared date emission for validated note content, including promotion previews. */
-export function stampNoteContent(source: string, today: string, create: boolean): string {
+export function stampNoteContent(source: string, today: string, create: boolean, warning?: (message: string) => void): string {
   const doc = parseFrontmatter(source);
   const dates = { updated: today, ...(create && !Object.hasOwn(doc.data, "created") ? { created: today } : {}) };
   try { return emitFrontmatter(doc, dates); }
@@ -136,16 +136,22 @@ export function stampNoteContent(source: string, today: string, create: boolean)
     // mapping's header for date emission, preserving its semantics and body bytes.
     if (!(error instanceof Error) || error.message !== "frontmatter: editing requires a block mapping") throw error;
     const newline = /\r?\n/.exec(doc.frontmatter ?? "")?.[0] ?? "\n";
-    const header = emitFrontmatter(parseFrontmatter(""), { ...doc.data, ...dates }).replaceAll("\n", newline);
-    return source.slice(0, source.indexOf("---")) + header + doc.body;
+    try {
+      const header = emitFrontmatter(parseFrontmatter(""), { ...doc.data, ...dates }).replaceAll("\n", newline);
+      return source.slice(0, source.indexOf("---")) + header + doc.body;
+    } catch (cause) {
+      if (!(cause instanceof Error) || cause.message !== "frontmatter: changed values must be JSON-compatible") throw cause;
+      warning?.("automatic dates were not set: the header contains values that cannot round-trip through JSON (such as .inf, .nan or -0); rewrite the header as an editable block mapping or replace those values, then retry to set updated (and missing created on create)");
+      return source;
+    }
   }
 }
 /** Date authored content only; mechanical rewrites retain their existing freshness. */
-export function stampContentChanges(operation: WriteOp, changes: PlannedChange[], today: string): PlannedChange[] {
+export function stampContentChanges(operation: WriteOp, changes: PlannedChange[], today: string, issues: WriteIssue[] = []): PlannedChange[] {
   if (["check", "report", "move", "tidy", "sanitize"].includes(operation.op)) return changes;
   return changes.map(change => {
     if (change.after === null || change.after === change.before) return change;
-    return { ...change, after: stampNoteContent(change.after, today, operation.op === "create") };
+    return { ...change, after: stampNoteContent(change.after, today, operation.op === "create", message => issues.push({ code: "V01", severity: "warning", path: change.path, message })) };
   }).filter(change => change.before !== change.after);
 }
 

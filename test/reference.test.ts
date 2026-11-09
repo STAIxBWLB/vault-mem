@@ -239,6 +239,7 @@ test("move and tidy keep DOI-free note bytes, and explicit equal DOI assignment 
   ]);
   const f = fixture(), legacy = note({ doi: "10.1234/UPPERCASE" });
   const file = join(f.notes, "legacy.md"); writeFileSync(file, legacy);
-  expect(f.request({ op: "frontmatter", path: "legacy", set: { doi: "10.1234/UPPERCASE" } }).ok).toBe(true);
-  expect(readFileSync(file, "utf8")).toBe(emitFrontmatter(parseFrontmatter(legacy), { doi: "10.1234/uppercase", updated: localDate() }));
+  const now = new Date(2026, 0, 2, 1);
+  expect(applyWrite(f.home, { vault: "test", operation: { op: "frontmatter", path: "legacy", set: { doi: "10.1234/UPPERCASE" } } }, { now }).ok).toBe(true);
+  expect(readFileSync(file, "utf8")).toBe(emitFrontmatter(parseFrontmatter(legacy), { doi: "10.1234/uppercase", updated: localDate(now) }));
 });

@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Authored note writes (including link and explicit DOI assignment) stamp `updated` with the local calendar date through one shared writer transform; move backlink rewrites, tidy and sanitize preserve freshness dates; create fills absent `created` while preserving caller values and existing validation. Promotion previews show the same stamped content as confirm, and read-only/no-op operations remain unchanged (#165, part 1).
+- Authored note writes (including link and explicit DOI assignment) stamp `updated` with the local calendar date through one shared writer transform; move backlink rewrites, tidy and sanitize preserve freshness dates; create fills absent `created` while preserving caller values and existing validation. Promotion previews show the same stamped content as confirm, and read-only/no-op operations remain unchanged. Non-JSON flow-header values preserve their authored write and return an automatic-date warning (#165, part 1).
 
 - Spec create refuses a new Markdown input past the discovery cap, and create/update titles reject controls and line separators. Cleanup errors preserve their directory and cause. Delete acknowledgement budgets are preview-invariant, blocked path refusals request a fresh preview, and applied-delete errors direct inspection of the parent directory and lock state instead of re-confirmation (#175, #176).
 

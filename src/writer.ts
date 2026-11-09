@@ -174,11 +174,13 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     // secret, oversized input or other refusal that existing validation catches.
     issues = validateWrite(changes, validation);
     if (!issues.some(issue => issue.severity === "error")) {
-      const stamped = stampContentChanges(request.operation, changes, localDate(options.now));
+      const stampIssues: WriteIssue[] = [];
+      const stamped = stampContentChanges(request.operation, changes, localDate(options.now), stampIssues);
       if (stamped.some((change, index) => change.after !== changes[index]?.after) || stamped.length !== changes.length) {
         changes = stamped;
         issues = validateWrite(changes, validation);
       }
+      issues.push(...stampIssues);
       if (!issues.some(issue => issue.severity === "error")) issues.push(...duplicateWarnings(request, notes, changes));
     }
     // The log event is not part of the fingerprint: move/delete take it on the confirm call only.
