@@ -10,7 +10,7 @@ import type { OrgPromoteResult } from "./org-promote.ts";
 import type { SyncResult } from "./sync.ts";
 import type { PromoteResult } from "./promote.ts";
 import { notePath } from "./write-operations.ts";
-import { blocks, clean, fields, issueTable, nextCommand, paragraph, plural, shellWord, table, type TextOptions, type Tone } from "./text-output.ts";
+import { blocks, clean, fields, heading, issueTable, nextCommand, paragraph, plural, shellWord, table, type TextOptions, type Tone } from "./text-output.ts";
 
 /** The words the command was run with (`[command, ...args]`, no `--color`) and its positional arguments. */
 export interface WriteContext { argv: string[]; positional: string[] }
@@ -42,7 +42,7 @@ function logLine(log: LogReceipt | undefined, o: TextOptions, label = "log"): st
 
 const VERBS: Record<string, [string, string]> = {
   new: ["create", "created"], patch: ["patch", "patched"], append: ["append to", "appended to"], frontmatter: ["update the frontmatter of", "updated the frontmatter of"],
-  link: ["link", "linked"], supersede: ["supersede", "superseded"], move: ["move", "moved"], delete: ["delete", "deleted"], report: ["write", "wrote"],
+  link: ["link", "linked"], supersede: ["supersede", "superseded"], merge: ["merge", "merged"], move: ["move", "moved"], delete: ["delete", "deleted"], report: ["write", "wrote"],
 };
 function what(command: string, changes: ChangeReceipt[], targets: string[], past: boolean): string {
   const verb = VERBS[command]?.[past ? 1 : 0] ?? command;
@@ -50,13 +50,14 @@ function what(command: string, changes: ChangeReceipt[], targets: string[], past
   const deleted = changes.filter(c => action(c) === "delete").map(c => c.path), created = changes.filter(c => action(c) === "create").map(c => c.path);
   const updated = changes.filter(c => action(c) === "update").map(c => c.path);
   if (command === "move") return `${verb} ${deleted[0] ?? stem(targets[0])} to ${created[0] ?? stem(targets[1])}${others(updated, past ? "rewrote links in" : "rewrite links in")}`;
+  if (command === "merge") return `${verb} ${stem(targets[1])} into ${stem(targets[0])}${others(updated.filter(path => path !== stem(targets[0]) && path !== stem(targets[1])), past ? "rewrote links in" : "rewrite links in")}`;
   if (command === "delete") return `${verb} ${deleted[0] ?? stem(targets[0])}${others(updated, past ? "updated" : "update")}`;
   if (command === "link") return `${verb} ${stem(targets[0])} and ${stem(targets[1])}`;
   if (command === "supersede") return `${verb} ${stem(targets[0])} with ${stem(targets[1])}`;
   return `${verb} ${changes[0]?.path ?? (command === "report" ? targets[0] : stem(targets[0]))}`;
 }
 
-/** `new`, `patch`, `append`, `frontmatter`, `link`, `supersede`, `move`, `delete`, `report` and `check`. */
+/** `new`, `patch`, `append`, `frontmatter`, `link`, `supersede`, `merge`, `move`, `delete`, `report` and `check`. */
 export function renderWriteReceipt(r: WriteReceipt, o: TextOptions, ctx: WriteContext): string {
   const command = ctx.argv[0]!, targets = ctx.positional.slice(1), issues = issueTable(r.issues, o);
   if (command === "check") {
@@ -64,7 +65,7 @@ export function renderWriteReceipt(r: WriteReceipt, o: TextOptions, ctx: WriteCo
     const verdict = r.ok ? `ok: ${path} passes validation${w ? ` (${plural(w, "warning")})` : ""}` : `fail: ${path} has ${plural(e, "error")}${w ? ` and ${plural(w, "warning")}` : ""}`;
     return blocks(issues, line(verdict, o, r.ok ? "ok" : "fail"));
   }
-  const twoStep = command === "move" || command === "delete";
+  const twoStep = command === "merge" || command === "move" || command === "delete";
   let head: string, t: Tone;
   if (!r.ok) [head, t] = r.applied ? [`failed after writing: ${what(command, r.changes, targets, true)}; see the issues`, "fail"] : ["refused: nothing written", "fail"];
   else if (r.preview) [head, t] = [`dry run: would ${what(command, r.changes, targets, false)}`, "info"];
@@ -75,7 +76,13 @@ export function renderWriteReceipt(r: WriteReceipt, o: TextOptions, ctx: WriteCo
   const changes = r.changes.length > 1 ? table(["PATH", "ACTION", "BYTES", "SHA"], r.changes.map(c => [c.path, action(c), c.sha256 === null ? "-" : c.bytes, short(c.sha256)]), o) : undefined;
   const log = r.log ? logLine(r.log, o) : r.ok && r.preview ? line(twoStep ? "log: written on confirm" : "log: none (dry run)", o, "muted") : undefined;
   const confirm = twoStep && r.ok && r.preview && r.fingerprint ? nextCommand("confirm", confirmCommand(ctx.argv, r.fingerprint), o) : undefined;
-  return blocks([line(head, o, t), one].filter(Boolean).join("\n"), changes, issues, list("possible duplicates", r.possibleDuplicates), log, confirm);
+  const merge = r.merge && r.preview ? blocks(
+    fields([["keep", r.merge.keep], ["absorb", r.merge.absorb]], o),
+    line(`merged body: ${plural(Buffer.byteLength(r.merge.body), "byte")}; --json shows the full body`, o, "muted"),
+    list("merged source", r.merge.source), list("merged topics", r.merge.topics),
+    r.merge.inboundLinks.length ? heading("INBOUND LINKS", o) + "\n" + table(["PATH", "FIELD", "TARGET", "REPLACEMENT", "LINE"], r.merge.inboundLinks.map(link => [link.path, link.field, link.target + (link.block ? `#^${link.block}` : link.heading ? `#${link.heading}` : ""), link.replacement + (link.block ? `#^${link.block}` : link.heading ? `#${link.heading}` : ""), link.line ?? "-"]), o) : line("inbound links: none", o, "muted"),
+  ) : undefined;
+  return blocks([line(head, o, t), one].filter(Boolean).join("\n"), changes, merge, issues, list("possible duplicates", r.possibleDuplicates), log, confirm);
 }
 
 /** `tidy`: counts per rule and the notes touched, then the confirm command. */

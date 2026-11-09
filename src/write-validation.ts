@@ -3,9 +3,9 @@ import { sourceReferences, sourceWorkspaceRoot, missingSourceWarnings } from "./
 import { basename, resolve } from "node:path";
 import { domainProblem, type VaultSpec, type VmemConfig } from "./config.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { extractLinks, normalizeTarget, proseLines, resolveLinks, type Link, type LinkNote, type ResolvedLink } from "./links.ts";
+import { extractLinks, normalizeTarget, proseLines, visibleProseLines, resolveLinks, type Link, type LinkNote, type ResolvedLink } from "./links.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
-import type { PlannedChange, ValidationContext, WriteIssue } from "./write-types.ts";
+import { MAX_WRITE_BYTES, type PlannedChange, type ValidationContext, type WriteIssue } from "./write-types.ts";
 import type { PiiSurface } from "./config.ts";
 import { screenPii } from "./pii.ts";
 import { moveSourcePath } from "./write-operations.ts";
@@ -34,7 +34,7 @@ const SECRETS = [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, /\bAKIA[0-9A-Z]{16}\b/, /
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/, /\bAIza[0-9A-Za-z_-]{35}\b/, /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, /\b(?:password|passwd|secret|api[_-]?key|token)\s*[:=]\s*\S{8,}/i];
 export const SECRET_PATTERNS: readonly RegExp[] = SECRETS;
 export { EMAIL_PATTERN } from "./pii.ts";
-const MAX_BYTES = 256 * 1024;
+const MAX_BYTES = MAX_WRITE_BYTES;
 export const MAX_REPORT_BYTES = 16 * 1024 * 1024;
 function issue(code: string, message: string, severity: WriteIssue["severity"] = "error", path?: string): WriteIssue {
   return { code, severity, message, ...(path ? { path } : {}) };
@@ -126,13 +126,14 @@ function movedFrom(value: string, context: ValidationContext): string {
 function changedBrokenLinks(oldNotes: Map<string, ParsedNote>, newNotes: Map<string, ParsedNote>, context: ValidationContext): WriteIssue[] {
   const oldCounts = new Map<string, number>();
   const move = context.operation.op === "move" ? context.operation : undefined;
-  const from = move ? movedFrom(move.from, context) : "";
-  const to = move ? `notes/${move.to.replace(/^notes\//, "").replace(/\.md$/, "")}.md` : "";
-  const oldNames = move ? names(oldNotes) : undefined;
+  const merge = context.operation.op === "merge" ? context.operation : undefined;
+  const from = move ? movedFrom(move.from, context) : merge ? `notes/${merge.absorb.replace(/^notes\//, "").replace(/\.md$/, "")}.md` : "";
+  const to = move ? `notes/${move.to.replace(/^notes\//, "").replace(/\.md$/, "")}.md` : merge ? `notes/${merge.keep.replace(/^notes\//, "").replace(/\.md$/, "")}.md` : "";
+  const oldNames = move || merge ? names(oldNotes) : undefined;
   for (const link of references(oldNotes)) if (link.reason) {
     const candidates = oldNames?.get(noteKey(link.target));
     const renamedTarget = candidates?.size === 1 && [...candidates][0]!.path === from;
-    const signature = linkSignature(renamedTarget ? { ...link, target: to } : link, link.source === from ? to : link.source);
+    const signature = linkSignature(renamedTarget ? { ...link, target: to } : link, move && link.source === from ? to : link.source);
     oldCounts.set(signature, (oldCounts.get(signature) ?? 0) + 1);
   }
   const issues: WriteIssue[] = [];
@@ -195,7 +196,7 @@ function topicIssues(note: ParsedNote, index: Map<string, Set<ParsedNote>>, seve
 function topicProblems(note: ParsedNote): Set<"placement" | "content"> {
   const problems = new Set<"placement" | "content">();
   if (note.data.type === "moc" && note.data.topics === undefined) return problems;
-  const lines = proseLines(note.body), h2s = lines.flatMap((line, index) => /^ {0,3}##[ \t]+/.test(line) ? [index] : []);
+  const lines = visibleProseLines(note.body), h2s = lines.flatMap((line, index) => /^ {0,3}##[ \t]+/.test(line) ? [index] : []);
   const topics = h2s.filter(index => /^ {0,3}##[ \t]+Topics(?:[ \t]+#+)?[ \t]*$/i.test(lines[index]!));
   if (topics.length !== 1 || h2s[h2s.length - 1] !== topics[0]) problems.add("placement");
   const last = topics[topics.length - 1], end = h2s.find(index => last !== undefined && index > last) ?? lines.length;
@@ -227,7 +228,7 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
   const report = context.operation.op === "report";
   for (const change of changes) {
     // Sanitize and move may touch an existing legacy-named note (L13 names stay until moved); move destinations stay strict.
-    const legacy = context.notes.has(change.path) && (context.operation.op === "sanitize" || context.operation.op === "move");
+    const legacy = context.notes.has(change.path) && (context.operation.op === "sanitize" || context.operation.op === "move" || context.operation.op === "merge");
     if (!validPath(change.path, report) && !legacy) issues.push(issue("V04", "invalid mutation path"));
     if (change.after === null) final.delete(change.path);
     else if (change.path.startsWith("notes/")) final.set(change.path, change.after);

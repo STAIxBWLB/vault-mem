@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { normalizeSource } from "./source.ts";
+import { normalizeSource, sourceReferences } from "./source.ts";
 import { parseFrontmatter, emitFrontmatter, frontmatterReferences } from "./frontmatter.ts";
-import { LINK_RELATIONS, normalizeTarget, proseLines, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
-import type { PatchEdit, PlannedChange, WriteIssue, WriteOp } from "./write-types.ts";
+import { LINK_RELATIONS, normalizeTarget, proseLines, visibleProseLines, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
+import { MAX_WRITE_BYTES, type MergeInboundLink, type MergePreview, type PatchEdit, type PlannedChange, type WriteIssue, type WriteOp } from "./write-types.ts";
 export class WriteRefusal extends Error {
   constructor(readonly issues: WriteIssue[]) { super(issues[0]?.message ?? "write refused"); }
 }
@@ -163,8 +163,136 @@ export function stampContentChanges(operation: WriteOp, changes: PlannedChange[]
   if (["check", "report", "move", "tidy", "sanitize"].includes(operation.op)) return changes;
   return changes.map(change => {
     if (change.after === null || change.after === change.before) return change;
+    if (operation.op === "merge" && change.path !== notePath(operation.keep) && change.path !== notePath(operation.absorb)) return change;
     return { ...change, after: stampNoteContent(change.after, today, operation.op === "create", message => issues.push({ code: "V01", severity: "warning", path: change.path, message })) };
   }).filter(change => change.before !== change.after);
+}
+
+/** Path-only reference identity shared by move and merge; alias-only links remain untouched. */
+function referenceReplacement(notes: Map<string, string>, from: string, to: string): (target: string) => string | undefined {
+  const names = new Map<string, Set<string>>();
+  for (const [path, source] of notes) {
+    document(source, path);
+    const key = normalizeTarget(path.slice(6, -3)), values = names.get(key) ?? new Set<string>(); values.add(path); names.set(key, values);
+  }
+  return target => {
+    const candidates = names.get(normalizeTarget(target.replace(/^\.\//, "").replace(/^notes\//i, "").replace(/\.md$/i, "")));
+    return candidates?.size === 1 && candidates.has(from) ? to.slice(6, -3) : undefined;
+  };
+}
+/** Same metadata recursion and visible-body rewrite that move has always used. */
+function rewriteNoteReferences(source: string, path: string, replace: (target: string) => string | undefined, inbound?: MergeInboundLink[], preserve: ReadonlySet<string> = new Set()): string {
+  const doc = document(source, path);
+  const record = (value: string, field: string, body = false) => {
+    if (!inbound) return;
+    for (const link of extractLinks(value)) {
+      const replacement = replace(link.target);
+      if (replacement !== undefined) inbound.push({ path, field, target: link.target, replacement, ...(body ? { line: link.line } : {}), ...(link.heading ? { heading: link.heading } : {}), ...(link.block ? { block: link.block } : {}) });
+    }
+  };
+  const rewriteValue = (value: unknown, field: string): unknown => {
+    if (typeof value === "string") { record(value, field); return rewriteLinkTargets(value, replace); }
+    if (Array.isArray(value)) return value.map((item, index) => rewriteValue(item, `${field}[${index}]`));
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rewriteValue(item, `${field}.${key}`)]));
+    return value;
+  };
+  const changes: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(doc.data)) changes[key] = preserve.has(key) ? value : rewriteValue(value, key);
+  record(doc.body, "body", true);
+  const frontmatter = emitFrontmatter(doc, changes).slice(0, -doc.body.length || undefined);
+  return (doc.body.length ? frontmatter : emitFrontmatter(doc, changes)) + rewriteLinkTargets(doc.body, replace);
+}
+function supersededNote(source: string, path: string, next: string): string {
+  return emitFrontmatter(document(source, path), { status: "superseded", superseded_by: `[[${next.slice(6, -3)}]]` });
+}
+function topicKey(value: string): string { return normalizeTarget(value.slice(2, -2).trim().replace(/^\.\//, "").replace(/^notes\//i, "").replace(/\.md$/i, "")); }
+function mergeTopics(value: unknown, path: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some(topic => typeof topic !== "string" || !/^\[\[[^\]|#]+\]\]$/.test(topic))) refuse("V01", "merge topics must be a list of plain wiki targets; repair topics in this note before merging", path);
+  return value as string[];
+}
+/** Remove only a plain Topics list; unusual authored contents need an explicit repair, never silent deletion. */
+function withoutMergeTopics(body: string, topics: string[], path: string): string {
+  const visible = visibleProseLines(body), raw = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  if (visible.some((line, index) => /^Topics[ \t]*$/i.test(line.trim()) && /^ {0,3}-+[ \t]*$/.test(visible[index + 1] ?? ""))) refuse("V05", "merge cannot consolidate a Setext Topics heading safely; convert it to a plain ## Topics list before merging", path);
+  const headings = visible.flatMap((line, index) => /^ {0,3}##[ \t]+Topics(?:[ \t]+#+)?[ \t]*$/i.test(line) ? [index] : []);
+  if (headings.length > 1) refuse("V05", "merge found multiple Topics sections; consolidate them into one matching topic list before merging", path);
+  const start = headings[0]; if (start === undefined) return body;
+  let end = start + 1;
+  while (end < raw.length && !/^ {0,3}#{1,2}(?:[ \t]+|$)/.test(visible[end] ?? "")) end++;
+  const found: string[] = [];
+  for (const line of raw.slice(start + 1, end)) {
+    if (!line.trim()) continue;
+    const wiki = /^[ \t]*(?:[-*+][ \t]+)?(\[\[[^\]|#]+\]\])[ \t]*(?:\r?\n)?$/.exec(line);
+    if (!wiki) refuse("V05", "merge cannot discard prose, headings or code inside Topics; move that content outside Topics and retry the merge", path);
+    found.push(topicKey(wiki[1]!));
+  }
+  const expected = topics.map(topicKey).sort(); found.sort();
+  if (found.length !== expected.length || found.some((value, index) => value !== expected[index])) refuse("V05", "merge Topics list does not match its metadata; align the body list with frontmatter topics before merging", path);
+  return raw.slice(0, start).join("") + raw.slice(end).join("");
+}
+/** Drop absorb's first H1, demoting the remaining prose headings without touching code or paragraph text. */
+function demoteMergeHeadings(body: string): string {
+  const visible = visibleProseLines(body), raw = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  let dropped = false;
+  return raw.map((line, index) => {
+    const heading = /^ {0,3}(#{1,6})(?:[ \t]+|$)/.exec(visible[index] ?? "");
+    if (heading) {
+      if (heading[1]!.length === 1 && !dropped) { dropped = true; return ""; }
+      return heading[1]!.length < 6 ? line.replace(/^( {0,3})(#+)/, "$1#$2") : line;
+    }
+    if (index + 1 < visible.length && visible[index]!.trim() && /^ {0,3}(?:=+|-+)[ \t]*$/.test(visible[index + 1]!)) {
+      const first = visible[index + 1]!.trim().startsWith("=");
+      if (first && !dropped) { dropped = true; raw[index + 1] = ""; return ""; }
+      const newline = /\r?\n$/.exec(line)?.[0] ?? "";
+      raw[index + 1] = "";
+      return `${first ? "##" : "###"} ${line.replace(/^ {0,3}/, "").replace(/\r?\n$/, "")}${newline}`;
+    }
+    return line;
+  }).join("");
+}
+function mergeGap(body: string, newline: string): string {
+  if (body.endsWith("\n\n") || body.endsWith("\r\n\r\n")) return body;
+  return body + (body.endsWith("\n") ? newline : newline + newline);
+}
+/** Pure all-note merge plan, composed after rewriting existing references so its new provenance link is retained. */
+export function planMerge(operation: Extract<WriteOp, { op: "merge" }>, notes: Map<string, string>): { changes: PlannedChange[]; preview: MergePreview } {
+  const keep = notePath(operation.keep), absorb = notePath(operation.absorb);
+  if (keep === absorb) refuse("V10", "merge endpoints must differ; choose separate keep and absorb notes", keep);
+  const kept = document(needed(notes, keep), keep), absorbed = document(needed(notes, absorb), absorb);
+  if (typeof kept.data.type !== "string" || !kept.data.type.trim() || kept.data.type !== absorbed.data.type || [kept.data.type, absorbed.data.type].some(type => type === "person" || type === "moc")) refuse("V01", "merge requires matching types other than person or moc; choose compatible notes", keep);
+  const replace = referenceReplacement(notes, absorb, keep), inboundLinks: MergeInboundLink[] = [], rewritten = new Map<string, string>();
+  for (const [path, source] of notes) {
+    try { rewritten.set(path, rewriteNoteReferences(source, path, replace, inboundLinks, path === keep ? new Set(["supersedes"]) : undefined)); }
+    catch (error) {
+      if (error instanceof WriteRefusal) throw error;
+      refuse("V01", "merge cannot rewrite this note's metadata losslessly; repair its YAML or convert the header to a block mapping, then request a fresh merge preview", path);
+    }
+  }
+  const keepDoc = document(rewritten.get(keep)!, keep), absorbDoc = document(rewritten.get(absorb)!, absorb);
+  const sources: string[] = [];
+  for (const [path, doc] of [[keep, keepDoc], [absorb, absorbDoc]] as const) if (doc.data.source !== undefined) {
+    let refs: string[];
+    try { refs = sourceReferences(doc.data.source).map(reference => reference.value); }
+    catch { refuse("V01", "merge source must contain at most 32 valid references; repair source entries in either note before merging", path); }
+    for (const value of refs) if (!sources.includes(value)) sources.push(value);
+  }
+  if (sources.length > 32) refuse("V01", "merge source union exceeds 32 entries; trim sources in either note first, then retry the merge", keep);
+  const keepTopics = mergeTopics(keepDoc.data.topics, keep), absorbTopics = mergeTopics(absorbDoc.data.topics, absorb), topics: string[] = [], seen = new Set<string>();
+  for (const topic of [...keepTopics, ...absorbTopics]) if (!seen.has(topicKey(topic))) { seen.add(topicKey(topic)); topics.push(topic); }
+  const newline = /\r?\n/.exec(keepDoc.body)?.[0] ?? "\n";
+  const first = withoutMergeTopics(keepDoc.body, keepTopics, keep), second = demoteMergeHeadings(withoutMergeTopics(absorbDoc.body, absorbTopics, absorb));
+  const body = mergeGap(mergeGap(first, newline) + `## Merged from [[${absorb.slice(6, -3)}]]${newline}${newline}` + second, newline) + `## Topics${newline}${newline}` + topics.map(topic => `- ${topic}${newline}`).join("");
+  if (Buffer.byteLength(body) > MAX_WRITE_BYTES) refuse("V09", "merged body exceeds 256 KiB; shorten either note's content before retrying the merge", keep);
+  try {
+    const metadata = emitFrontmatter(keepDoc, { source: sources.length ? sources : undefined, topics });
+    rewritten.set(keep, (parseFrontmatter(metadata).frontmatter ?? "") + body);
+    rewritten.set(absorb, supersededNote(rewritten.get(absorb)!, absorb, keep));
+  } catch { refuse("V01", "merge metadata cannot be edited losslessly; convert endpoint headers to editable block mappings and retry the merge", keep); }
+  const changes = [...rewritten].filter(([path, after]) => after !== notes.get(path)).map(([path, after]) => ({ path, before: notes.get(path)!, after })).sort((a, b) => a.path.localeCompare(b.path));
+  const oversized = changes.find(change => Buffer.byteLength(change.after) > MAX_WRITE_BYTES);
+  if (oversized) refuse("V09", "merged file or inbound rewrite exceeds 256 KiB; shorten the affected note before retrying the merge", oversized.path);
+  return { changes, preview: { keep, absorb, body, source: sources, topics, inboundLinks } };
 }
 
 /** Plan transformations in memory. This function never touches files. */
@@ -267,35 +395,18 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
     case "supersede": {
       const old = existing(operation.old), next = existing(operation.next);
       if (old.path === next.path) refuse("V10", "supersession endpoints must differ");
-      set(old.path, emitFrontmatter(document(old.source, old.path), { status: "superseded", superseded_by: `[[${next.path.slice(6, -3)}]]` }));
+      set(old.path, supersededNote(old.source, old.path, next.path));
       set(next.path, appendSection(next.source, "Relevant Notes", `- Supersedes [[${old.path.slice(6, -3)}]]`, next.path));
       break;
     }
+    case "merge": return planMerge(operation, notes).changes;
     case "delete": { const { path } = existing(operation.path); set(path, null); break; }
     case "move": {
       const fromPath = moveSourcePath(operation.from, notes), from = { path: fromPath, source: needed(notes, fromPath) }, to = notePath(operation.to);
       if (notes.has(to)) refuse("V08", "move destination already exists", to);
-      const names = new Map<string, Set<string>>();
+      const replace = referenceReplacement(notes, from.path, to);
       for (const [path, source] of notes) {
-        document(source, path); // Every note must still parse before a move rewrites links.
-        // Links resolve by path only, so alias-only links are left untouched.
-        const key = normalizeTarget(path.slice(6, -3)), values = names.get(key) ?? new Set<string>(); values.add(path); names.set(key, values);
-      }
-      const replace = (target: string): string | undefined => {
-        const candidates = names.get(normalizeTarget(target.replace(/^\.\//, "").replace(/^notes\//i, "").replace(/\.md$/i, "")));
-        return candidates?.size === 1 && candidates.has(from.path) ? to.slice(6, -3) : undefined;
-      };
-      const rewriteValue = (value: unknown): unknown => {
-        if (typeof value === "string") return rewriteLinkTargets(value, replace);
-        if (Array.isArray(value)) return value.map(rewriteValue);
-        if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rewriteValue(item)]));
-        return value;
-      };
-      for (const [path, source] of notes) {
-        const doc = document(source, path), changes: Record<string, unknown> = {};
-        for (const [key, value] of Object.entries(doc.data)) changes[key] = rewriteValue(value);
-        const frontmatter = emitFrontmatter(doc, changes).slice(0, -doc.body.length || undefined);
-        const output = (doc.body.length ? frontmatter : emitFrontmatter(doc, changes)) + rewriteLinkTargets(doc.body, replace);
+        const output = rewriteNoteReferences(source, path, replace);
         if (path === from.path) { set(path, null); set(to, output); }
         else set(path, output);
       }

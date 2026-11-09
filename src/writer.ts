@@ -1,3 +1,4 @@
+import { anchorIndex, normalizeTarget } from "./links.ts";
 import { localDate } from "./local-date.ts";
 import { appendLog, checkLogEvent, matchesBinding } from "./vault-log.ts";
 import type { LogEvent } from "./log-types.ts";
@@ -10,14 +11,15 @@ import { loadRegistry, syncDirectory } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES, GRAMS_COLUMNS, gramPhrase, grams, splitTerms } from "./vault-index.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
-import { moveSourcePath, notePath, planOperation, stampContentChanges, refuse, WriteRefusal } from "./write-operations.ts";
+import { moveSourcePath, notePath, planOperation, planMerge, stampContentChanges, refuse, WriteRefusal } from "./write-operations.ts";
 import { MAX_REPORT_BYTES, validateWrite } from "./write-validation.ts";
 import type { PiiSurface } from "./config.ts";
 import { unenforceablePii, mutationVault } from "./config.ts";
 import type { LogBinding } from "./log-types.ts";
-import type { ChangeReceipt, PlannedChange, WriteIssue, WriteReceipt, WriteRequest } from "./write-types.ts";
+import type { MergePreview, ChangeReceipt, PlannedChange, WriteIssue, WriteReceipt, WriteRequest } from "./write-types.ts";
 export const MUTATION_LOCK = "mutation.lock";
-export const MAX_WRITE_BYTES = 256 * 1024;
+export { MAX_WRITE_BYTES } from "./write-types.ts";
+const MAX_MERGE_ACK_BYTES = 224 * 1024;
 export function sha256(text: string): string { return createHash("sha256").update(text).digest("hex"); }
 function canonical(value: unknown): string {
   if (value === undefined) return "null";
@@ -94,6 +96,16 @@ function checkExpected(request: WriteRequest, notes: Map<string, string>): void 
     if (typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash) || source === undefined || sha256(source) !== hash) refuse("V09", "expected SHA mismatch", canonical);
   }
 }
+/** Preserve referenced content identity and the existing no-self-supersession invariant. */
+function checkMergeReferences(preview: MergePreview, notes: Map<string, string>): void {
+  const anchors = anchorIndex(parseFrontmatter(notes.get(preview.keep)!).body, true);
+  for (const link of preview.inboundLinks) {
+    if (link.path === preview.keep && /^superseded_by(?:$|\[)/.test(link.field)) refuse("V10", `${preview.keep} is superseded by ${preview.absorb}; swap keep and absorb, then request a fresh merge preview`, preview.keep);
+    const fragment = link.block ? `^${link.block}` : link.heading;
+    const collides = link.block ? anchors.blocks.has(normalizeTarget(link.block)) : link.heading ? anchors.headings.has(normalizeTarget(link.heading)) : false;
+    if (fragment && collides) refuse("V03", `merge fragment ${JSON.stringify(fragment)} from ${preview.absorb} collides with ${preview.keep}; rename the heading or block anchor in one note and rerun the merge preview`, link.path);
+  }
+}
 function duplicateWarnings(request: WriteRequest, notes: Map<string, string>, changes: PlannedChange[]): WriteIssue[] {
   if (request.operation.op !== "create" || !notes.size || !changes[0]?.after) return [];
   const doc = parseFrontmatter(changes[0].after);
@@ -129,6 +141,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
   let changes: PlannedChange[] = [], issues: WriteIssue[] = [], fingerprint: string | undefined, root = "", applied = false, indexUpdated = false;
   let result: WriteReceipt | undefined;
   const dateWarnings: WriteIssue[] = [];
+  let mergePreview: MergePreview | undefined;
   const recordError = (code: string, message: string, path?: string) => issues.push({ code, severity: "error", message, ...(path ? { path } : {}) });
   try {
     if (!request || typeof request !== "object" || !request.operation || typeof request.operation !== "object" || typeof request.vault !== "string") refuse("V01", "invalid write request");
@@ -149,7 +162,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       const logIssues = checkLogEvent(home, { vault: request.vault, event: request.log, channel: request.channel }, options.env);
       if (logIssues.length) throw new WriteRefusal(logIssues.map(issue => ({ ...issue, message: `log event refused, nothing written: ${issue.message}; fix the event fields (rules as for \`log append\`) or omit the event for the default line` })));
     }
-    const twoStep = ["move", "delete", "tidy"].includes(request.operation.op);
+    const twoStep = ["move", "delete", "tidy", "merge"].includes(request.operation.op);
     const preview = request.operation.op === "check" || request.dryRun === true || (twoStep && request.confirm !== true);
     if (!preview) {
       lockFile = join(root, MUTATION_LOCK);
@@ -168,17 +181,23 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       if (isDenied(join(root, request.operation.path), config.denyPaths)) refuse("V06", "report output path is denied");
       reportBefore = readPlain(root, request.operation.path, MAX_REPORT_BYTES);
     }
-    changes = planOperation(request.operation, notes, reportBefore);
+    if (request.operation.op === "merge") {
+      const plan = planMerge(request.operation, notes); changes = plan.changes; mergePreview = plan.preview;
+    } else changes = planOperation(request.operation, notes, reportBefore);
     for (const change of changes) if (isDenied(join(root, change.path), config.denyPaths)) refuse("V06", "planned mutation path is denied", change.path);
     const validation = { vault, config, notes, operation: request.operation, ...(options.piiSurface ? { piiSurface: options.piiSurface } : {}) };
     // Validate the caller's candidate first: replacing `updated` must not hide a
     // secret, oversized input or other refusal that existing validation catches.
-    issues = validateWrite(changes, validation);
+    const validate = (candidate: PlannedChange[]) => validateWrite(candidate, validation).map(issue => request.operation.op === "merge" && issue.severity === "error"
+      ? { ...issue, message: `${issue.message}; repair the indicated notes or links, then request a fresh merge preview` } : issue);
+    issues = validate(changes);
     if (!issues.some(issue => issue.severity === "error")) {
+      // Check only screened candidates: diagnostics must not echo an unsafe fragment.
+      if (mergePreview) checkMergeReferences(mergePreview, notes);
       const stamped = stampContentChanges(request.operation, changes, localDate(options.now), dateWarnings);
       if (stamped.some((change, index) => change.after !== changes[index]?.after) || stamped.length !== changes.length) {
         changes = stamped;
-        issues = validateWrite(changes, validation);
+        issues = validate(changes);
       }
       issues.push(...dateWarnings);
       if (!issues.some(issue => issue.severity === "error")) issues.push(...duplicateWarnings(request, notes, changes));
@@ -189,7 +208,12 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     // The identity every later commit check uses must still be the bound root, not a directory swapped in meanwhile.
     if (options.binding && (Number(identity.dev) !== options.binding.dev || Number(identity.ino) !== options.binding.ino)) refuse("VAULT_DRIFT", "vault root changed since the run started; nothing written");
     fingerprint = sha256(canonical({ input, vault: mutationVault(vault), policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], piiSurface: options.piiSurface ?? "notes" }, root, identity: [identity.dev, identity.ino], files: [...notes].map(([path, text]) => [path, sha256(text)]), changes: receipts(changes) }));
-    if (twoStep && request.confirm === true && (typeof request.fingerprint !== "string" || request.fingerprint !== fingerprint)) refuse("V09", "stale or missing preview fingerprint");
+    if (twoStep && request.confirm === true && (typeof request.fingerprint !== "string" || request.fingerprint !== fingerprint)) refuse("V09", request.operation.op === "merge" ? "stale or missing merge fingerprint; request a fresh merge preview and confirm with that fingerprint" : "stale or missing preview fingerprint");
+    if (mergePreview && request.channel === "mcp" && !issues.some(issue => issue.severity === "error") && Buffer.byteLength(JSON.stringify({ merge: mergePreview, issues, changes: receipts(changes), fingerprint })) > MAX_MERGE_ACK_BYTES) {
+      // The complete plan must be reviewable before a merge can publish. Keep the refusal compact too.
+      changes = []; mergePreview = undefined; issues = [];
+      refuse("V09", "merge preview exceeds the bounded MCP acknowledgement size; use CLI --json for both preview and confirm, or reduce the notes and inbound links before requesting a fresh preview");
+    }
     if (issues.some(issue => issue.severity === "error")) return result = { ok: false, applied: false, issues, changes: receipts(changes), fingerprint, indexUpdated: false };
     if (preview) return result = { ok: true, applied: false, preview: true, ...(request.operation.op === "link" && !changes.length ? {unchanged:true} : {}), issues, changes: receipts(changes), fingerprint, indexUpdated: false };
     if (!changes.length) return result = { ok: true, applied: false, ...(request.operation.op === "link" ? {unchanged:true} : {}), issues, changes: [], fingerprint, indexUpdated: false };
@@ -256,16 +280,17 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     result = { ok: true, applied, issues, changes: receipts(changes), fingerprint, indexUpdated };
     if (request.log !== false) {
       const op = request.operation;
-      const type = op.op === "link" ? "CONNECT" : op.op === "move" ? "ROUTE" : ["supersede", "tidy"].includes(op.op) ? "RETHINK" : "EXTRACT";
-      const source = op.op === "move" ? moveSourcePath(op.from, notes) : op.op === "link" ? notePath(op.from) : op.op === "supersede" ? notePath(op.old) : op.op === "delete" ? notePath(op.path) : `vmem:${op.op}`;
-      const dest = op.op === "move" || op.op === "link" ? notePath(op.to) : op.op === "supersede" ? notePath(op.next) : op.op === "delete" ? undefined : changes.find(change => change.after !== null)?.path;
+      const type = op.op === "link" ? "CONNECT" : op.op === "move" ? "ROUTE" : ["supersede", "tidy", "merge"].includes(op.op) ? "RETHINK" : "EXTRACT";
+      const source = op.op === "move" ? moveSourcePath(op.from, notes) : op.op === "link" ? notePath(op.from) : op.op === "supersede" ? notePath(op.old) : op.op === "merge" ? notePath(op.absorb) : op.op === "delete" ? notePath(op.path) : `vmem:${op.op}`;
+      const dest = op.op === "move" || op.op === "link" ? notePath(op.to) : op.op === "supersede" ? notePath(op.next) : op.op === "merge" ? notePath(op.keep) : op.op === "delete" ? undefined : changes.find(change => change.after !== null)?.path;
       const event: LogEvent = request.log ?? { type, project: "-", source, ...(dest ? { dest } : {}), note: op.op };
       try { result.log = appendLog(home, { vault: request.vault, event, channel: request.channel }, { env: options.env, binding: { vault, denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], dev: Number(identity.dev), ino: Number(identity.ino) } }); }
       catch { result.log = { ok: false, appended: null, synced: false, bytesWritten: null, issues: [{ code: "LOG_IO", severity: "error", message: "log append failed after successful mutation" }] }; }
       result.logged = result.log.appended === true && result.log.synced;
     }
   } catch (error) {
-    if (error instanceof WriteRefusal) issues.push(...error.issues);
+    if (error instanceof WriteRefusal) issues.push(...error.issues.map(issue => request?.operation?.op === "merge" && !issue.message.includes(";")
+      ? { ...issue, message: `${issue.message}; repair the indicated merge input or note, then request a fresh preview` } : issue));
     else recordError("IO", "write operation failed; inspect filesystem permissions and retry");
     result = { ok: false, applied, issues, changes: receipts(changes), ...(fingerprint ? { fingerprint } : {}), indexUpdated };
   } finally {
@@ -288,6 +313,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       if (possibleDuplicates.length) result.possibleDuplicates = possibleDuplicates;
       if (issues.some(issue => issue.severity === "error")) result.ok = false;
       if (result.ok && result.applied) for (const warning of dateWarnings) warning.message = `content was saved; ${warning.message}`;
+      if (result.ok && mergePreview) result.merge = mergePreview;
     }
   }
   return result!;

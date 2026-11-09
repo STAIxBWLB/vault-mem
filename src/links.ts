@@ -72,6 +72,8 @@ function maskInlineCode(body: string): string {
   parts.push(body.slice(offset));
   return parts.join("");
 }
+/** Visible Markdown lines for structural edits; hide fences and matched multiline inline code. */
+export function visibleProseLines(body: string): string[] { return maskInlineCode(proseLines(body).join("\n")).split("\n"); }
 export function extractLinks(body: string): Link[] {
   const links: Link[] = [];
   for (const [index, line] of maskInlineCode(proseLines(body).join("\n")).split("\n").entries()) {
@@ -110,8 +112,8 @@ export function rewriteLinkTargets(body: string, replace: (target: string) => st
 export function noteKey(value: string): string {
   return normalizeTarget(value.replace(/^\.\//, "").replace(/^notes\//i, "").replace(/\.md$/i, ""));
 }
-function anchorIndex(body: string): { headings: Set<string>; blocks: Set<string> } {
-  const lines = proseLines(body), headings = new Set<string>(), blocks = new Set<string>();
+export function anchorIndex(body: string, inlineCode = false): { headings: Set<string>; blocks: Set<string> } {
+  const lines = inlineCode ? visibleProseLines(body) : proseLines(body), headings = new Set<string>(), blocks = new Set<string>();
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!, atx = /^ {0,3}#{1,6}([ \t]+.*|)$/.exec(line);
     if (atx) headings.add(normalizeTarget(atx[1]!.replace(/[ \t]+#+[ \t]*$/, "").trim()));
