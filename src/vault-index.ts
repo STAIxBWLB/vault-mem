@@ -489,6 +489,14 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     if (notes.length !== 1) throw new Error(notes.length ? "note: ambiguous target" : "note: unknown target");
     return notes[0]!.path;
   }
+  /** Literal indexed-note source, with the byte bound checked before returning/decoding it. */
+  noteSource(path: string, maximum = MAX_NOTE_BYTES): string | undefined {
+    if (!Number.isInteger(maximum) || maximum < 1 || maximum > MAX_NOTE_BYTES) throw new Error(`note source maximum: expected 1..${MAX_NOTE_BYTES} bytes; choose a bound within the note reader limit`);
+    const literal = path.startsWith("notes/") ? path.slice(6) : path;
+    const row = this.db.query<{ source: string | null }, [number, string]>("SELECT CASE WHEN length(CAST(source AS BLOB))<=? THEN source ELSE NULL END AS source FROM notes WHERE path=?").get(maximum, literal);
+    if (row?.source === null) throw Object.assign(new Error(`note source exceeds the ${maximum}-byte remaining read budget; split the note or reduce configured tables before retrying`), { code: "V09" });
+    return row?.source;
+  }
   show(target: string, maxBytes = 16384, section?: string, offset?: number): NoteReadResult {
     if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_READ_BYTES) throw new Error(`max-bytes: expected integer 1..${MAX_READ_BYTES}`);
     if (section !== undefined && (typeof section !== "string" || !section.trim() || /[\r\n]/.test(section) || Buffer.byteLength(section) > 1024)) throw new Error("section: expected one exact H2 heading <=1024 bytes");
@@ -504,7 +512,8 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
       if (!page.truncated) return { path, hash: note.hash, ...page, ...metadata };
     }
     // Only the derived source is loaded; section discovery never rescans a note file.
-    const source = this.db.query<{ source: string }, [string]>("SELECT source FROM notes WHERE path=?").get(path)!.source;
+    const source = this.noteSource(path);
+    if (source === undefined) throw new Error("note: source disappeared or exceeded the read bound during paging; refresh and reread the note");
     const body = parseFrontmatter(source).body, sections = h2Sections(body);
     if (section !== undefined) {
       const found = sections.filter(item => item.name === section);

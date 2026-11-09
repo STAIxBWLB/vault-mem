@@ -13,7 +13,7 @@ import { canonicalPath, isDenied } from "./platform.ts";
 import { moveSourcePath, notePath, planOperation, stampContentChanges, refuse, WriteRefusal } from "./write-operations.ts";
 import { MAX_REPORT_BYTES, validateWrite } from "./write-validation.ts";
 import type { PiiSurface } from "./config.ts";
-import { unenforceablePii } from "./config.ts";
+import { unenforceablePii, mutationVault } from "./config.ts";
 import type { LogBinding } from "./log-types.ts";
 import type { ChangeReceipt, PlannedChange, WriteIssue, WriteReceipt, WriteRequest } from "./write-types.ts";
 export const MUTATION_LOCK = "mutation.lock";
@@ -188,7 +188,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     const identity = lstatSync(root);
     // The identity every later commit check uses must still be the bound root, not a directory swapped in meanwhile.
     if (options.binding && (Number(identity.dev) !== options.binding.dev || Number(identity.ino) !== options.binding.ino)) refuse("VAULT_DRIFT", "vault root changed since the run started; nothing written");
-    fingerprint = sha256(canonical({ input, vault, policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], piiSurface: options.piiSurface ?? "notes" }, root, identity: [identity.dev, identity.ino], files: [...notes].map(([path, text]) => [path, sha256(text)]), changes: receipts(changes) }));
+    fingerprint = sha256(canonical({ input, vault: mutationVault(vault), policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], piiSurface: options.piiSurface ?? "notes" }, root, identity: [identity.dev, identity.ino], files: [...notes].map(([path, text]) => [path, sha256(text)]), changes: receipts(changes) }));
     if (twoStep && request.confirm === true && (typeof request.fingerprint !== "string" || request.fingerprint !== fingerprint)) refuse("V09", "stale or missing preview fingerprint");
     if (issues.some(issue => issue.severity === "error")) return result = { ok: false, applied: false, issues, changes: receipts(changes), fingerprint, indexUpdated: false };
     if (preview) return result = { ok: true, applied: false, preview: true, ...(request.operation.op === "link" && !changes.length ? {unchanged:true} : {}), issues, changes: receipts(changes), fingerprint, indexUpdated: false };

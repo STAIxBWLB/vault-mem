@@ -1,3 +1,4 @@
+import { canonRowsForVault, matchCanonRows, type CanonRowIndex, type CanonRowMatch } from "./canon-tables.ts";
 import { domainProblem } from "./config.ts";
 import { localDate } from "./local-date.ts";
 import { createHash } from "node:crypto";
@@ -40,6 +41,10 @@ export interface OrgPromoteResult {
   target: string | null;
   text?: string;
   droppedLinks?: string[];
+  /** Target-vault advisory data, excluded from the promotion fingerprint. */
+  canonRowMatches?: CanonRowMatch[];
+  canonTableWarnings?: string[];
+  choices?: string[];
   screen: { passed: boolean; issues: WriteIssue[] };
   fingerprint?: string;
   issues: WriteIssue[];
@@ -119,13 +124,13 @@ export function dropUnresolvedLinks(body: string, resolves: (target: string) => 
 }
 
 /** Target-vault facts read once from its index: link resolution (path stems only, as Obsidian resolves), MOCs and existing paths. */
-function targetFacts(home: string, spec: VaultSpec, all: VaultSpec[], links: string[], targetPath: string): { resolved: Set<string>; mocs: Set<string>; exists: boolean } {
+function targetFacts(home: string, spec: VaultSpec, all: VaultSpec[], links: string[], targetPath: string, denyPaths: string[] = []): { resolved: Set<string>; mocs: Set<string>; exists: boolean; canon?: CanonRowIndex } {
   const index = new VaultIndex(home, spec, all.map(v => v.path));
   try {
     index.scan();
     const targets = index.linkTargets(), resolved = new Set([...new Set(links)].map(linkKey).filter(key => targets.has(key)));
     // Path existence is checked without alias lookup, so another note's alias cannot hide the target.
-    return { resolved, mocs: new Set(index.mocs(500).map(moc => linkKey(moc.path))), exists: targets.has(linkKey(targetPath)) };
+    return { resolved, mocs: new Set(index.mocs(500).map(moc => linkKey(moc.path))), exists: targets.has(linkKey(targetPath)), ...(spec.canonTables !== undefined ? { canon: canonRowsForVault(index, spec, denyPaths) } : {}) };
   } finally { index.close(); }
 }
 function readSource(spec: VaultSpec, path: string): string {
@@ -195,7 +200,8 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   const topics = (request.topics ?? strings(parsed.data.topics)).map(value => value.startsWith("[[") ? value : `[[${value}]]`);
   const bodyLinks = [...parsed.body.matchAll(/\[\[([^\]\n|#]+)/g)].map(match => match[1]!.trim());
   const fieldLinks = ["project", "superseded_by", "supersedes", "source_ref"].flatMap(key => strings(parsed.data[key]).filter(value => value.includes("[[")).map(linkKey));
-  const targetNotes = targetFacts(home, target, all, [...bodyLinks, ...fieldLinks], targetPath);
+  const targetNotes = targetFacts(home, target, all, [...bodyLinks, ...fieldLinks], targetPath, config.denyPaths ?? []);
+  if (targetNotes.canon?.warnings.length) result.canonTableWarnings = [...targetNotes.canon.warnings];
   // The org note is never overwritten; a repeat promotion (--again) needs the earlier org copy moved or deleted first.
   if (targetNotes.exists) {
     // Recovery: an earlier confirm created this org note but the source provenance write failed.
@@ -240,6 +246,11 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   const provenanceText = emitFrontmatter(parsed, provenanceSet);
   const provenancePlan = applyWrite(home, { vault: source.id, operation: { op: "frontmatter", path, set: provenanceSet }, channel: request.channel ?? "cli", dryRun: true }, { env: options.env, binding: bindings.source, now });
   result.fingerprint = sha({ target: planned.fingerprint, source: provenancePlan.fingerprint, text, provenanceText });
+  if (targetNotes.canon !== undefined) {
+    const matches = planned.ok ? matchCanonRows(targetNotes.canon, `${String(parsed.data.title ?? "")}\n${parseFrontmatter(text).body}`) : [];
+    result.canonRowMatches = matches;
+    if (matches.length) result.choices = [...new Set(matches.map(row => `link-existing ${row.path}`))];
+  }
   // Org lint runs on the preview too (the note overlaid on the org snapshot), so a note that would fail lint is never written.
   const previewLint = lintPromoted(home, target, targetPath, text);
   result.lint = previewLint;

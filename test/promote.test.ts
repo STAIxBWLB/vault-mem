@@ -14,6 +14,9 @@ import { runAsync } from "../src/cli.ts";
 import { serveMcp } from "../src/mcp.ts";
 import { createVaultMcp } from "../src/mcp-vault.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
+import { CONFIG_FILE, type CanonTableSpec } from "../src/config.ts";
+import { renderPromote } from "../src/write-output.ts";
+import { PLAIN } from "../src/text-output.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -34,6 +37,77 @@ async function fixture(options: { generation?: boolean } = {}) {
   const meta = { type: "decision", domain: "research", topics: ["storage"], stem: "explicit-generation-witnesses" };
   return { root, memoryDir, home, vault, id, other, env, meta, run: (args: string[]) => runAsync(args, env) };
 }
+
+function configureCanonTables(home: string, tables: CanonTableSpec[] | undefined) {
+  const file = join(home, CONFIG_FILE), config = JSON.parse(readFileSync(file, "utf8"));
+  config.version = 4;
+  if (tables === undefined) delete config.vaults[0].canonTables;
+  else config.vaults[0].canonTables = tables;
+  writeFileSync(file, JSON.stringify(config));
+}
+const canonTable = (rows: string[]) => `---\ntype: moc\ndescription: Synthetic canonical entity directory.\n---\n# Canonical directory\n\n| Key | Detail |\n| --- | --- |\n${rows.join("\n")}\n`;
+
+test("#167 AC1/AC3/AC5 canonical acronym and person rows add advisory choices without changing confirmation", async () => {
+  const f = await fixture(), now = new Date(2026, 0, 2, 1), options = { env: f.env, project, now };
+  writeFileSync(join(f.vault, "notes/glossary.md"), canonTable(["| **ACME (Acme Labs)** | Synthetic organization. |"]));
+  writeFileSync(join(f.vault, "notes/people.md"), canonTable(["| `Mira North` / Mira N | Synthetic researcher. |"]));
+  const request = { vault: "mine", id: f.id, ...f.meta, title: "ACME navigation", body: "# ACME navigation\n\nAcme Labs works with mira north.\n\n## Topics\n\n- [[storage]]\n" };
+  const baseline = await promoteFromAmem(f.home, request, options);
+  configureCanonTables(f.home, [{ path: "notes/glossary.md" }, { path: "notes/people.md" }]);
+  const preview = await promoteFromAmem(f.home, request, options);
+  expect(preview).toMatchObject({ ok: true, preview: true, applied: false });
+  expect(preview.canonRowMatches).toEqual([
+    expect.objectContaining({ path: "notes/people.md", key: "Mira North", row: "| `Mira North` / Mira N | Synthetic researcher. |" }),
+    expect.objectContaining({ path: "notes/glossary.md", key: "Acme Labs", row: "| **ACME (Acme Labs)** | Synthetic organization. |" }),
+  ]);
+  expect(preview.choices).toEqual(["create", "link-existing notes/people.md", "link-existing notes/glossary.md"]);
+  expect(preview.fingerprint).toBe(baseline.fingerprint);
+  expect(renderPromote(preview, PLAIN, { argv: ["promote-from-amem", "mine", f.id], positional: ["mine", f.id] })).toContain("canonical rows:");
+  configureCanonTables(f.home, undefined);
+  expect((await promoteFromAmem(f.home, request, options)).fingerprint).toBe(baseline.fingerprint);
+  configureCanonTables(f.home, [{ path: "notes/glossary.md" }, { path: "notes/people.md" }]);
+  const confirmed = await promoteFromAmem(f.home, { ...request, confirm: true, fingerprint: baseline.fingerprint }, options);
+  expect(confirmed).toMatchObject({ ok: true, applied: true, canonRowMatches: preview.canonRowMatches });
+  expect(readFileSync(join(f.vault, preview.path!), "utf8")).toBe(preview.text!);
+}, 30_000);
+
+test("#167 AC2 absent canonTables preserves the baseline JSON and text golden", async () => {
+  const f = await fixture(), preview = await promoteFromAmem(f.home, { vault: "mine", id: f.id, ...f.meta }, { env: f.env, project, now: new Date(2026, 0, 2, 1) });
+  const normalized = JSON.parse(JSON.stringify(preview).replaceAll(f.id, "entry-id").replace(preview.fingerprint!, "fingerprint"));
+  const text = ["---", '"title": "Prefer explicit generation witnesses"', '"description": "Explicit generation witnesses keep immutable identity stable across rebuilds."', '"type": "decision"', '"domain": "research"', '"topics": ["[[storage]]"]', '"promoted_from": "mem:entry-id"', '"promoted_at": "2026-01-02"', '"updated": "2026-01-02"', '"created": "2026-01-02"', "---", "# Prefer explicit generation witnesses", "", "Explicit generation witnesses keep immutable identity stable across rebuilds.", "", "## Relevant Notes", "", "- path:src/storage.ts", "", "## Topics", "", "- [[storage]]", ""].join("\n");
+  expect(JSON.stringify(normalized)).toBe(JSON.stringify({ ok: true, action: "create", applied: false, id: "entry-id", path: "notes/explicit-generation-witnesses.md", issues: [], text, fingerprint: "fingerprint", linked: null, preview: true }));
+  expect(renderPromote(normalized, PLAIN, { argv: ["promote-from-amem", "mine", "entry-id"], positional: ["mine", "entry-id"] })).toBe([
+    "dry run: would create notes/explicit-generation-witnesses.md from mem:entry-id", "", `draft: ${Buffer.byteLength(text)} bytes; --json shows the text, --edit opens it in $EDITOR`, "", "confirm: vmem promote-from-amem mine entry-id --confirm --fingerprint fingerprint",
+  ].join("\n"));
+});
+
+test("#167 unavailable and denied absent canonical notes are nonblocking advisory inputs", async () => {
+  const f = await fixture(), options = { env: f.env, project, now: new Date(2026, 0, 2, 1) };
+  configureCanonTables(f.home, [{ path: "notes/absent.md" }, { path: "notes/denied.md" }]);
+  const file = join(f.home, CONFIG_FILE), config = JSON.parse(readFileSync(file, "utf8"));
+  config.denyPaths = [join(f.vault, "notes/denied.md")]; writeFileSync(file, JSON.stringify(config));
+  const request = { vault: "mine", id: f.id, ...f.meta, body: "# Synthetic navigation\n\nACME context.\n\n## Topics\n\n- [[storage]]\n" };
+  const result = await promoteFromAmem(f.home, request, options);
+  expect(result).toMatchObject({ ok: true, preview: true, applied: false, canonRowMatches: [] });
+  expect(result).not.toHaveProperty("choices");
+  expect(result.canonTableWarnings).toHaveLength(2);
+  expect(result.canonTableWarnings).toContainEqual(expect.stringMatching(/canonTables: notes\/absent\.md not read \([^)]*(?:missing|unavailable|absent)[^)]*\)/i));
+  expect(result.canonTableWarnings).toContainEqual(expect.stringMatching(/canonTables: notes\/denied\.md not read \([^)]*denied[^)]*\)/i));
+  for (const warning of result.canonTableWarnings!) expect(warning).toMatch(/restore|check|repair|remove|fix/i);
+  expect(result.issues).toEqual([]);
+  const done = await promoteFromAmem(f.home, { ...request, confirm: true, fingerprint: result.fingerprint }, options);
+  expect(done).toMatchObject({ ok: true, applied: true, canonTableWarnings: result.canonTableWarnings });
+  const linked = await promoteFromAmem(f.home, request, options);
+  expect(linked).toMatchObject({ ok: true, action: "link", preview: true, alreadyLinked: true, canonTableWarnings: result.canonTableWarnings });
+});
+
+test("#167 AC6 promotion previews 2000 canonical rows within its existing test budget", async () => {
+  const f = await fixture();
+  writeFileSync(join(f.vault, "notes/glossary.md"), canonTable(Array.from({ length: 2000 }, (_, index) => `| TERM${String(index).padStart(4, "0")} | Synthetic entity ${index}. |`)));
+  configureCanonTables(f.home, [{ path: "notes/glossary.md" }]);
+  const result = await promoteFromAmem(f.home, { vault: "mine", id: f.id, ...f.meta, body: "# Synthetic navigation\n\nTERM1999 is relevant.\n\n## Topics\n\n- [[storage]]\n" }, { env: f.env, project, now: new Date(2026, 0, 2, 1) });
+  expect(result).toMatchObject({ ok: true, preview: true, applied: false, canonRowMatches: [expect.objectContaining({ path: "notes/glossary.md", key: "TERM1999" })] });
+}, 30_000);
 
 test("AC1 promotion uses one local date and its preview text is exactly the written note", async () => {
   const f = await fixture(), now = new Date(2026, 0, 2, 1), options = { env: f.env, project, now };
