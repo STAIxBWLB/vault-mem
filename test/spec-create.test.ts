@@ -36,6 +36,98 @@ function refused(f: ReturnType<typeof fixture>, result: SpecWriteResult, code: s
   expect(existsSync(join(f.repo, path))).toBe(false);
   expect(existsSync(join(f.repo, "new"))).toBe(false);
 }
+function stageAncestorIndex(f: ReturnType<typeof fixture>, input: string): void {
+  const argv = memoryGitArgv(["-C", f.repo, "update-index", "--index-info"]);
+  const child = spawnSync(argv[0]!, argv.slice(1), { input, env: memoryGitEnv(f.env, { repositoryIsolation: true }), timeout: 10000, maxBuffer: 65536 });
+  expect(child.error).toBeUndefined(); expect(child.status, child.stderr.toString()).toBe(0);
+}
+interface AncestorLookupResult {
+  result: SpecWriteResult;
+  lookups: { ancestors: string[]; matched: boolean; bytes: number; records: number; phase: string }[];
+  rootChecks: number; ignoreChecks: number; injected: boolean;
+}
+function ancestorLookup(f: ReturnType<typeof fixture>, mode: string, path: string): AncestorLookupResult {
+  const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-create-ancestor-lookup.ts"), f.home, mode, path], { env: { ...process.env, ...f.env }, stdout: "pipe", stderr: "pipe", timeout: 20000 });
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  return JSON.parse(child.stdout.toString()) as AncestorLookupResult;
+}
+
+for (const path of ["src/new/deep/SPEC.md", "src/[branch]*?/new/SPEC.md"]) test(`create ${path} streams native index records once per write stage with compact ancestor results`, () => {
+  const f = fixture(), blob = f.git(["rev-parse", "HEAD:source.ts"]);
+  // A native sparse index supplies many siblings without creating working files.
+  // The real stream must handle more than a buffered lookup's 64 KiB of rows.
+  stageAncestorIndex(f, Array.from({ length: 2000 }, (_, index) => `100644 ${blob}\tsrc/branch-${String(index).padStart(4, "0")}.ts\n`).join(""));
+  const output = ancestorLookup(f, "observe", path);
+  expect(output.result).toMatchObject({ ok: true, changed: true, path });
+  expect(output.lookups).toHaveLength(3);
+  expect(output.lookups.map(lookup => lookup.phase)).toEqual(["initial", "locked", "publication"]);
+  for (const lookup of output.lookups) {
+    expect(lookup.matched).toBe(false);
+    expect(lookup.bytes).toBeGreaterThan(64 * 1024); expect(lookup.records).toBeGreaterThanOrEqual(2000);
+  }
+  expect(output.rootChecks).toBe(3); expect(output.ignoreChecks).toBe(3);
+  expect(existsSync(join(f.repo, path))).toBe(true);
+  expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
+}, 30_000);
+
+for (const mode of ["late-gitlink", "late-nested-repo"]) test(`create rechecks ${mode} only after staging and preserves external metadata on refusal`, () => {
+  const f = fixture(), path = "src/new/deep/SPEC.md", before = readFileSync(join(f.repo, "SPEC.md"));
+  const output = ancestorLookup(f, mode, path);
+  expect(output.injected).toBe(true);
+  expect(output.lookups.map(lookup => lookup.phase)).toEqual(["initial", "locked", "publication"]);
+  expect(output.result).toMatchObject({ ok: false, changed: false, path });
+  expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "PATH", message: expect.stringMatching(/nested repository|gitlink/) }));
+  expect(existsSync(join(f.repo, path))).toBe(false);
+  expect(existsSync(join(f.repo, "src/new/deep"))).toBe(false);
+  expect(readFileSync(join(f.repo, "SPEC.md"))).toEqual(before);
+  expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
+  if (mode === "late-gitlink") expect(f.git(["ls-files", "--stage", "--", "src/new"])).toMatch(/^160000 /);
+  else {
+    expect(existsSync(join(f.repo, "src/new/.git"))).toBe(true);
+    expect(f.git(["rev-parse", "--show-toplevel"], join(f.repo, "src/new"))).toBe(join(f.repo, "src/new"));
+  }
+}, 30_000);
+
+for (const ancestor of ["가나다라마바사아자차카타파", "ÉéÁáÑñÜüÇçÔôÀ"]) test(`create accepts long Unicode ancestor ${ancestor} without variant-product expansion`, () => {
+  const f = fixture(), path = `${ancestor}/new/SPEC.md`;
+  const output = ancestorLookup(f, "observe", path);
+  expect(output.result).toMatchObject({ ok: true, changed: true, path });
+  expect(output.lookups.map(lookup => lookup.phase)).toEqual(["initial", "locked", "publication"]);
+  expect(output.lookups.every(lookup => !lookup.matched)).toBe(true);
+  expect(existsSync(join(f.repo, path))).toBe(true);
+  expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
+}, 30_000);
+
+test("streaming Git index output limit identifies the gitlink scan and a practical next step", () => {
+  const f = fixture(), path = "src/new/deep/SPEC.md", output = ancestorLookup(f, "overflow", path);
+  expect(output.result).toMatchObject({ ok: false, changed: false, path });
+  expect(output.result.issues[0]!.code).toBe("LIMIT");
+  const message = output.result.issues[0]!.message;
+  expect(message).toContain("gitlink"); expect(message).toContain("output limit");
+  expect(message).toMatch(/inspect.*index|reduce.*index/i);
+  expect(message).not.toContain("SPEC.md paths more specific");
+  expect(existsSync(join(f.repo, "src"))).toBe(false);
+  expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
+}, 30_000);
+
+for (const [indexed, requested] of [
+  ["Vendor/Café", "vendor/café/new/SPEC.md"], ["Vendor/Café", "vendor/CAFÉ/new/SPEC.md"],
+  ["Café/Café", "Café/Café/new/SPEC.md"], ["Café/Café", "Café/Café/new/SPEC.md"],
+  ["Café-Café", "Café-Café/new/SPEC.md"],
+] as const) test(`create refuses missing gitlink ${indexed} through canonical Unicode and case alias ${requested}`, () => {
+  const f = fixture(), commit = f.git(["rev-parse", "HEAD"]);
+  stageAncestorIndex(f, `160000 ${commit}\t${indexed}\n`);
+  expect(existsSync(join(f.repo, indexed))).toBe(false);
+  const output = ancestorLookup(f, "observe", requested);
+  expect(output.result).toMatchObject({ ok: false, changed: false, path: requested });
+  expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "PATH", message: expect.stringContaining("gitlink") }));
+  expect(output.lookups).toHaveLength(1);
+  expect(output.lookups[0]!).toMatchObject({ matched: true, phase: "initial" });
+  expect(output.lookups[0]!.records).toBeGreaterThanOrEqual(1);
+  expect(output.lookups[0]!.bytes).toBeGreaterThan(0);
+  expect(existsSync(join(f.repo, requested.split("/")[0]!))).toBe(false);
+  expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
+}, 30_000);
 
 test("AC8: create orders metadata, defaults draft, writes LF headings only and leaves an untracked file", () => {
   const f = fixture(), head = f.git(["rev-parse", "HEAD"]), refs = f.git(["for-each-ref"]);
@@ -56,14 +148,9 @@ test("AC8: create orders metadata, defaults draft, writes LF headings only and l
 
 test("create counts skipped Git-listed Markdown at the discovery cap and preserves readable sources", () => {
   const f = fixture(), blob = f.git(["rev-parse", "HEAD:source.ts"]);
-  const indexInfo = (input: string) => {
-    const argv = memoryGitArgv(["-C", f.repo, "update-index", "--index-info"]);
-    const child = spawnSync(argv[0]!, argv.slice(1), { input, env: memoryGitEnv(f.env, { repositoryIsolation: true }), timeout: 10000, maxBuffer: 65536 });
-    expect(child.error).toBeUndefined(); expect(child.status, child.stderr.toString()).toBe(0);
-  };
   // Native Git lists 10,000 Markdown inputs; only SPEC.md exists on disk.
   // The absent entries reuse one existing blob, avoiding 10,000 fixture files.
-  indexInfo(Array.from({ length: MAX_SPEC_MARKDOWN_PATHS - 1 }, (_, index) => `100644 ${blob}\tordinary-${String(index).padStart(4, "0")}.md\n`).join(""));
+  stageAncestorIndex(f, Array.from({ length: MAX_SPEC_MARKDOWN_PATHS - 1 }, (_, index) => `100644 ${blob}\tordinary-${String(index).padStart(4, "0")}.md\n`).join(""));
   const before = discoverSpecs(f.source, { env: f.env });
   expect(before.markdownPaths).toHaveLength(MAX_SPEC_MARKDOWN_PATHS);
   expect(before.specs.map(spec => spec.id)).toEqual(["root"]);
@@ -75,7 +162,7 @@ test("create counts skipped Git-listed Markdown at the discovery cap and preserv
   expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
   expect(executeSpecCommand(f.home, "get", { id: "root" }, f.env)).toMatchObject({ path: "SPEC.md", frontmatter: { id: "root" } });
   // Replacing an already-counted absent input consumes no additional slot.
-  indexInfo(`0 ${"0".repeat(blob.length)}\tordinary-0000.md\n100644 ${blob}\tnew/deep/SPEC.md\n`);
+  stageAncestorIndex(f, `0 ${"0".repeat(blob.length)}\tordinary-0000.md\n100644 ${blob}\tnew/deep/SPEC.md\n`);
   expect(f.create()).toMatchObject({ ok: true, changed: true, path: "new/deep/SPEC.md" });
   const after = discoverSpecs(f.source, { env: f.env });
   expect(after.markdownPaths).toHaveLength(MAX_SPEC_MARKDOWN_PATHS);

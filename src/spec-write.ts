@@ -12,6 +12,7 @@ import { introducedSpecErrors, type SpecValidationIssue } from "./spec-validate.
 import { MAX_NOTE_BYTES } from "./vault-index.ts";
 import { screenContent, screenMetadata } from "./write-validation.ts";
 import { specGit } from "./spec-git.ts";
+import { specGitlinkAncestors } from "./spec-gitlinks.ts";
 import { buildSpecGraph, type SpecEdge, type SpecNode } from "./spec-graph.ts";
 
 export const SPEC_UPDATE_SCALAR_FIELDS = ["title", "type", "status", "parent", "superseded-by", "verified-against"] as const;
@@ -93,24 +94,26 @@ function readBounded(file: string, path: string, operation: SpecWriteOperation):
 
 function readPlain(root: string, path: string, denyPaths: string[], operation: SpecWriteOperation) { return readBounded(plainPath(root, path, denyPaths, operation), path, operation); }
 
-/** The prospective file must belong to the same tree that discovery will scan. */
-function guardCreateRepository(root: string, path: string, ancestors: string[], deepest: string, env: NodeJS.ProcessEnv): void {
+/** Once per create stage; filesystem-only checks remain safe to repeat during mkdir. */
+function guardCreateRepository(root: string, change: SpecMutation, denyPaths: string[], env: NodeJS.ProcessEnv): void {
+  if (change.before !== null) return;
+  const path = change.path, { deepest, parts } = createPath(root, path, denyPaths);
+  const ancestors = parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/"));
   if (ancestors.length) {
-    const physical = new Set(ancestors.map(ancestor => canonicalPath(join(root, ancestor))));
-    // The first component covers every indexed ancestor, including missing gitlink workdirs.
-    const spellings = new Set(ancestors.slice(0, 1).flatMap(ancestor => [ancestor, relative(root, canonicalPath(join(root, ancestor))).split(sep).join("/")]).flatMap(ancestor => [ancestor, ancestor.normalize("NFC"), ancestor.normalize("NFD")]));
-    const entries = specGit(root, ["ls-files", "--stage", "-z", "--", ...[...spellings].map(ancestor => `:(icase,literal)${ancestor}`)], { env, maxBuffer: 16 * 1024 * 1024 }).stdout.toString("utf8").split("\0");
-    for (const entry of entries) {
-      const tab = entry.indexOf("\t");
-      if (entry.startsWith("160000 ") && tab >= 0 && physical.has(canonicalPath(join(root, entry.slice(tab + 1))))) refuse("PATH", "spec path crosses a submodule gitlink; create the spec in that repository's own source", path);
+    try {
+      if (specGitlinkAncestors(root, ancestors, env).matched) refuse("PATH", "spec path crosses or aliases a submodule gitlink; create the spec in that repository's own source", path);
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "LIMIT") refuse("LIMIT", (error as Error).message, path);
+      throw error;
     }
   }
   const top = specGit(canonicalPath(deepest), ["rev-parse", "--show-toplevel"], { env }).stdout.toString("utf8").replace(/\r?\n$/, "");
   if (canonicalPath(top) !== root) refuse("PATH", "spec path crosses into a nested repository; create the spec in that repository's own source", path);
+  if (specGit(root, ["check-ignore", "--quiet", "--no-index", "--", `./${path}`], { env, allowedExitCodes: [0, 1] }).status === 0) refuse("PATH", "spec path is git-ignored; choose a non-ignored path or adjust the ignore policy before retrying the create", path);
 }
 
 /** Missing parent directories are allowed; every existing component must be plain. Never follows a dangling link. */
-function createPath(root: string, path: string, denyPaths: string[], env: NodeJS.ProcessEnv): string {
+function createPath(root: string, path: string, denyPaths: string[]): { file: string; deepest: string; parts: string[] } {
   const parts = pathParts(path);
   if (lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory()) refuse("PATH", "worktree root changed; restore the original plain root and retry", path);
   let file = root, deepest = root;
@@ -124,29 +127,27 @@ function createPath(root: string, path: string, denyPaths: string[], env: NodeJS
     deepest = file;
   }
   if (deniedSpecPath(file, denyPaths)) refuse("PATH", "spec create path is denied; choose an allowed path and retry the create", path);
-  guardCreateRepository(root, path, parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/")), deepest, env);
-  if (specGit(root, ["check-ignore", "--quiet", "--no-index", "--", `./${path}`], { env, allowedExitCodes: [0, 1] }).status === 0) refuse("PATH", "spec path is git-ignored; choose a non-ignored path or adjust the ignore policy before retrying the create", path);
-  return file;
+  return { file, deepest, parts };
 }
-function readMutation(root: string, change: SpecMutation, denyPaths: string[], env: NodeJS.ProcessEnv, operation: SpecWriteOperation): { source: string | null; mode: number; identity: string | null } {
+function readMutation(root: string, change: SpecMutation, denyPaths: string[], operation: SpecWriteOperation): { source: string | null; mode: number; identity: string | null } {
   if (change.before !== null) return readPlain(root, change.path, denyPaths, operation);
-  createPath(root, change.path, denyPaths, env);
+  createPath(root, change.path, denyPaths);
   return { source: null, mode: 0o666 & ~process.umask(), identity: null };
 }
-function ensureCreateParents(root: string, path: string, denyPaths: string[], env: NodeJS.ProcessEnv, owned: Map<string, string>): void {
+function ensureCreateParents(root: string, path: string, denyPaths: string[], owned: Map<string, string>): void {
   let parent = root;
   for (const part of pathParts(path).slice(0, -1)) {
-    createPath(root, path, denyPaths, env);
+    createPath(root, path, denyPaths);
     parent = join(parent, part);
     try { mkdirSync(parent, { mode: 0o777 & ~process.umask() }); owned.set(parent, identity(parent)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   }
-  createPath(root, path, denyPaths, env);
+  createPath(root, path, denyPaths);
 }
-function prepareMutationTarget(root: string, change: SpecMutation, denyPaths: string[], env: NodeJS.ProcessEnv, owned: Map<string, string>): string {
+function prepareMutationTarget(root: string, change: SpecMutation, denyPaths: string[], owned: Map<string, string>): string {
   if (change.before !== null) return plainPath(root, change.path, denyPaths);
-  ensureCreateParents(root, change.path, denyPaths, env, owned);
-  return createPath(root, change.path, denyPaths, env);
+  ensureCreateParents(root, change.path, denyPaths, owned);
+  return createPath(root, change.path, denyPaths).file;
 }
 function checkExpectedSha(change: SpecMutation, expectedSha: string | undefined): void {
   if (expectedSha !== undefined && (change.before === null || !/^[a-f0-9]{64}$/.test(expectedSha) || hash(change.before) !== expectedSha)) refuse("EXPECTED_SHA", "expectedSha does not match the spec; reread vmem spec get and retry with its sha256", change.path);
@@ -270,12 +271,13 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     const startup = guardSpecWrite(home, request, context, undefined, guard => {
       result.source = guard.source.id; result.worktree = guard.root;
       initial = discoverSpecs(guard.source, { worktree: guard.root, env }); commonIdentity = identity(initial.commonDir); first = plan(initial);
-      result.path = first.path; const firstRead = readMutation(guard.root, first, guard.config.denyPaths ?? [], env, operation);
+      result.path = first.path; const firstRead = readMutation(guard.root, first, guard.config.denyPaths ?? [], operation);
       if (firstRead.source !== first.before) refuse("DRIFT", `spec ${operation} changed during its initial read; ${retrySpecOperation(operation)}`, first.path);
       return first.path;
     });
     const { config, source, root, homeRoot } = startup;
     guardCreateDiscoveryBudget(initial, first);
+    guardCreateRepository(root, first, config.denyPaths ?? [], env);
     const assertBinding = () => {
       if (lockFile && lockIdentity !== undefined && identity(lockFile) !== lockIdentity) refuse("LOCKED", `spec mutation lock changed ownership; inspect the lock under VMEM_HOME and wait for the other writer, then ${retrySpecOperation(operation)}`, result.path);
       guardSpecWrite(home, request, context, startup);
@@ -302,9 +304,10 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     const current = discoverSpecs(source, { worktree: root, env }), change = plan(current);
     checkDeletionConfirmation(change);
     if (current.commonDir !== initial.commonDir || identity(initial.commonDir) !== commonIdentity || change.path !== first.path || change.before !== first.before) refuse("DRIFT", `spec ${operation} changed since the request read; ${retrySpecOperation(operation)}`, first.path);
-    const original = readMutation(root, change, config.denyPaths ?? [], env, operation);
+    const original = readMutation(root, change, config.denyPaths ?? [], operation);
     if (original.source !== change.before) refuse("DRIFT", `spec ${operation} changed under the mutation lock; ${retrySpecOperation(operation)}`, change.path);
     guardCreateDiscoveryBudget(current, change);
+    guardCreateRepository(root, change, config.denyPaths ?? [], env);
     const prospective = prospectiveSpecSnapshot(current, new Map([[change.path, change.after]]));
     screenMutation(change, source, config, operation);
     const introduced = introducedSpecErrors(current, prospective, { env }, allowedDeleteLinks(current, change));
@@ -312,20 +315,21 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     if (change.after === null) {
       assertBinding();
       if (!isDeepStrictEqual(discoverSpecs(source, { worktree: root, env }), current)) refuse("DRIFT", `spec tree changed while validating deletion; ${retrySpecOperation(operation)}`, change.path);
-      const latest = readMutation(root, change, config.denyPaths ?? [], env, operation);
+      const latest = readMutation(root, change, config.denyPaths ?? [], operation);
       if (latest.source !== change.before || latest.identity !== original.identity) refuse("DRIFT", `spec changed before deletion; ${retrySpecOperation(operation)}`, change.path);
       const file = plainPath(root, change.path, config.denyPaths ?? [], operation);
       assertBinding();
       unlinkSync(file); result.changed = true; syncDirectory(dirname(file)); result.ok = true; return result;
     }
-    const file = prepareMutationTarget(root, change, config.denyPaths ?? [], env, createdDirs), parent = dirname(file), parentIdentity = identity(parent);
+    const file = prepareMutationTarget(root, change, config.denyPaths ?? [], createdDirs), parent = dirname(file), parentIdentity = identity(parent);
     const candidateTemp = join(parent, `.spec-${randomUUID()}.tmp`);
     const fd = openSync(candidateTemp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, original.mode);
     temp = candidateTemp;
     try { const stat = fstatSync(fd, { bigint: true }); tempIdentity = `${stat.dev}:${stat.ino}`; fchmodSync(fd, original.mode); writeFileSync(fd, change.after); fsyncSync(fd); } finally { closeSync(fd); }
     assertBinding();
     if (identity(parent) !== parentIdentity || !isDeepStrictEqual(discoverSpecs(source, { worktree: root, env }), current)) refuse("DRIFT", `spec tree changed while validating the ${operation}; ${retrySpecOperation(operation)}`, change.path);
-    const latest = readMutation(root, change, config.denyPaths ?? [], env, operation), staged = readBounded(temp, change.path, operation);
+    guardCreateRepository(root, change, config.denyPaths ?? [], env);
+    const latest = readMutation(root, change, config.denyPaths ?? [], operation), staged = readBounded(temp, change.path, operation);
     if (latest.source !== change.before || latest.identity !== original.identity || staged.source !== change.after || staged.identity !== tempIdentity) refuse("DRIFT", `spec ${operation} target or staged file changed before publication; ${retrySpecOperation(operation)}`, change.path);
     assertBinding();
     publishSpec(temp, file, change, result); temp = undefined;
