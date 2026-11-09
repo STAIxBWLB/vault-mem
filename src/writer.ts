@@ -12,7 +12,7 @@ import { VaultIndex, MAX_NOTE_BYTES, GRAMS_COLUMNS, gramPhrase, grams, splitTerm
 import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { moveSourcePath, notePath, planOperation, planMerge, stampContentChanges, refuse, WriteRefusal } from "./write-operations.ts";
-import { MAX_REPORT_BYTES, validateWrite } from "./write-validation.ts";
+import { MAX_REPORT_BYTES, createWriteValidator } from "./write-validation.ts";
 import type { PiiSurface } from "./config.ts";
 import { unenforceablePii, mutationVault } from "./config.ts";
 import type { LogBinding } from "./log-types.ts";
@@ -198,7 +198,8 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     const validation = { vault, config, notes, operation: request.operation, ...(options.piiSurface ? { piiSurface: options.piiSurface } : {}) };
     // Validate the caller's candidate first: replacing `updated` must not hide a
     // secret, oversized input or other refusal that existing validation catches.
-    const validate = (candidate: PlannedChange[]) => validateWrite(candidate, validation).map(issue => request.operation.op === "merge" && issue.severity === "error"
+    const validateCandidate = createWriteValidator(validation);
+    const validate = (candidate: PlannedChange[]) => validateCandidate(candidate).map(issue => request.operation.op === "merge" && issue.severity === "error"
       ? { ...issue, message: `${issue.message}; repair the indicated notes or links, then request a fresh merge preview` } : issue);
     issues = validate(changes);
     if (!issues.some(issue => issue.severity === "error")) {

@@ -75,7 +75,7 @@ test("AC1 patch stamps updated without synthesizing created on an existing note"
   expect(after.body).toContain("Dated replacement.");
 });
 
-for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} stamps a valid flow-mapping header without changing metadata or unrelated body bytes`, () => {
+for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} preserves a non-editable flow header with a warning and unchanged metadata bytes`, () => {
   const f = fixture(), file = join(f.notes, "old.md"), newline = operation === "patch" ? "\r\n" : "\n";
   const metadata = { title: "Flow Header", description: "Synthetic flow metadata evidence.", type: "insight", domain: "research", topics: ["[[research]]"], aliases: ["Flow Alias"], created: "legacy flow creation", updated: "2026-01-01" };
   const body = ["# Flow Header", "", "Original flow text.", "", "## Topics", "", "- [[research]]", ""].join(newline);
@@ -86,7 +86,9 @@ for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} sta
     : { op: "append", path: "old", section: "Evidence", markdown: "Added flow evidence." });
   expect(result).toMatchObject({ ok: true, applied: true });
   const text = readFileSync(file, "utf8"), after = parseFrontmatter(text);
-  expect(after.data).toEqual({ ...metadata, updated: contentDate });
+  expect(after.data).toEqual(metadata);
+  expect(after.frontmatter).toBe(parseFrontmatter(original).frontmatter);
+  expect(result.issues).toContainEqual(expect.objectContaining({ code: "V01", severity: "warning", message: expect.stringMatching(/cannot be edited in place.*comments or formatting/) }));
   expect(after.body).toBe(operation === "patch" ? body.replace("Original flow text.", "Changed flow text.") : body.replace("## Topics", "## Evidence\n\nAdded flow evidence.\n\n## Topics"));
   expect(Buffer.from(text).subarray(0, 3)).toEqual(Buffer.from(original).subarray(0, 3));
   if (operation === "patch") expect(text.replaceAll("\r\n", "")).not.toContain("\n");
@@ -103,7 +105,7 @@ for (const [op, value] of [["patch", ".inf"], ["append", ".inf"], ["link", ".inf
     : { op, old: "old", next: "next" };
   const result = writeAtDate(f, operation);
   expect(result).toMatchObject({ ok: true, applied: true });
-  expect(result.issues).toContainEqual(expect.objectContaining({ code: "V01", severity: "warning", path: `notes/${path}.md`, message: expect.stringMatching(/content was saved.*automatic dates were not set.*cannot round-trip.*text editor.*block mapping.*updated/) }));
+  expect(result.issues).toContainEqual(expect.objectContaining({ code: "V01", severity: "warning", path: `notes/${path}.md`, message: expect.stringMatching(/content was saved.*automatic dates were not set.*cannot be edited in place.*text editor.*block mapping.*updated/) }));
   expect(result.issues.some(issue => issue.code === "IO")).toBe(false);
   const text = readFileSync(file, "utf8"); expect(text.startsWith(header)).toBe(true);
   expect(parseFrontmatter(text).data.updated).toBe("2026-01-01");
@@ -681,7 +683,7 @@ test("per-command help uses the usage table before parsing or loading a home", a
   expect(result.stderr.toString()).toBe("");
 });
 
-for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} date warning names a value mismatch without blaming absent aliases`, () => {
+for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} date warning names a non-editable header without blaming absent aliases`, () => {
   const f = fixture(), file = join(f.notes, "old.md");
   const fields = { title: "Flow Value", description: "Synthetic NEL value.", type: "insight", domain: "research", topics: ["[[research]]"], updated: "2026-01-01" };
   // ASCII YAML escape syntax deliberately tests a decoded NEL, not literal header text.
@@ -695,7 +697,7 @@ for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} dat
   expect(readFileSync(file, "utf8")).toBe(source);
   const result = writeAtDate(f, request); expect(result).toMatchObject({ ok: true, applied: true });
   const warning = result.issues.find(issue => issue.severity === "warning" && issue.message.includes("automatic dates"))!;
-  expect(warning.message).toMatch(/content was saved.*header could not be rewritten without changing a value.*text editor.*block mapping.*updated/);
+  expect(warning.message).toMatch(/content was saved.*header cannot be edited in place.*text editor.*block mapping.*updated/);
   expect(warning.message).not.toMatch(/alias|anchor|retry|repeat|rerun/i);
   const after = readFileSync(file, "utf8"); expect(after.startsWith(header)).toBe(true);
   expect(parseFrontmatter(after).data).toEqual(parseFrontmatter(source).data);
