@@ -131,8 +131,9 @@ export function stampNoteContent(source: string, today: string, create: boolean,
   const doc = parseFrontmatter(source);
   const dates = { updated: today, ...(create && !Object.hasOwn(doc.data, "created") ? { created: today } : {}) };
   const references = frontmatterReferences(doc);
-  const skipReferences = (cause: string) => {
-    warning?.(`automatic dates were not set: ${cause}; replace the alias with a literal value or repair the header, then retry the authored write`);
+  const skipStamp = (cause: string) => {
+    const repair = references.length ? "replace the alias with a literal value and remove any unused anchor" : "repair the header or replace the incompatible value with a supported literal";
+    warning?.(`automatic dates were not set: ${cause}; ${repair} through a frontmatter edit to stamp updated${create && !Object.hasOwn(doc.data, "created") ? " and explicitly set created" : ""}`);
     return source;
   };
   let candidate: string;
@@ -140,22 +141,21 @@ export function stampNoteContent(source: string, today: string, create: boolean,
   catch (error) {
     if (!(error instanceof Error) || error.message !== "frontmatter: editing requires a block mapping") throw error;
     // Canonicalizing a flow or merge-key header would erase its reference graph.
-    if (references.length) return skipReferences("rewriting this header would change YAML anchor/alias relationships");
+    if (references.length) return skipStamp("rewriting this header would change YAML anchor/alias relationships");
     const newline = /\r?\n/.exec(doc.frontmatter ?? "")?.[0] ?? "\n";
     try {
       const header = emitFrontmatter(parseFrontmatter(""), { ...doc.data, ...dates }).replaceAll("\n", newline);
       candidate = source.slice(0, source.indexOf("---")) + header + doc.body;
     } catch (cause) {
       if (!(cause instanceof Error) || cause.message !== "frontmatter: changed values must be JSON-compatible") throw cause;
-      warning?.("automatic dates were not set: the header contains values that cannot round-trip through JSON (such as .inf, .nan or -0); rewrite the header as an editable block mapping or replace those values, then retry to set updated (and missing created on create)");
-      return source;
+      return skipStamp("the header contains values that cannot round-trip through JSON (such as .inf, .nan or -0)");
     }
   }
   try {
     const stamped = parseFrontmatter(candidate);
-    if (!isDeepStrictEqual(references, frontmatterReferences(stamped))) return skipReferences("date emission would change YAML anchor/alias relationships");
-    if (!isDeepStrictEqual(stamped.data, { ...doc.data, ...dates })) return skipReferences("date emission would alter other metadata or YAML anchor/alias values");
-  } catch { return skipReferences("the stamped YAML header would not parse (an anchor or alias may have been removed)"); }
+    if (!isDeepStrictEqual(references, frontmatterReferences(stamped))) return skipStamp(references.length ? "date emission would change YAML anchor/alias relationships" : "the header could not be rewritten without changing its structure");
+    if (!isDeepStrictEqual(stamped.data, { ...doc.data, ...dates })) return skipStamp(references.length ? "date emission would alter metadata or YAML anchor/alias values" : "the header could not be rewritten without changing a value");
+  } catch { return skipStamp(references.length ? "the stamped YAML header would not parse after an anchor or alias changed" : "the stamped YAML header could not be parsed"); }
   return candidate;
 }
 /** Date authored content only; mechanical rewrites retain their existing freshness. */

@@ -128,6 +128,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
   const temps = new Set<string>(), createdDirs: string[] = [], committed: PlannedChange[] = [];
   let changes: PlannedChange[] = [], issues: WriteIssue[] = [], fingerprint: string | undefined, root = "", applied = false, indexUpdated = false;
   let result: WriteReceipt | undefined;
+  const dateWarnings: WriteIssue[] = [];
   const recordError = (code: string, message: string, path?: string) => issues.push({ code, severity: "error", message, ...(path ? { path } : {}) });
   try {
     if (!request || typeof request !== "object" || !request.operation || typeof request.operation !== "object" || typeof request.vault !== "string") refuse("V01", "invalid write request");
@@ -174,13 +175,12 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     // secret, oversized input or other refusal that existing validation catches.
     issues = validateWrite(changes, validation);
     if (!issues.some(issue => issue.severity === "error")) {
-      const stampIssues: WriteIssue[] = [];
-      const stamped = stampContentChanges(request.operation, changes, localDate(options.now), stampIssues);
+      const stamped = stampContentChanges(request.operation, changes, localDate(options.now), dateWarnings);
       if (stamped.some((change, index) => change.after !== changes[index]?.after) || stamped.length !== changes.length) {
         changes = stamped;
         issues = validateWrite(changes, validation);
       }
-      issues.push(...stampIssues);
+      issues.push(...dateWarnings);
       if (!issues.some(issue => issue.severity === "error")) issues.push(...duplicateWarnings(request, notes, changes));
     }
     // The log event is not part of the fingerprint: move/delete take it on the confirm call only.
@@ -287,6 +287,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       const possibleDuplicates = issues.filter(issue => issue.code === "V08" && issue.severity === "warning" && issue.path).map(issue => issue.path!);
       if (possibleDuplicates.length) result.possibleDuplicates = possibleDuplicates;
       if (issues.some(issue => issue.severity === "error")) result.ok = false;
+      if (result.ok && result.applied) for (const warning of dateWarnings) warning.message = `content was saved; ${warning.message}`;
     }
   }
   return result!;

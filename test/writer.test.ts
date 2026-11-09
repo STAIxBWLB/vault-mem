@@ -103,7 +103,7 @@ for (const [op, value] of [["patch", ".inf"], ["append", ".inf"], ["link", ".inf
     : { op, old: "old", next: "next" };
   const result = writeAtDate(f, operation);
   expect(result).toMatchObject({ ok: true, applied: true });
-  expect(result.issues).toContainEqual(expect.objectContaining({ code: "V01", severity: "warning", path: `notes/${path}.md`, message: expect.stringMatching(/automatic dates were not set.*cannot round-trip.*rewrite.*block mapping.*retry/) }));
+  expect(result.issues).toContainEqual(expect.objectContaining({ code: "V01", severity: "warning", path: `notes/${path}.md`, message: expect.stringMatching(/content was saved.*automatic dates were not set.*cannot round-trip.*frontmatter edit.*updated/) }));
   expect(result.issues.some(issue => issue.code === "IO")).toBe(false);
   const text = readFileSync(file, "utf8"); expect(text.startsWith(header)).toBe(true);
   expect(parseFrontmatter(text).data.updated).toBe("2026-01-01");
@@ -125,6 +125,8 @@ for (const operation of ["patch", "append"] as const) for (const [name, fields] 
   const warning = result.issues.find(issue => issue.code === "V01" && issue.severity === "warning" && /anchor|alias/i.test(issue.message));
   expect(warning).toMatchObject({ path: "notes/old.md" });
   expect(warning!.message).toContain("replace the alias with a literal value");
+  expect(warning!.message).toMatch(/content was saved.*frontmatter edit.*updated/);
+  expect(warning!.message).not.toMatch(/retry|repeat|rerun/i);
   expect(result.issues.some(issue => issue.code === "IO" || issue.severity === "error")).toBe(false);
   const text = readFileSync(file, "utf8");
   expect(text.startsWith(header)).toBe(true);
@@ -677,4 +679,25 @@ test("per-command help uses the usage table before parsing or loading a home", a
   expect(result.exitCode).toBe(0);
   expect(result.stdout.toString()).toContain("check <vault> <file|->");
   expect(result.stderr.toString()).toBe("");
+});
+
+for (const operation of ["patch", "append"] as const) test(`AC1 ${operation} date warning names a value mismatch without blaming absent aliases`, () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  const fields = { title: "Flow Value", description: "Synthetic NEL value.", type: "insight", domain: "research", topics: ["[[research]]"], updated: "2026-01-01" };
+  // ASCII YAML escape syntax deliberately tests a decoded NEL, not literal header text.
+  const header = `---\n${JSON.stringify(fields).replace("NEL", String.raw`\N`)}\n---\n`;
+  const source = header + "# Flow Value\n\nOriginal value text.\n\n## Topics\n\n- [[research]]\n";
+  writeFileSync(file, source);
+  const request: WriteOp = operation === "patch" ? { op: operation, path: "old", oldString: "Original value text.", newString: "Changed value text." } : { op: operation, path: "old", section: "Evidence", markdown: "Added value evidence." };
+  const preview = applyWrite(f.home, { vault: "test", operation: request, dryRun: true }, { now: contentNow });
+  expect(preview).toMatchObject({ ok: true, applied: false, preview: true });
+  expect(preview.issues.map(issue => issue.message).join(" ")).not.toContain("content was saved");
+  expect(readFileSync(file, "utf8")).toBe(source);
+  const result = writeAtDate(f, request); expect(result).toMatchObject({ ok: true, applied: true });
+  const warning = result.issues.find(issue => issue.severity === "warning" && issue.message.includes("automatic dates"))!;
+  expect(warning.message).toMatch(/content was saved.*header could not be rewritten without changing a value.*frontmatter edit.*updated/);
+  expect(warning.message).not.toMatch(/alias|anchor|retry|repeat|rerun/i);
+  const after = readFileSync(file, "utf8"); expect(after.startsWith(header)).toBe(true);
+  expect(parseFrontmatter(after).data).toEqual(parseFrontmatter(source).data);
+  expect(after).toContain(operation === "patch" ? "Changed value text." : "Added value evidence.");
 });
