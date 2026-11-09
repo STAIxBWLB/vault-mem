@@ -17,6 +17,11 @@ export interface AnalysisSnapshot {
    * takes own keys only; `lintVault` accepts snapshots other callers built as plain records.
    */
   linkHints?: Record<string, TitleSuggestion>;
+  /**
+   * Set only when the hint pass hit its text bound: the bound, the texts it attempted and how many it left out. A dead
+   * link text outside `attempted` was never looked up, so a reader reports "not computed" and never a miss.
+   */
+  linkHintBound?: { cap: number; attempted: readonly string[]; skipped: number };
 }
 export type LintCode = "L01" | "L02" | "L03" | "L09" | "L10" | "L11" | "L12" | "L13" | "L14" | "L15";
 export interface LintReport {

@@ -7,7 +7,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdir
 import { dirname, join, resolve } from "node:path";
 import { effectiveDomains, type VaultSpec, type VmemConfig } from "./config.ts";
 import type { AnalysisSnapshot } from "./analysis-types.ts";
-import { deadLinkTexts } from "./vault-lint.ts";
+import { deadLinkScan } from "./vault-lint.ts";
 import type { TitleSuggestion } from "./links.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry } from "./registry.ts";
@@ -83,9 +83,11 @@ export function analysisInput(home: string, id: string, options: { today?: strin
     if(options.hints){
       // A null prototype keeps the link text `__proto__` a stored key: on a plain object it would set the prototype,
       // drop the hint and leave the object answering inherited members.
-      const hints:Record<string,TitleSuggestion>=Object.create(null);
-      for(const text of deadLinkTexts(snapshot.notes)){const hint=index.suggestTitle(text);if(hint)hints[text]=hint;}
+      const hints:Record<string,TitleSuggestion>=Object.create(null),scan=deadLinkScan(snapshot.notes);
+      for(const text of scan.texts){const hint=index.suggestTitle(text);if(hint)hints[text]=hint;}
       if(Object.keys(hints).length)snapshot.linkHints=hints;
+      // Past the bound an unlooked-up text must not read as a miss, so the snapshot carries what the pass attempted.
+      if(scan.skipped)snapshot.linkHintBound={cap:scan.cap,attempted:scan.texts,skipped:scan.skipped};
     }
     return {vault,config,identity:{dev:Number(identity.dev),ino:Number(identity.ino)},snapshot};
   }

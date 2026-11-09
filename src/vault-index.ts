@@ -424,21 +424,27 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
   /**
    * The one indexed title closest to a dead link's text, or undefined when no title matches or the best match is at
    * or below `minimum`. Same literal AND terms as `search`, matched in the title column only, because a hint should
-   * name a note whose title actually carries the link text. The score is positive bm25, rounded to three decimals,
-   * so a larger value is a closer title. Read-only.
+   * name a note whose title actually carries the link text. A title must carry every part of the text: a CJK run
+   * matches through the bigram table and a Latin term through unicode61, and the two scores are summed, because a part
+   * that many titles share scores near zero on its own and would otherwise hide a title that carries the whole text.
+   * The score is positive bm25, rounded to three decimals, so a larger value is a closer title. Read-only.
    */
   suggestTitle(text: string, minimum = MIN_SUGGESTION_SCORE): TitleSuggestion | undefined {
     const query = text.trim();
     if (!query || Buffer.byteLength(query) > 512) return undefined;
     const { tokens, runs } = splitTerms(query.split(/\s+/));
     if (!tokens.length && !runs.length) return undefined;
-    // A CJK run matches only through the bigram table and a Latin term only through unicode61, so either can drive.
-    const row = runs.length
+    const gramQuery = `{title} : (${runs.map(gramPhrase).join(" AND ")})`, tokenQuery = `{title} : (${tokens.join(" AND ")})`;
+    const row = runs.length && tokens.length
+      ? this.db.query<TitleSuggestion, string[]>(`SELECT n.path, n.title, g.score + f.score AS score
+        FROM (SELECT path, -bm25(grams,0,5,2,1) AS score FROM grams WHERE grams MATCH ?) g
+        JOIN (SELECT path, -bm25(fts,0,5,2,1) AS score FROM fts WHERE fts MATCH ?) f ON f.path = g.path
+        JOIN notes n ON n.path = g.path ORDER BY score DESC, n.path LIMIT 1`).get(gramQuery, tokenQuery)
+      : runs.length
       ? this.db.query<TitleSuggestion, string[]>(`SELECT n.path, n.title, -bm25(grams,0,5,2,1) AS score FROM grams JOIN notes n ON n.path=grams.path
-        WHERE grams MATCH ?${tokens.length ? " AND n.path IN (SELECT path FROM fts WHERE fts MATCH ?)" : ""} ORDER BY score DESC, n.path LIMIT 1`)
-        .get(`{title} : (${runs.map(gramPhrase).join(" AND ")})`, ...(tokens.length ? [`{title} : (${tokens.join(" AND ")})`] : []))
+        WHERE grams MATCH ? ORDER BY score DESC, n.path LIMIT 1`).get(gramQuery)
       : this.db.query<TitleSuggestion, string[]>(`SELECT n.path, n.title, -bm25(fts,0,5,2,1) AS score FROM fts JOIN notes n ON n.path=fts.path
-        WHERE fts MATCH ? ORDER BY score DESC, n.path LIMIT 1`).get(`{title} : (${tokens.join(" AND ")})`);
+        WHERE fts MATCH ? ORDER BY score DESC, n.path LIMIT 1`).get(tokenQuery);
     if (!row || !(row.score > minimum)) return undefined;
     return { path: row.path, title: boundedText(row.title, 512).content, score: Math.round(row.score * 1000) / 1000 };
   }

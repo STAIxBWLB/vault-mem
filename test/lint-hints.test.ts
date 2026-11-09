@@ -7,7 +7,7 @@ import { run } from "../src/cli.ts";
 import { MIN_SUGGESTION_SCORE, VaultIndex } from "../src/vault-index.ts";
 import { analysisInput } from "../src/analysis-input.ts";
 import type { AnalysisSnapshot } from "../src/analysis-types.ts";
-import { lintVault } from "../src/vault-lint.ts";
+import { deadLinkScan, lintDetails, lintVault } from "../src/vault-lint.ts";
 import { createVaultMcp } from "../src/mcp-vault.ts";
 
 const roots: string[] = [];
@@ -31,15 +31,23 @@ const NOTES: Record<string, string> = {
     "Prototype-named: [[__proto__]], [[constructor]] and [[toString]].",
   ].join("\n")),
 };
-function fixture() {
+function vaultOf(files: Record<string, string>) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-hints-"))); roots.push(root);
   const home = join(root, "home"), vault = join(root, "vault"), notes = join(vault, "notes");
   mkdirSync(notes, { recursive: true });
-  for (const [path, text] of Object.entries(NOTES)) writeFileSync(join(notes, path), text);
+  for (const [path, text] of Object.entries(files)) writeFileSync(join(notes, path), text);
   const spec = { id: "demo", path: vault, kind: "personal" as const, write: "cli" as const };
   addVault(home, spec);
   return { root, home, vault, notes, spec, env: { VMEM_HOME: home } };
 }
+function fixture() { return vaultOf(NOTES); }
+// "벡터 검색" sits in most of these titles, so its bigrams alone score at or below zero and a Hangul-only match cannot
+// clear the threshold; only the Latin term can, which is why both parts have to drive the score.
+const MIXED_NOTES: Record<string, string> = {
+  "hub.md": note("Hub", "Mixed: [[벡터 검색 AI]]. Near miss: [[벡터 검색 ML]]. Digits: [[벡터 검색 7]]."),
+  "mixed.md": note("벡터 검색 AI", "Mixed."),
+  ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`semi${i}.md`, note(`벡터 검색 ${i}`, `Semi ${i}.`)])),
+};
 /** Every path under root with its size and mtime, to prove a read wrote nothing there. */
 function tree(root: string): string[] {
   const out: string[] = [];
@@ -70,6 +78,71 @@ test("#165 AC3: the title search offers the closest existing title, and the thre
   } finally { index.close(); }
 });
 
+test("#165 AC3 fix: a mixed-script text scores both parts, so a common Hangul run cannot hide the exact title", () => {
+  const f = vaultOf(MIXED_NOTES), index = new VaultIndex(f.home, f.spec);
+  try {
+    index.scan();
+    // The Hangul bigrams alone score at or below zero against this corpus, so the Latin term has to select, rank and
+    // clear the threshold; before the sum, this exact title was scored only by the bigrams and got no hint.
+    const exact = index.suggestTitle("벡터 검색 AI")!;
+    expect(exact).toMatchObject({ path: "mixed.md", title: "벡터 검색 AI" });
+    expect(exact.score).toBeGreaterThan(MIN_SUGGESTION_SCORE);
+    // A digit term is a Latin token too, so an exact numbered title resolves the same way.
+    expect(index.suggestTitle("벡터 검색 7")).toMatchObject({ path: "semi7.md" });
+    // Near miss: no title carries `ML`, so the Hangul part alone offers nothing rather than a neighbouring title.
+    expect(index.suggestTitle("벡터 검색 ML")).toBeUndefined();
+  } finally { index.close(); }
+});
+
+test("#165 AC3 fix: lint names the mixed-script title and never reports a near miss as suggested", () => {
+  const f = vaultOf(MIXED_NOTES), snapshot = analysisInput(f.home, "demo", { hints: true }).snapshot;
+  expect(snapshot.linkHints!["벡터 검색 AI"]).toMatchObject({ path: "mixed.md" });
+  const lines = lintVault(snapshot).findings.L01;
+  const mixed = lines.filter(line => line.includes("[[벡터 검색 AI]]"));
+  expect(mixed.length).toBe(1);
+  expect(mixed[0]).toContain("suggested `mixed.md` (score ");
+  expect(lines.filter(line => line.includes("[[벡터 검색 7]]")).join("\n")).toContain("suggested `semi7.md` (score ");
+  for (const line of lines.filter(line => line.includes("[[벡터 검색 ML]]"))) expect(line).not.toContain("suggested");
+});
+
+test("#165 AC3 fix: past the hint bound a line says not computed, while an attempted miss stays silent", () => {
+  const notes = [
+    { path: "a.md", source: note("A", "Links: [[One]], [[Two]], [[Three]], [[Four]].") },
+    { path: "b.md", source: note("B", "More: [[Five]].") },
+  ];
+  // The bound is the first `maximum` unique texts in note and link order, and the rest are counted, not silently dropped.
+  expect(deadLinkScan(notes, 3)).toEqual({ texts: ["One", "Two", "Three"], cap: 3, skipped: 2 });
+  const snapshot: AnalysisSnapshot = {
+    notes, today: "2026-01-01", logPath: "/synthetic/log", log: null, registryIds: null, reports: {},
+    linkHints: { One: { path: "one.md", title: "One", score: 1.5 } },
+    linkHintBound: { cap: 3, attempted: ["One", "Two", "Three"], skipped: 2 },
+  };
+  const details = lintDetails(snapshot), lines = details.report.findings.L01;
+  const forText = (text: string) => lines.filter(line => line.includes(`[[${text}]]`)).join("\n");
+  expect(forText("One")).toContain("suggested `one.md` (score 1.500)");
+  // Attempted and unmatched: the plain form, which is a real miss and must not be dressed up as "not computed".
+  for (const text of ["Two", "Three"]) { expect(forText(text)).not.toContain("suggested"); expect(forText(text)).not.toContain("not computed"); }
+  // Past the bound: never the no-suggestion form, and the report carries the count it left out.
+  for (const text of ["Four", "Five"]) expect(forText(text)).toContain("hint not computed (cap 3)");
+  expect(details.info.L01).toContain("2");
+  expect(details.report.markdown).toContain("hint not computed");
+});
+
+test("#165 AC3 fix: a vault with more dead link texts than the bound records the bound it stopped at", () => {
+  const texts = Array.from({ length: 1001 }, (_, i) => `Ghost ${i}`);
+  const f = vaultOf({ "hub.md": note("Hub", `Links: ${texts.map(text => `[[${text}]]`).join(", ")}.`) });
+  const snapshot = analysisInput(f.home, "demo", { hints: true }).snapshot;
+  // No title matches any of these, so the bound is recorded even though it produced no hint at all.
+  expect(snapshot).not.toHaveProperty("linkHints");
+  expect(snapshot.linkHintBound).toMatchObject({ cap: 1000, skipped: 1 });
+  expect(snapshot.linkHintBound!.attempted.length).toBe(1000);
+  const lines = lintVault(snapshot).findings.L01, forText = (text: string) => lines.filter(line => line.includes(`[[${text}]]`)).join("\n");
+  // The text past the bound says so; one inside it was looked up and simply has no match.
+  expect(forText("Ghost 1000")).toContain("hint not computed (cap 1000)");
+  expect(forText("Ghost 999")).not.toContain("not computed");
+  expect(forText("Ghost 999")).not.toContain("suggested");
+});
+
 test("#165 AC3: a snapshot carries at most one hint per dead link text and none for a resolved link", () => {
   const f = fixture(), hinted = analysisInput(f.home, "demo", { hints: true }).snapshot;
   expect(Object.keys(hinted.linkHints!).sort()).toEqual(["Synthetic Lantern Notes", "__proto__", "벡터 검색"].sort());
@@ -84,6 +157,8 @@ test("#165 AC3: a snapshot carries at most one hint per dead link text and none 
   expect(hinted.linkHints!["__proto__"]).toMatchObject({ path: "protos.md", title: "Synthetic Proto Notes" });
   for (const text of ["constructor", "toString", "valueOf", "hasOwnProperty"]) expect(Object.hasOwn(hinted.linkHints!, text)).toBe(false);
   expect(hinted.linkHints).not.toHaveProperty("constructor");
+  // Every dead link text fits inside the hint bound, so no text was left unlooked-up and no line needs "not computed".
+  expect(hinted).not.toHaveProperty("linkHintBound");
   // Without the option the pure lint transform sees no hints at all.
   const plain = analysisInput(f.home, "demo").snapshot;
   expect(plain).not.toHaveProperty("linkHints");
