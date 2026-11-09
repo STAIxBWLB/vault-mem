@@ -201,6 +201,7 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   const bodyLinks = [...parsed.body.matchAll(/\[\[([^\]\n|#]+)/g)].map(match => match[1]!.trim());
   const fieldLinks = ["project", "superseded_by", "supersedes", "source_ref"].flatMap(key => strings(parsed.data[key]).filter(value => value.includes("[[")).map(linkKey));
   const targetNotes = targetFacts(home, target, all, [...bodyLinks, ...fieldLinks], targetPath, config.denyPaths ?? []);
+  if (targetNotes.canon?.warnings.length) result.canonTableWarnings = [...targetNotes.canon.warnings];
   // The org note is never overwritten; a repeat promotion (--again) needs the earlier org copy moved or deleted first.
   if (targetNotes.exists) {
     // Recovery: an earlier confirm created this org note but the source provenance write failed.
@@ -248,7 +249,6 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   if (targetNotes.canon !== undefined) {
     const matches = planned.ok ? matchCanonRows(targetNotes.canon, `${String(parsed.data.title ?? "")}\n${parseFrontmatter(text).body}`) : [];
     result.canonRowMatches = matches;
-    if (targetNotes.canon.warnings.length) result.canonTableWarnings = [...targetNotes.canon.warnings];
     if (matches.length) result.choices = [...new Set(matches.map(row => `link-existing ${row.path}`))];
   }
   // Org lint runs on the preview too (the note overlaid on the org snapshot), so a note that would fail lint is never written.

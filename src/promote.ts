@@ -121,6 +121,7 @@ export async function promoteFromAmem(home: string, request: PromoteRequest, opt
     if (!entry) return { ...base, issues: [issue("AMEM", "entry is not an available curated entry of this project")] };
     const linked = seam.linkedPath(request.id) ?? null;
     const { promoted, target, canon } = lookup(home, spec, all, request.id, request.linkTo, denyPaths);
+    if (canon?.warnings.length) base.canonTableWarnings = [...canon.warnings];
     // Link-only: an earlier promotion already created the note, or the caller chose an existing note.
     const existing = target ?? promoted[0];
     if (existing) {
@@ -148,7 +149,6 @@ export async function promoteFromAmem(home: string, request: PromoteRequest, opt
     if (canon !== undefined) {
       const matches = planned.ok ? matchCanonRows(canon, `${String(draft.frontmatter.title ?? "")}\n${parseFrontmatter(text).body}`) : [];
       result.canonRowMatches = matches;
-      if (canon.warnings.length) result.canonTableWarnings = [...canon.warnings];
       if (matches.length) result.choices = [...new Set([...(result.choices ?? ["create"]), ...matches.map(row => `link-existing ${row.path}`)])];
     }
     if (request.confirm !== true || !planned.ok) return { ...result, preview: request.confirm !== true };

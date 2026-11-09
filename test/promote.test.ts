@@ -97,6 +97,8 @@ test("#167 unavailable and denied absent canonical notes are nonblocking advisor
   expect(result.issues).toEqual([]);
   const done = await promoteFromAmem(f.home, { ...request, confirm: true, fingerprint: result.fingerprint }, options);
   expect(done).toMatchObject({ ok: true, applied: true, canonTableWarnings: result.canonTableWarnings });
+  const linked = await promoteFromAmem(f.home, request, options);
+  expect(linked).toMatchObject({ ok: true, action: "link", preview: true, alreadyLinked: true, canonTableWarnings: result.canonTableWarnings });
 });
 
 test("#167 AC6 promotion previews 2000 canonical rows within its existing test budget", async () => {
