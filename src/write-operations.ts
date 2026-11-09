@@ -140,12 +140,11 @@ export function stampNoteContent(source: string, today: string, create: boolean)
     return source.slice(0, source.indexOf("---")) + header + doc.body;
   }
 }
-/** Date actual content changes; read-only checks, reports and byte-preserving moves stay unchanged. */
+/** Date authored content only; mechanical rewrites retain their existing freshness. */
 export function stampContentChanges(operation: WriteOp, changes: PlannedChange[], today: string): PlannedChange[] {
-  if (operation.op === "check" || operation.op === "report") return changes;
-  const moved = operation.op === "move" ? changes.find(change => change.after === null)?.before : undefined;
+  if (["check", "report", "move", "tidy", "sanitize"].includes(operation.op)) return changes;
   return changes.map(change => {
-    if (change.after === null || change.after === change.before || (operation.op === "move" && change.before === null && change.after === moved)) return change;
+    if (change.after === null || change.after === change.before) return change;
     return { ...change, after: stampNoteContent(change.after, today, operation.op === "create") };
   }).filter(change => change.before !== change.after);
 }

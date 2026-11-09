@@ -129,6 +129,46 @@ test("AC1 no-op, read/check and report paths leave yesterday's note metadata unt
   expect(readFileSync(file, "utf8")).toBe(original);
 });
 
+test("AC1 link stamps both authored relations and an already-linked no-op preserves dates", () => {
+  const f = fixture();
+  for (const [path, title] of [["old", "Old Finding"], ["next", "Next Finding"]]) writeFileSync(join(f.notes, `${path}.md`), note(title!, "A relation fixture.", { updated: "2026-01-01" }));
+  const operation = { op: "link" as const, from: "old", to: "next", relation: "supports" as const };
+  expect(writeAtDate(f, operation)).toMatchObject({ ok: true, applied: true });
+  const before = ["old", "next"].map(path => readFileSync(join(f.notes, `${path}.md`), "utf8"));
+  for (const source of before) expect(parseFrontmatter(source).data.updated).toBe(contentDate);
+  expect(applyWrite(f.home, { vault: "test", operation }, { now: new Date(2026, 0, 3, 1) })).toMatchObject({ ok: true, applied: false, changes: [] });
+  expect(["old", "next"].map(path => readFileSync(join(f.notes, `${path}.md`), "utf8"))).toEqual(before);
+});
+
+test("AC1 move rewrites self-links and another note's backlink without refreshing either note", () => {
+  const f = fixture();
+  writeFileSync(join(f.notes, "old.md"), note("Old Finding", "Self link [[old]].", { updated: "2026-01-01" }));
+  writeFileSync(join(f.notes, "next.md"), note("Next Finding", "Backlink [[old]].", { updated: "2025-12-31" }));
+  const operation = { op: "move" as const, from: "old", to: "renamed" };
+  const preview = applyWrite(f.home, { vault: "test", operation }, { now: contentNow });
+  expect(preview).toMatchObject({ ok: true, applied: false, preview: true });
+  expect(applyWrite(f.home, { vault: "test", operation, confirm: true, fingerprint: preview.fingerprint }, { now: contentNow })).toMatchObject({ ok: true, applied: true });
+  for (const [path, updated] of [["renamed", "2026-01-01"], ["next", "2025-12-31"]]) {
+    const text = readFileSync(join(f.notes, `${path}.md`), "utf8");
+    expect(text).toContain("[[renamed]]"); expect(text).not.toContain("[[old]]");
+    expect(parseFrontmatter(text).data.updated).toBe(updated);
+  }
+});
+
+for (const op of ["tidy", "sanitize"] as const) test(`AC1 ${op} normalizes content without refreshing updated`, () => {
+  const f = fixture(), file = join(f.notes, "old.md");
+  const source = note("Old Finding", "Original text.\n\n## Connections\n\n- [[next]]", { updated: "2026-01-01" });
+  writeFileSync(file, source);
+  const operation: WriteOp = op === "tidy" ? { op } : { op, path: "notes/old.md", text: source.replace("Original text.", "Normalized text.") };
+  const preview = applyWrite(f.home, { vault: "test", operation, dryRun: true }, { now: contentNow });
+  expect(preview).toMatchObject({ ok: true, applied: false, preview: true });
+  const result = applyWrite(f.home, { vault: "test", operation, ...(op === "tidy" ? { confirm: true, fingerprint: preview.fingerprint } : {}) }, { now: contentNow });
+  expect(result).toMatchObject({ ok: true, applied: true });
+  const text = readFileSync(file, "utf8"); expect(text).not.toBe(source);
+  expect(text).toContain(op === "tidy" ? "## Relevant Notes" : "Normalized text.");
+  expect(parseFrontmatter(text).data.updated).toBe("2026-01-01");
+});
+
 test("AC1 stamping cannot hide secret-looking caller-supplied updated metadata from validation", () => {
   const f = fixture(), before = readFileSync(join(f.notes, "old.md"), "utf8"), operation = create();
   operation.frontmatter.updated = "password: synthetic-value";
