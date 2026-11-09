@@ -1,3 +1,5 @@
+import { localDate } from "../src/local-date.ts";
+import { emitFrontmatter, parseFrontmatter } from "../src/frontmatter.ts";
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -39,24 +41,24 @@ async function mcp(home: string, args: Record<string, unknown>) {
 }
 // Out of order on purpose; each is located in the original text.
 const ROWS: PatchEdit[] = [{ oldString: "| three | third |", newString: "| three | 3 |" }, { oldString: "| one | first |", newString: "| one | 1 |" }, { oldString: "| two | second |", newString: "| two | 2 |" }];
-const ROWS_AFTER = note(BODY.replace("first", "1").replace("second", "2").replace("third", "3"));
+const ROWS_AFTER = () => emitFrontmatter(parseFrontmatter(note(BODY.replace("first", "1").replace("second", "2").replace("third", "3"))), { updated: localDate() });
 
 test("edits apply together against the original text with one receipt and one log event (library, MCP, CLI file and stdin)", async () => {
   const lib = fixture(), result = lib.patch(ROWS, { expectedSha: sha256(readFileSync(lib.file, "utf8")) });
   expect(result).toMatchObject({ ok: true, applied: true, logged: true }); expect(result.changes).toHaveLength(1);
-  expect(readFileSync(lib.file, "utf8")).toBe(ROWS_AFTER); expect(logLines(lib.log)).toEqual(["EXTRACT  -  vmem:patch → notes/old.md  — patch"]);
+  expect(readFileSync(lib.file, "utf8")).toBe(ROWS_AFTER()); expect(logLines(lib.log)).toEqual(["EXTRACT  -  vmem:patch → notes/old.md  — patch"]);
   // A later edit may introduce text an earlier one matches; matching uses the original note only.
   const chained = fixture(); expect(chained.patch([{ oldString: "Alpha", newString: "Alpha beta" }, { oldString: "gamma", newString: "delta" }]).ok).toBe(true);
   expect(readFileSync(chained.file, "utf8")).toContain("Alpha beta beta delta.");
   const viaMcp = fixture(), event = { type: "EXTRACT", project: "-", source: "synthetic:review", note: "three table rows" };
   expect(await mcp(viaMcp.home, { path: "old", edits: ROWS, log: event })).toMatchObject({ ok: true, applied: true, logged: true });
-  expect(readFileSync(viaMcp.file, "utf8")).toBe(ROWS_AFTER); expect(logLines(viaMcp.log)).toEqual(["EXTRACT  -  synthetic:review  — three table rows (vmem:agent)"]);
+  expect(readFileSync(viaMcp.file, "utf8")).toBe(ROWS_AFTER()); expect(logLines(viaMcp.log)).toEqual(["EXTRACT  -  synthetic:review  — three table rows (vmem:agent)"]);
   const viaFile = fixture(), edits = join(viaFile.root, "edits.json"); writeFileSync(edits, JSON.stringify(ROWS));
   const cli = run(["patch", "test", "old", "--edits", edits], viaFile.env);
-  expect(cli.code).toBe(0); expect(readFileSync(viaFile.file, "utf8")).toBe(ROWS_AFTER); expect(logLines(viaFile.log)).toHaveLength(1);
+  expect(cli.code).toBe(0); expect(readFileSync(viaFile.file, "utf8")).toBe(ROWS_AFTER()); expect(logLines(viaFile.log)).toHaveLength(1);
   const viaStdin = fixture();
   const child = Bun.spawnSync([process.execPath, "bin/vmem.js", "patch", "test", "old", "--edits", "-", "--json"], { env: { ...process.env, ...viaStdin.env }, stdin: Buffer.from(JSON.stringify(ROWS)), stdout: "pipe", stderr: "pipe" });
-  expect(child.exitCode).toBe(0); expect(JSON.parse(child.stdout.toString()).changes).toHaveLength(1); expect(readFileSync(viaStdin.file, "utf8")).toBe(ROWS_AFTER);
+  expect(child.exitCode).toBe(0); expect(JSON.parse(child.stdout.toString()).changes).toHaveLength(1); expect(readFileSync(viaStdin.file, "utf8")).toBe(ROWS_AFTER());
 });
 
 test("a missing, duplicate or overlapping match, a frontmatter match, a stale SHA or a malformed edit refuses with no change", async () => {
