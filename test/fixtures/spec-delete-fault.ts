@@ -7,10 +7,15 @@ if (!home || !mode || !fingerprint) throw new Error("synthetic delete fault fixt
 const original = { ...fs }, configFile = join(home, "vmem.config.json"), config = JSON.parse(original.readFileSync(configFile, "utf8"));
 const root = config.specs[0].path, target = join(root, "SPEC.md");
 const fault = mode.replace(/^mcp-/, "");
-let gatePassed = false, finalDiscoveryDone = false, removed = false, lockDescriptor: number | undefined;
+let gatePassed = false, discoveryDone = false, finalDiscoveryDone = false, removed = false, lockDescriptor: number | undefined;
 let registerContainer: (() => void) | undefined;
 const finalReads = new Set<number>();
 mock.module("node:fs", () => ({ ...original,
+  lstatSync: (...args: Parameters<typeof fs.lstatSync>) => {
+    const stat = original.lstatSync(...args), file = String(args[0]);
+    if (stat && discoveryDone && (fault === "plain-root" && file === root || fault === "plain-symlink" && file === target)) return Object.assign(stat, { isSymbolicLink: () => true });
+    return stat;
+  },
   openSync: (...args: Parameters<typeof fs.openSync>) => {
     const file = String(args[0]);
     const lockErrors: Record<string, string> = { "lock-permission": "EACCES", "lock-space": "ENOSPC" };
@@ -27,6 +32,7 @@ mock.module("node:fs", () => ({ ...original,
   },
   unlinkSync: (...args: Parameters<typeof fs.unlinkSync>) => {
     if (mode === "unlink" && String(args[0]) === target) throw new Error("synthetic unlink failure");
+    if (fault === "lock-unlink" && removed && String(args[0]).endsWith(".lock")) throw new Error("synthetic delete lock cleanup failure");
     original.unlinkSync(...args);
     if (String(args[0]) === target) removed = true;
   },
@@ -57,6 +63,7 @@ const source = await import("../../src/spec-source.ts"), discover = source.disco
 mock.module("../../src/spec-source.ts", () => ({ ...source,
   discoverSpecs: (...args: Parameters<typeof discover>) => {
     const result = discover(...args);
+    discoveryDone = true;
     if (gatePassed) finalDiscoveryDone = true;
     return result;
   },
@@ -72,7 +79,7 @@ if (fault.startsWith("final-home-")) {
 const request = { id: "root", confirm: true, fingerprint };
 const { createSpecMcp } = await import("../../src/mcp-spec.ts");
 const result = (mode.startsWith("mcp-") ? createSpecMcp(home, process.env).handlers.vmem_spec_delete!(request) : deleteSpec(home, request, { env: process.env })) as SpecDeleteResult;
-if (fault === "dir-fsync" || fault === "lock-close") {
+if (fault === "dir-fsync" || fault === "lock-close" || fault === "lock-unlink") {
   const { renderSpecDelete } = await import("../../src/spec-output.ts"), { PLAIN } = await import("../../src/text-output.ts");
   console.log(JSON.stringify({ result, text: renderSpecDelete(result, PLAIN) }));
 } else console.log(JSON.stringify(result));

@@ -37,6 +37,16 @@ function assertRefused(result: SpecWriteResult, code: string, path = "nested/SPE
   expect(result.issues.some(issue => issue.code === code && issue.path === path)).toBe(true);
 }
 
+for (const [name, separator] of [["NEL", ""], ["LS", " "], ["PS", " "], ["tab", "\t"], ["NUL", Buffer.alloc(1).toString()]] as const) test(`update rejects ${name} in a title without altering existing bytes`, () => {
+  const f = fixture(), before = readFileSync(join(f.repo, "nested/SPEC.md"));
+  const result = f.update({ set: { title: `Title${separator}injection` } });
+  assertRefused(result, "INPUT");
+  expect(result.issues[0]!.message).toContain("control");
+  expect(result.issues[0]!.message).toContain("plain single-line text");
+  expect(readFileSync(join(f.repo, "nested/SPEC.md"))).toEqual(before);
+  expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
+}, 30_000);
+
 test("AC4/AC8: update preserves BOM, CRLF/body bytes, unrelated frontmatter and ordinary Git state", () => {
   const f = fixture(), head = f.git(["rev-parse", "HEAD"]), refs = f.git(["for-each-ref"]), before = f.read();
   const result = f.update({ expectedSha: sha(before), set: { title: "Edited" }, unset: ["status"], add: { tags: ["new", "new"] }, remove: { tags: ["old"] } });

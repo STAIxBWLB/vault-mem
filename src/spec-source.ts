@@ -7,6 +7,8 @@ import { specGit } from "./spec-git.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { VaultIndex, IndexCacheError, type IndexSourceAdapter, type SearchOptions, type SearchResult } from "./vault-index.ts";
 
+export const MAX_SPEC_MARKDOWN_PATHS = 10000;
+
 /** Private spec input snapshot; raw sources are for library transforms, never graph results. */
 export interface SpecCandidate {
   path: string;
@@ -29,6 +31,8 @@ export interface SpecSnapshot {
   commonDir: string;
   specs: SpecDocument[];
   candidates?: SpecCandidate[];
+  /** Git-listed inputs before path filtering, including ordinary Markdown and skipped files. */
+  markdownPaths?: readonly string[];
   diagnostics: SpecDiagnostic[];
 }
 
@@ -121,18 +125,20 @@ function candidateProbe(path: string, reason: "oversized" | "invalid_utf8", byte
 }
 function adapter(binding: Binding) {
   let specs: SpecDocument[] = [], candidates: SpecCandidate[] = [], diagnostics: SpecDiagnostic[] = [];
+  let markdownPaths: string[] = [];
   const seen = new Map<string, string>();
   const source: IndexSourceAdapter = {
     validate: () => validate(binding),
     paths: () => {
-      specs = []; candidates = []; diagnostics = []; seen.clear();
+      specs = []; candidates = []; diagnostics = []; markdownPaths = []; seen.clear();
       const bytes = git(binding.root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.md"], binding.env, 8 * 1024 * 1024);
       let output: string;
       try { output = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
       catch { throw new Error("spec source: Git paths are not valid UTF-8; repair the filenames before retrying discovery"); }
       if (output && !output.endsWith("\0")) throw new Error("spec source: git returned incomplete NUL-delimited paths; retry discovery on a stable repository");
       const paths = [...new Set(output.split("\0").filter(Boolean))].sort(pathOrder);
-      if (paths.length > 10000) throw new Error("spec source: more than 10000 Markdown paths; ignore large or vendored Markdown via .gitignore and untrack already-tracked excluded files with git rm --cached before rebuilding");
+      if (paths.length > MAX_SPEC_MARKDOWN_PATHS) throw new Error(`spec source: more than ${MAX_SPEC_MARKDOWN_PATHS} Markdown paths; ignore large or vendored Markdown via .gitignore and untrack already-tracked excluded files with git rm --cached before rebuilding`);
+      markdownPaths = paths;
       return paths.filter(path => {
         const problem = pathProblem(binding, path);
         if (problem === undefined) return true;
@@ -172,7 +178,7 @@ function adapter(binding: Binding) {
       return true;
     },
   };
-  return { source, snapshot: (): SpecSnapshot => ({ root: binding.root, commonDir: binding.commonDir, specs: [...specs], candidates: [...candidates], diagnostics: [...diagnostics] }) };
+  return { source, snapshot: (): SpecSnapshot => ({ root: binding.root, commonDir: binding.commonDir, specs: [...specs], candidates: [...candidates], markdownPaths: [...markdownPaths], diagnostics: [...diagnostics] }) };
 }
 /** Call scan() to refresh. Search and snapshots use the last completed scan, like VaultIndex. */
 export class SpecIndex {

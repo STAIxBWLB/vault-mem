@@ -1,13 +1,17 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILE, type SpecSourceSpec } from "../src/config.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { AGENT_MARKERS } from "../src/log-format.ts";
+import { memoryGitArgv, memoryGitEnv } from "../src/platform.ts";
 import { addSpec } from "../src/registry.ts";
 import { specGit } from "../src/spec-git.ts";
+import { executeSpecCommand } from "../src/spec-commands.ts";
+import { discoverSpecs, MAX_SPEC_MARKDOWN_PATHS } from "../src/spec-source.ts";
 import { createSpec, type SpecCreateRequest, type SpecWriteResult } from "../src/spec-write.ts";
 
 const roots: string[] = [];
@@ -22,9 +26,9 @@ function fixture(write: SpecSourceSpec["write"] = "mcp", pii: SpecSourceSpec["pi
   writeFileSync(join(repo, "source.ts"), "synthetic source\n");
   writeFileSync(join(repo, ".gitignore"), "ignored/\n");
   git(["add", "."]); git(["commit", "-qm", "Synthetic create fixture"]);
-  addSpec(home, { id: "fixture", path: repo, write, pii }, env);
+  const source = addSpec(home, { id: "fixture", path: repo, write, pii }, env);
   const create = (request: Partial<SpecCreateRequest> = {}, channel: "cli" | "mcp" = "cli") => createSpec(home, { path: "new/deep/SPEC.md", id: "child", type: "module", title: "새 설계", parent: "root", ...request }, { env, channel });
-  return { root, repo, home, env, git, create };
+  return { root, repo, home, env, git, source, create };
 }
 function refused(f: ReturnType<typeof fixture>, result: SpecWriteResult, code: string, path = "new/deep/SPEC.md") {
   expect(result).toMatchObject({ ok: false, changed: false, path });
@@ -48,6 +52,44 @@ test("AC8: create orders metadata, defaults draft, writes LF headings only and l
   expect(f.git(["rev-parse", "HEAD"])).toBe(head); expect(f.git(["for-each-ref"])).toBe(refs);
   expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
   expect(readdirSync(join(f.repo, "new/deep"))).toEqual(["SPEC.md"]);
+}, 30_000);
+
+test("create counts skipped Git-listed Markdown at the discovery cap and preserves readable sources", () => {
+  const f = fixture(), blob = f.git(["rev-parse", "HEAD:source.ts"]);
+  const indexInfo = (input: string) => {
+    const argv = memoryGitArgv(["-C", f.repo, "update-index", "--index-info"]);
+    const child = spawnSync(argv[0]!, argv.slice(1), { input, env: memoryGitEnv(f.env, { repositoryIsolation: true }), timeout: 10000, maxBuffer: 65536 });
+    expect(child.error).toBeUndefined(); expect(child.status, child.stderr.toString()).toBe(0);
+  };
+  // Native Git lists 10,000 Markdown inputs; only SPEC.md exists on disk.
+  // The absent entries reuse one existing blob, avoiding 10,000 fixture files.
+  indexInfo(Array.from({ length: MAX_SPEC_MARKDOWN_PATHS - 1 }, (_, index) => `100644 ${blob}\tordinary-${String(index).padStart(4, "0")}.md\n`).join(""));
+  const before = discoverSpecs(f.source, { env: f.env });
+  expect(before.markdownPaths).toHaveLength(MAX_SPEC_MARKDOWN_PATHS);
+  expect(before.specs.map(spec => spec.id)).toEqual(["root"]);
+  expect(before.candidates).toHaveLength(1);
+  const result = f.create();
+  refused(f, result, "LIMIT");
+  expect(result.issues[0]!.message).toContain("10000");
+  expect(result.issues[0]!.message).toContain("remove or ignore");
+  expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
+  expect(executeSpecCommand(f.home, "get", { id: "root" }, f.env)).toMatchObject({ path: "SPEC.md", frontmatter: { id: "root" } });
+  // Replacing an already-counted absent input consumes no additional slot.
+  indexInfo(`0 ${"0".repeat(blob.length)}\tordinary-0000.md\n100644 ${blob}\tnew/deep/SPEC.md\n`);
+  expect(f.create()).toMatchObject({ ok: true, changed: true, path: "new/deep/SPEC.md" });
+  const after = discoverSpecs(f.source, { env: f.env });
+  expect(after.markdownPaths).toHaveLength(MAX_SPEC_MARKDOWN_PATHS);
+  expect(new Set(after.specs.map(spec => spec.id))).toEqual(new Set(["root", "child"]));
+}, 60_000);
+
+for (const [name, separator] of [["NEL", ""], ["LS", " "], ["PS", " "], ["tab", "\t"], ["NUL", Buffer.alloc(1).toString()]] as const) test(`create rejects ${name} in a title before changing source bytes`, () => {
+  const f = fixture(), before = readFileSync(join(f.repo, "SPEC.md"));
+  const result = f.create({ title: `Title${separator}injection` });
+  refused(f, result, "INPUT");
+  expect(result.issues[0]!.message).toContain("control");
+  expect(result.issues[0]!.message).toContain("plain single-line text");
+  expect(readFileSync(join(f.repo, "SPEC.md"))).toEqual(before);
+  expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
 }, 30_000);
 
 for (const [type, headings] of [
@@ -233,6 +275,22 @@ for (const mode of ["dir-fsync", "ancestor-sync", "lock-close", "mcp-dir-fsync",
     expect(output.result.actor).toBe("agent");
     expect(output.result).not.toHaveProperty("refused");
   }
+}, 30_000);
+
+test("created-parent cleanup failures name the directory, errno and ownership/access recovery", () => {
+  const f = fixture();
+  const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-create-fault.ts"), f.home, "cleanup-permission"], { env: { ...process.env, ...f.env }, stdout: "pipe", stderr: "pipe", timeout: 20000 });
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  const result = JSON.parse(child.stdout.toString()) as SpecWriteResult;
+  expect(result).toMatchObject({ ok: false, changed: false, path: "new/deep/SPEC.md" });
+  const cleanup = result.issues.find(issue => issue.code === "CLEANUP" && issue.message.includes("EACCES"));
+  expect(cleanup).toMatchObject({ severity: "error", path: "new/deep/SPEC.md" });
+  expect(cleanup!.message).toContain(join(f.repo, "new/deep"));
+  expect(cleanup!.message).toContain("ownership and access");
+  expect(cleanup!.message).toContain("repair the reported cause");
+  expect(existsSync(join(f.repo, "new/deep/SPEC.md"))).toBe(false);
+  expect(readdirSync(join(f.repo, "new/deep"))).toEqual([]);
+  expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
 }, 30_000);
 
 test("create honors umask 027 for files and new parents while update preserves its original mode", () => {
