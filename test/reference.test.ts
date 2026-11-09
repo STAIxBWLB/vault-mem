@@ -105,23 +105,31 @@ test("final-snapshot uniqueness includes batch changes and citekeys on legacy no
   expect(validateWrite([change, { ...change, path: "notes/second.md", after: note({ title: "Second", citekey: bibliographic.citekey.toLowerCase() }).replace("# Synthetic Paper", "# Second") }], ctx)).toContainEqual(expect.objectContaining({ code: "V08", severity: "error" }));
 });
 
-test("MCP type-filtered search finds DOI and citekey after incremental, memory and clean scans; lint stays unchanged", async () => {
+test("MCP type-filtered search finds DOI, citekey and arXiv id after incremental, memory and clean scans; lint stays unchanged", async () => {
   const f = fixture(); expect(f.request(create("paper")).ok).toBe(true);
   const source = readFileSync(join(f.notes, "paper.md"), "utf8");
   expect(parseFrontmatter(source).body).toBe(body.replace("# Synthetic Paper", "# paper"));
+  // The fixture note carries `arxiv_id: 2601.12345v2`, and its body never mentions the id, so only the FTS text can match.
+  expect(parseFrontmatter(source).data.arxiv_id).toBe("2601.12345v2");
+  expect(parseFrontmatter(source).body).not.toContain("2601.12345");
   const mcp = createVaultMcp(f.home);
-  for (const query of ["10.1234/synthetic.paper", bibliographic.citekey]) {
+  for (const query of ["10.1234/synthetic.paper", bibliographic.citekey, "2601.12345"]) {
     const result = await mcp.handlers.vmem_search!({ vault: "test", query, type: "reference" }) as { hits: { path: string }[] };
     expect(result.hits.map(hit => hit.path)).toEqual(["paper.md"]);
   }
+  expect((await mcp.handlers.vmem_search!({ vault: "test", query: "2601.12345", type: "insight" }) as { hits: unknown[] }).hits).toEqual([]);
   for (const options of [{}, { memory: true }, { memory: true, reuseCache: false }]) {
     const index = new VaultIndex(f.home, f.spec, [f.spec.path], options);
     try {
       index.scan(); expect(index.search(bibliographic.citekey, { type: "reference" }).map(hit => hit.path)).toEqual(["paper.md"]);
       expect(index.search(bibliographic.citekey, { type: "insight" })).toEqual([]);
+      expect(index.search("2601.12345", { type: "reference" }).map(hit => hit.path)).toEqual(["paper.md"]);
+      expect(index.search("2601.12345", { type: "insight" })).toEqual([]);
       index.scan(true); expect(index.search("10.1234/synthetic.paper", { type: "reference" })).toHaveLength(1);
     } finally { index.close(); }
   }
+  // The stored note keeps its body and frontmatter bytes: the arXiv id joins the FTS text only.
+  expect(readFileSync(join(f.notes, "paper.md"), "utf8")).toBe(source);
   const base = { today: "2026-11-04", logPath: "/synthetic/log", log: "", registryIds: [], reports: {} };
   const withMetadata = lintVault({ ...base, notes: [{ path: "paper.md", source }, { path: "research.md", source: moc }] });
   const plain = source.replace(/^(?:citekey|doi|arxiv_id|authors|year|venue):.*\n/gm, "");
@@ -156,22 +164,25 @@ test("JSON-RPC create and frontmatter accept 100 authors without raising other a
 });
 
 
-test("the first schema3 scan finds an unchanged pre-existing reference DOI and preserves the older cache", () => {
+test("the first schema4 scan finds an unchanged pre-existing arXiv id and preserves the schema3 cache", () => {
   const f = fixture(), source = note({ doi: "10.1234/preexisting.paper" });
   const file = join(f.notes, "preexisting.md"); writeFileSync(file, source);
   const indexes = join(f.home, "indexes"); mkdirSync(indexes, { recursive: true });
   const digest = createHash("sha256").update(f.spec.path).digest("hex");
-  const oldFile = join(indexes, `${digest}-links2-schema2.sqlite`), old = new Database(oldFile);
-  // Previous FTS content has the body only, so the metadata DOI cannot match.
+  const oldFile = join(indexes, `${digest}-links2-schema3.sqlite`), old = new Database(oldFile);
+  // A schema-3 cache held the body plus doi and citekey only, so the frontmatter arXiv id cannot match there.
   old.run("CREATE VIRTUAL TABLE fts USING fts5(path UNINDEXED, title, description, body, tokenize='unicode61')");
-  old.query("INSERT INTO fts VALUES (?,?,?,?)").run("preexisting.md", metadata.title, metadata.description, body);
-  expect(old.query("SELECT path FROM fts WHERE fts MATCH ?").all('"10.1234/preexisting.paper"')).toEqual([]);
+  old.query("INSERT INTO fts VALUES (?,?,?,?)").run("preexisting.md", metadata.title, metadata.description, `${body}\n${bibliographic.doi}\n${bibliographic.citekey}`);
+  expect(old.query("SELECT path FROM fts WHERE fts MATCH ?").all('"10.1234/synthetic.paper"')).toHaveLength(1);
+  expect(old.query("SELECT path FROM fts WHERE fts MATCH ?").all('"2601.12345"')).toEqual([]);
   old.close();
   const oldBytes = readFileSync(oldFile), index = new VaultIndex(f.home, f.spec);
   try {
-    expect(index.file).toEndWith("-links2-schema3.sqlite");
+    expect(index.file).toEndWith("-links2-schema4.sqlite");
     expect(index.scan()).toEqual({ notes: 2, changed: 2, removed: 0 });
     expect(index.search("10.1234/preexisting.paper", { type: "reference" }).map(hit => hit.path)).toEqual(["preexisting.md"]);
+    // The id the fixture note carries only in frontmatter is found by the rebuilt index, not by the schema-3 cache.
+    expect(index.search("2601.12345", { type: "reference" }).map(hit => hit.path)).toEqual(["preexisting.md"]);
     expect(index.scan()).toEqual({ notes: 2, changed: 0, removed: 0 });
   } finally { index.close(); }
   expect(readFileSync(file, "utf8")).toBe(source);

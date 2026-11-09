@@ -16,8 +16,12 @@ export const MAX_RESULTS = 500;
  * share the unversioned `<digest>.sqlite`; the first run of a newer version builds its own file once.
  */
 export const LINK_RESOLUTION = 2;
-/** Bump when tables or FTS columns change. Named per value like LINK_RESOLUTION. 2 = CJK bigram table; 3 = reference identifiers in FTS. */
-export const INDEX_SCHEMA = 3;
+/**
+ * Bump when tables, FTS columns or the indexed text change. Named per value like LINK_RESOLUTION. 2 = CJK bigram
+ * table; 3 = reference identifiers in FTS; 4 = arXiv ids in the FTS text of reference notes, so a schema-3 cache
+ * built before that rebuilds once instead of answering without the id.
+ */
+export const INDEX_SCHEMA = 4;
 const indexName = (root: string) => `${digest(root)}-links${LINK_RESOLUTION}-schema${INDEX_SCHEMA}.sqlite`;
 /**
  * unicode61 keeps each Hangul/CJK run as one token, so `사업단` misses `사업단은`. A side table holds the
@@ -257,10 +261,13 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
   }
   close(): void { this.db.close(); }
   // ponytail: grams stores its bigram text (about 2.3x the CJK bytes); contentless with stable rowids would save it.
-  /** Keep the stored body and link/analysis input unchanged; identifiers join only the FTS text. */
+  /**
+   * Keep the stored body and link/analysis input unchanged; identifiers join only the FTS text. The arXiv id goes in
+   * without its `vN` version suffix, since a caller holding `2502.04321` cannot tokenize the suffixed form.
+   */
   private searchBody(body: string, data: Record<string, unknown>): string {
     if (this.adapter || data.type !== "reference") return body;
-    const identifiers = [text(data.doi), text(data.citekey)].filter(Boolean);
+    const identifiers = [text(data.doi), text(data.citekey), text(data.arxiv_id).replace(/v\d+$/, "")].filter(Boolean);
     return identifiers.length ? body + "\n" + identifiers.join("\n") : body;
   }
   private indexText(path: string, title: string, description: string, body: string): void {

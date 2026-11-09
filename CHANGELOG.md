@@ -16,6 +16,8 @@
 
 - Lint adds L15: a note with `confidence: proven` and an empty `source` is listed as a warning, never refused, so existing notes stay readable. The MCP server now sends pinned `initialize` `instructions` under 400 bytes: search first with `vmem_search`, read the best match by section with `vmem_read`, and expect validated writes (#165, parts 2 and 4).
 
+- Reference notes are searchable by their frontmatter `arxiv_id`, alongside `doi` and `citekey`: the id joins the FTS text without its `vN` version suffix, so `vmem search <vault> 2502.04321 --type reference` finds a note holding `arxiv_id: 2502.04321v2` whose body never mentions it. The index schema moves to 4, so an existing cache rebuilds once on the next scan instead of answering without the id; stored bodies, links and lint input are unchanged (#188).
+
 - Add `vmem_spec_delete` and `vmem spec delete`: read-only previews list every backlink kind and child, with a path/SHA/list fingerprint. Confirm recomputes under the shared mutation lock, refuses stale acknowledgements and allows only listed dangling links to the removed id. Other introduced errors remain blocked before result limits. All three spec write tools are implemented (#97, T4c).
 
 - Add `vmem_spec_create` and `vmem spec create` with ordered frontmatter, type-specific headings and draft defaults. Creation shares spec write policy, secret/PII screens, actor attribution, mutation locks and the introduced-error gate; unsafe, ignored or existing targets refuse without overwrite. Delete remains unimplemented (#97, T4b).
