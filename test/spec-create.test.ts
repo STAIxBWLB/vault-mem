@@ -97,6 +97,25 @@ test("create refuses existing files, directories, symlink components, ignored an
   expect(readdirSync(outside)).toEqual([]); expect(existsSync(join(f.repo, "ignored"))).toBe(false);
 }, 30_000);
 
+test("create checks a leading-colon directory as a literal ignored path before taking a lock", () => {
+  const f = fixture(); writeFileSync(join(f.repo, ".gitignore"), "ignored/\n/:/\n");
+  const before = f.git(["status", "--porcelain=v1", "--untracked-files=all"]);
+  const result = f.create({ path: ":/x.md" });
+  expect(result).toMatchObject({ ok: false, changed: false, path: ":/x.md" });
+  expect(result.issues).toContainEqual(expect.objectContaining({ code: "PATH" }));
+  expect(existsSync(join(f.repo, ":"))).toBe(false);
+  expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
+  expect(f.git(["status", "--porcelain=v1", "--untracked-files=all"])).toBe(before);
+}, 30_000);
+
+for (const path of [":!x.md", ":(literal)x.md"]) test(`create treats unignored ${path} as a literal filename`, () => {
+  const f = fixture(), result = f.create({ path, id: "literal-child" });
+  expect(result).toMatchObject({ ok: true, changed: true, path });
+  expect(parseFrontmatter(readFileSync(join(f.repo, path), "utf8")).data.id).toBe("literal-child");
+  expect(f.git(["status", "--porcelain=v1", "--untracked-files=all"])).toContain(path);
+  expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
+}, 30_000);
+
 test("create refuses an untracked nested Git repository before adding a file or directories", () => {
   const f = fixture(), embedded = join(f.repo, "embedded"); mkdirSync(embedded);
   f.git(["-c", "init.templateDir=", "init", "--quiet"], embedded);
@@ -150,6 +169,13 @@ for (const mode of ["policy-drift", "final-policy", "final-home-spec", "final-ho
   expect(child.exitCode).toBe(0);
   const result = JSON.parse(child.stdout.toString()) as SpecWriteResult;
   expect(result).toMatchObject({ ok: false, changed: false });
+  expect(result.issues[0]!.message).toContain("create");
+  if (mode === "tree-drift" || mode === "publish") {
+    expect(result.issues[0]!.message).toMatch(/create|source tree/);
+    expect(result.issues[0]!.message).not.toContain("expectedSha");
+    expect(result.issues[0]!.message).not.toContain("retry the update");
+    expect(result.issues[0]!.message).not.toContain("correct the update");
+  }
   if (mode === "final-policy") expect(result.issues[0]!.code).toBe("REGISTRY_DRIFT");
   if (mode.startsWith("final-home-")) {
     expect(result.issues[0]!.code).toBe("HOME");
@@ -171,7 +197,17 @@ for (const mode of ["policy-drift", "final-policy", "final-home-spec", "final-ho
   if (mode === "target-appears" || mode === "publish-race") {
     expect(readFileSync(file, "utf8")).toBe("foreign file\n");
     expect(readdirSync(join(f.repo, "new/deep"))).toEqual(["SPEC.md"]);
-    if (mode === "publish-race") expect(result.issues[0]!.code).toBe("EEXIST");
+    if (mode === "publish-race") {
+      expect(result.issues[0]!).toMatchObject({ code: "EEXIST", severity: "error" });
+      const cleanup = result.issues.filter(issue => issue.code === "CLEANUP");
+      expect(cleanup.length).toBeGreaterThan(0);
+      for (const issue of cleanup) {
+        expect(issue.severity).toBe("warning");
+        expect(issue.message).toContain("ENOTEMPTY");
+        expect(issue.message).toContain("kept");
+        expect(issue.message).not.toContain("cleanup failed");
+      }
+    }
   } else expect(existsSync(join(f.repo, "new"))).toBe(false);
   expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
 }, 30_000);

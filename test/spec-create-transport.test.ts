@@ -104,6 +104,19 @@ test("MCP create marks validation refusals while schema and source lookup errors
   expect(existsSync(join(f.repo, "child.md"))).toBe(false);
 });
 
+test("CLI create validation refusal names the missing id and a create-specific retry", () => {
+  const f = fixture();
+  const result = runSpecCommand([...cli, "--depends-on", '["missing"]'], f.env);
+  expect(result.code).toBe(1);
+  expect(result.text).toContain("spec create child: refused");
+  expect(result.text).toContain("dangling_link"); expect(result.text).toContain("missing");
+  expect(result.text).toMatch(/(?:create|source tree)[^\n]*retry/);
+  expect(result.text).not.toContain("expectedSha");
+  expect(result.text).not.toContain("retry the update");
+  expect(result.text).not.toContain("correct the update");
+  expect(existsSync(join(f.repo, "child.md"))).toBe(false);
+});
+
 test("MCP spec create rejects registry binding drift before writing", () => {
   const f = fixture(), server = createSpecMcp(f.home, f.env);
   const config = JSON.parse(readFileSync(join(f.home, CONFIG_FILE), "utf8"));
