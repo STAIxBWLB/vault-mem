@@ -98,7 +98,7 @@ function checkExpected(request: WriteRequest, notes: Map<string, string>): void 
 }
 /** Preserve referenced content identity and the existing no-self-supersession invariant. */
 function checkMergeReferences(preview: MergePreview, notes: Map<string, string>): void {
-  const anchors = anchorIndex(parseFrontmatter(notes.get(preview.keep)!).body, true);
+  const anchors = anchorIndex(parseFrontmatter(notes.get(preview.keep)!).body);
   // Copied fragment-only links change their containing note from absorb to keep,
   // even though no target text is rewritten or listed among inbound replacements.
   const selfFragments = extractLinks(parseFrontmatter(notes.get(preview.absorb)!).body)

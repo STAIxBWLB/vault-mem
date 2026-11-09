@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeSource, sourceReferences } from "./source.ts";
 import { parseFrontmatter, emitFrontmatter, frontmatterReferences } from "./frontmatter.ts";
-import { LINK_RELATIONS, normalizeTarget, proseLines, visibleProseLines, setextParagraphs, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
+import { LINK_RELATIONS, normalizeTarget, proseLines, visibleProseLines, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
 import { MAX_WRITE_BYTES, type MergeInboundLink, type MergePreview, type PatchEdit, type PlannedChange, type WriteIssue, type WriteOp } from "./write-types.ts";
 export class WriteRefusal extends Error {
   constructor(readonly issues: WriteIssue[]) { super(issues[0]?.message ?? "write refused"); }
@@ -213,7 +213,7 @@ function mergeTopics(value: unknown, path: string): string[] {
 }
 /** Remove only a plain Topics list; unusual authored contents need an explicit repair, never silent deletion. */
 function withoutMergeTopics(body: string, topics: string[], path: string): string {
-  const visible = visibleProseLines(body), raw = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const visible = mergeHeadingLines(body), raw = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
   if (visible.some((line, index) => /^Topics[ \t]*$/i.test(line.trim()) && /^ {0,3}-+[ \t]*$/.test(visible[index + 1] ?? ""))) refuse("V05", "merge cannot consolidate a Setext Topics heading safely; convert it to a plain ## Topics list before merging", path);
   const headings = visible.flatMap((line, index) => /^ {0,3}##[ \t]+Topics(?:[ \t]+#+)?[ \t]*$/i.test(line) ? [index] : []);
   if (headings.length > 1) refuse("V05", "merge found multiple Topics sections; consolidate them into one matching topic list before merging", path);
@@ -231,26 +231,24 @@ function withoutMergeTopics(body: string, topics: string[], path: string): strin
   if (found.length !== expected.length || found.some((value, index) => value !== expected[index])) refuse("V05", "merge Topics list does not match its metadata; align the body list with frontmatter topics before merging", path);
   return raw.slice(0, start).join("") + raw.slice(end).join("");
 }
-/** Drop absorb's first H1, demoting the remaining prose headings without touching code or paragraph text. */
+/** Merge structural edits ignore raw HTML conservatively, through the next blank line. */
+function mergeHeadingLines(body: string): string[] {
+  const raw = body.split(/\r?\n/); let html = false;
+  return visibleProseLines(body).map((line, index) => {
+    if (!raw[index]?.trim()) html = false;
+    else if (/^ {0,3}</.test(line)) html = true;
+    return html ? "" : line;
+  });
+}
+/** Remove only a leading title H1; demote other ATX headings and leave Setext/code/HTML untouched. */
 function demoteMergeHeadings(body: string): string {
-  const visible = visibleProseLines(body), raw = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
-  const paragraphs = new Map(setextParagraphs(body).map(paragraph => [paragraph.start, paragraph]));
-  let dropped = false, through = -1;
+  const visible = mergeHeadingLines(body), raw = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const leading = raw.findIndex(line => line.trim());
   return raw.map((line, index) => {
-    if (index <= through) return "";
-    const paragraph = paragraphs.get(index);
-    if (paragraph) {
-      through = paragraph.end;
-      if (paragraph.level === 1 && !dropped) { dropped = true; return ""; }
-      const newline = /\r?\n$/.exec(raw[paragraph.end]!)?.[0] ?? "";
-      return `${paragraph.level === 1 ? "##" : "###"} ${paragraph.text}${newline}`;
-    }
     const heading = /^ {0,3}(#{1,6})(?:[ \t]+|$)/.exec(visible[index] ?? "");
-    if (heading) {
-      if (heading[1]!.length === 1 && !dropped) { dropped = true; return ""; }
-      return heading[1]!.length < 6 ? line.replace(/^( {0,3})(#+)/, "$1#$2") : line;
-    }
-    return line;
+    if (!heading) return line;
+    if (index === leading && heading[1]!.length === 1 && /^ {0,3}#[ \t]+\S/.test(line)) return "";
+    return heading[1]!.length < 6 ? line.replace(/^( {0,3})(#+)/, "$1#$2") : line;
   }).join("");
 }
 function mergeGap(body: string, newline: string): string {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { anchorIndex } from "../src/links.ts";
+import { resolveLinks } from "../src/links.ts";
 import { planMerge } from "../src/write-operations.ts";
 
 function note(title: string, body: string): string {
@@ -14,6 +14,8 @@ function mergeBody(absorb: string): string {
 }
 
 for (const fragment of [
+  "Setext title\n===\n\nPreserved prose.",
+  "First heading line\nSecond heading line\n---\n\nPreserved prose.",
   "- list item\n---\n\nList prose.",
   "1. ordered item\n---\n\nList prose.",
   "> quoted item\n---\n\nQuoted prose.",
@@ -21,78 +23,65 @@ for (const fragment of [
   "\tindented code\n---\n\nCode prose.",
   "`inline code`\n---\n\nCode prose.",
   "Paragraph with `inline code`\n---\n\nCode prose.",
-  "- list item\nlazy continuation\n---\n\nList prose.",
   "- list item\n\n  continuation\n---\n\nList prose.",
   "1. ordered item\n\n   continuation\n---\n\nList prose.",
-  "```md\nFenced code\n---\n```\n\nCode prose.",
-]) test(`merge leaves a non-paragraph Setext candidate unchanged: ${JSON.stringify(fragment.split("\n")[0])}`, () => {
-  const body = mergeBody("# Absorb Finding\n\n" + fragment);
-  expect(body).toContain(fragment);
-  expect(body).not.toContain("### - list item");
-  expect(body).not.toContain("### indented code");
-  expect(body).not.toContain("### lazy continuation");
+  "Heading first line  \nHeading second line\n---",
+]) test(`merge leaves Setext text byte-unchanged: ${JSON.stringify(fragment.split("\n")[0])}`, () => {
+  expect(mergeBody("# Absorb Finding\n\n" + fragment)).toContain(fragment);
 });
 
-for (const marker of ["- list item", "1. ordered item", "> quote"]) test(`merge does not reset container ambiguity at an indented ATX heading after ${marker}`, () => {
-  const indentation = marker.startsWith("1.") ? "   " : "  ";
-  const original = `${marker}\n\n${indentation}## Nested heading\n\n${indentation}continuation\n---`;
-  const body = mergeBody("# Absorb Finding\n\n" + original);
-  expect(body).toContain(`${indentation}continuation\n---`);
-  expect(body).not.toContain("### continuation");
-  expect(anchorIndex(original, true).headings.has("continuation")).toBe(false);
+for (const newline of ["\n", "\r\n"]) test(`a leading multiline Setext H1 is retained (${JSON.stringify(newline)})`, () => {
+  const original = ["Absorb title first line", "Absorb title second line", "===", "", "Preserved absorbed paragraph."].join(newline);
+  expect(mergeBody(original)).toContain(original);
 });
 
-for (const marker of ["- list item", "1. ordered item", "> quote"]) test(`merge recognizes a clearly exited top-level Setext paragraph after ${marker}`, () => {
-  const original = `${marker}\n\nTop-level first line\nTop-level second line\n---`;
-  const body = mergeBody("# Absorb Finding\n\n" + original);
-  expect(body).toContain("### Top-level first line Top-level second line");
-  expect(anchorIndex(original, true).headings.has("top-level first line top-level second line")).toBe(true);
-});
-
-test("a block heading outside list content indentation exits the list before a following Setext paragraph", () => {
-  const original = "- item\n\n ## Boundary\nEvidence\n---\n\nSelf [[#Evidence]].";
-  const body = mergeBody("# Absorb Finding\n\n" + original);
-  expect(body).toContain("### Evidence");
-  const absorbed = anchorIndex(original, true), kept = anchorIndex("# Keep Finding\n\n## Evidence\n\nKeep self [[#Evidence]].", true);
-  expect(absorbed.headings.has("evidence")).toBe(true);
-  expect([...absorbed.headings].filter(heading => kept.headings.has(heading))).toEqual(["evidence"]);
-});
-
-test("a paragraph following a container ATX can exit without a blank when below its content indentation", () => {
-  const original = "- item\n\n  ## Nested heading\nEvidence\n---";
-  expect(mergeBody("# Absorb Finding\n\n" + original)).toContain("### Evidence");
-  expect(anchorIndex(original, true).headings.has("evidence")).toBe(true);
-});
-
-for (const newline of ["\n", "\r\n"]) test(`merge demotes an entire multiline Setext paragraph to one heading (${JSON.stringify(newline)})`, () => {
-  const original = ["# Absorb Finding", "", "First heading line", "Second heading line", "---", "", "Preserved prose.", ""].join(newline);
-  const body = mergeBody(original);
-  expect(body).toContain(`### First heading line Second heading line${newline}`);
-  expect(body).not.toContain(`First heading line${newline}### Second heading line`);
-  expect(body).toContain(`Preserved prose.${newline}`);
-  expect(anchorIndex(original, true).headings.has("first heading line second heading line")).toBe(true);
-  expect(anchorIndex(body, true).headings.has("first heading line second heading line")).toBe(true);
-  expect(anchorIndex(body, true).headings.has("second heading line")).toBe(false);
-});
-
-test("merge drops the entire first multiline Setext H1 while preserving following prose", () => {
-  const body = mergeBody("Absorb title first line\nAbsorb title second line\n===\n\nPreserved absorbed paragraph.");
-  expect(body).not.toContain("Absorb title first line"); expect(body).not.toContain("Absorb title second line");
+test("merge removes exactly the first nonblank leading ATX H1 and demotes a later H1", () => {
+  const body = mergeBody("\n \n# Absorb Finding\n\nPreserved absorbed paragraph.\n\n# Later Heading\n\nLater prose.");
+  expect(body).not.toMatch(/^# Absorb Finding$/m);
+  expect(body).not.toContain("Absorb Finding");
   expect(body).toContain("Preserved absorbed paragraph.");
+  expect(body).toContain("## Later Heading\n\nLater prose.");
   expect(body).toContain("# Keep Finding");
   expect(body).toContain("## Merged from [[absorb]]");
 });
 
-test("merge leaves ambiguous hard-break Setext paragraphs unchanged", () => {
-  const paragraph = "Heading first line  \nHeading second line\n---";
-  expect(mergeBody("# Absorb Finding\n\n" + paragraph)).toContain(paragraph);
-  expect(anchorIndex(paragraph, true).headings.size).toBe(0);
+test("a later H1 after prose is demoted rather than removed", () => {
+  const body = mergeBody("Introductory prose comes first.\n\n# Absorb Finding\n\nAbsorbed prose.");
+  expect(body).toContain("Introductory prose comes first.");
+  expect(body).toContain("## Absorb Finding\n\nAbsorbed prose.");
 });
 
-test("merge collision anchors use full Setext paragraphs without changing default reader anchor behavior", () => {
-  const paragraph = "First heading line\nSecond heading line\n---";
-  expect(anchorIndex(paragraph, true).headings).toEqual(new Set(["first heading line second heading line"]));
-  expect(anchorIndex(paragraph).headings).toEqual(new Set(["second heading line"]));
-  for (const body of ["- list item\n---", "> quote\n---", "    code\n---", "`inline code`\n---"]) expect(anchorIndex(body, true).headings.size).toBe(0);
-  expect(anchorIndex("- list item\n---").headings).toEqual(new Set(["- list item"]));
+for (const indent of ["", "   "]) test(`merge preserves a conservative raw HTML block with ${indent.length}-space indentation`, () => {
+  const raw = `${indent}<div>\n# raw HTML text\n</div>`;
+  const body = mergeBody("# Absorb Finding\n\n" + raw + "\n\n## Visible Section\n\nVisible prose.");
+  expect(body).toContain(raw);
+  expect(body).toContain("### Visible Section\n\nVisible prose.");
+});
+
+test("a raw HTML block ends only at the next blank line and prevents dropping a later H1", () => {
+  const raw = "<div>\n# raw HTML text\n</div>\n## Still raw";
+  const body = mergeBody(raw + "\n\n# Later Heading\n\nLater prose.");
+  expect(body).toContain(raw);
+  expect(body).toContain("## Later Heading\n\nLater prose.");
+});
+
+for (const raw of ["```md\n# Code heading\n## Code section\n```", "`inline code\n# Inline-code heading\n`", "    # Indented code heading", "\t# Tab code heading"]) test(`merge preserves code ATX text: ${JSON.stringify(raw.split("\n")[0])}`, () => {
+  const body = mergeBody(raw + "\n\n# Later Heading\n\nLater prose.");
+  expect(body).toContain(raw);
+  expect(body).toContain("## Later Heading\n\nLater prose.");
+});
+
+test("visible ATX headings demote one level while H6 stays H6", () => {
+  const body = mergeBody("# Absorb Finding\n\n## Evidence\n\n### Detail\n\n###### Deep\n\nProse.");
+  expect(body).toContain("### Evidence"); expect(body).toContain("#### Detail");
+  expect(body).toContain("###### Deep"); expect(body).not.toContain("####### Deep");
+});
+
+test("default reader Setext anchor behavior remains unchanged", () => {
+  const links = resolveLinks([
+    { path: "absorb.md", title: "Absorb", aliases: [], body: "First heading line\nSecond heading line\n---" },
+    { path: "ref.md", title: "Ref", aliases: [], body: "[[absorb#Second heading line]] [[absorb#First heading line Second heading line]]" },
+  ]).filter(link => link.source === "ref.md");
+  expect(links[0]).toMatchObject({ resolved: "absorb.md", reason: null });
+  expect(links[1]).toMatchObject({ resolved: null, reason: "missing-heading" });
 });

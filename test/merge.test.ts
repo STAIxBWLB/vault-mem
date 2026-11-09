@@ -172,11 +172,25 @@ test("merge keeps legacy inbound names/dates and projects existing broken fragme
   expect(refused.issues).toContainEqual(expect.objectContaining({ code: "V03", severity: "error" })); expect(disk(fresh.root)).toEqual(before);
 });
 
-test("merge drops a Setext absorb H1 and demotes other Setext headings without changing prose", () => {
+test("merge preserves Setext absorb headings without changing prose", () => {
   const f = fixture(), file = join(f.notes, "absorb.md");
   writeFileSync(file, readFileSync(file, "utf8").replace("# Absorb Finding", "Absorb Finding\n==============").replace("## Absorb Evidence", "Absorb Evidence\n---------------"));
   const preview = f.merge(); expect(preview).toMatchObject({ ok: true, preview: true });
-  expect(preview.merge!.body).not.toContain("Absorb Finding\n=============="); expect(preview.merge!.body).toContain("### Absorb Evidence"); expect(preview.merge!.body).toContain("Absorb prose exactly.");
+  expect(preview.merge!.body).toContain("Absorb Finding\n=============="); expect(preview.merge!.body).toContain("Absorb Evidence\n---------------"); expect(preview.merge!.body).toContain("Absorb prose exactly.");
+});
+
+test("merge preview and confirm preserve ATX-looking text inside a leading raw HTML block", () => {
+  const f = fixture(), raw = "<div>\n# raw HTML text\n</div>";
+  writeFileSync(join(f.notes, "absorb.md"), note("Absorb Finding", `${raw}\n\n## Evidence\n\nAbsorbed evidence.`).replace("# Absorb Finding\n\n", ""));
+  writeFileSync(join(f.notes, "peer.md"), note("Peer Finding", "Follow [[absorb]]."));
+  const before = disk(f.root), preview = f.merge();
+  expect(preview).toMatchObject({ ok: true, applied: false, preview: true });
+  expect(preview.merge!.body).toContain(raw);
+  expect(preview.merge!.body).toContain("### Evidence");
+  expect(disk(f.root)).toEqual(before);
+  expect(f.merge({ confirm: true, fingerprint: preview.fingerprint })).toMatchObject({ ok: true, applied: true });
+  expect(parseFrontmatter(readFileSync(join(f.notes, "keep.md"), "utf8")).body).toBe(preview.merge!.body);
+  expect(parseFrontmatter(readFileSync(join(f.notes, "absorb.md"), "utf8")).body).toContain(raw);
 });
 
 test("merge preserves multiline inline-code headings and links byte for byte", () => {

@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Add two-step `vmem merge` / `vmem_merge`: full deterministic body/source/topic/inbound preview, locked fingerprint confirmation, shared link repointing and supersession, rollback and one log event. Authored endpoints get updated dates while inbound rewrites retain freshness; source/body limits and referenced fragment collisions, including copied fragment-only self-links, refuse before mutation. Setext demotion handles whole eligible paragraphs and preserves list/code/thematic-break blocks (#166).
+- Add two-step `vmem merge` / `vmem_merge`: full deterministic body/source/topic/inbound preview, locked fingerprint confirmation, shared link repointing and supersession, rollback and one log event. Authored endpoints get updated dates while inbound rewrites retain freshness; source/body limits and referenced fragment collisions, including copied fragment-only self-links, refuse before mutation. Heading edits remove only a leading title H1 and demote ATX outside code/raw HTML; Setext stays byte-unchanged, and fragment collisions use the reader anchor index (#166).
 
 - Promotion previews optionally match configured canonical Markdown table rows with deterministic whole-token matching, alias handling, bounded indexing and advisory `link-existing` choices. Org previews read only target-vault tables; rows/warnings and `canonTables` stay outside fingerprints. Missing or denied tables warn without blocking. Per-vault `canonTables` uses config format 4; no built-in note names, model calls or automatic row edits (#167).
 

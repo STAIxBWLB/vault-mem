@@ -95,3 +95,16 @@ test("merge checks a kept Setext collision after an ATX block exits a list", () 
   expect(preview.issues).toContainEqual(expect.objectContaining({ code: "V03", severity: "error", message: expect.stringContaining("collid") }));
   expect(disk(f.root)).toEqual(before);
 });
+
+for (const reference of ["external", "self"] as const) test(`merge uses the reader's multiline Setext identity for an ${reference} absorbed fragment`, () => {
+  const keepBody = "First heading line\nSecond heading line\n---\n\nKept evidence.";
+  const absorbBody = `${reference === "self" ? "Follow [[#Second heading line]].\n\n" : ""}## Second heading line\n\nDifferent absorbed evidence.`;
+  const f = fixture(keepBody, absorbBody);
+  if (reference === "external") writeFileSync(join(f.notes, "peer.md"), note("External Finding", "Follow [[absorb#Second heading line]]."));
+  const before = disk(f.root), preview = f.merge();
+  expect(preview).toMatchObject({ ok: false, applied: false });
+  expect(preview.issues).toContainEqual(expect.objectContaining({ code: "V03", severity: "error", message: expect.stringContaining("Second heading line") }));
+  expect(preview.issues.some(issue => issue.code === "V03" && /collid|collision/i.test(issue.message))).toBe(true);
+  expect(preview).not.toHaveProperty("merge");
+  expect(disk(f.root)).toEqual(before);
+});
