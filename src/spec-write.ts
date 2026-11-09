@@ -10,7 +10,7 @@ import { loadRegistry, syncDirectory } from "./registry.ts";
 import { discoverSpecs, resolveSpecWorktree, type SpecCandidate, type SpecDocument, type SpecSnapshot } from "./spec-source.ts";
 import { introducedSpecErrors, type SpecValidationIssue } from "./spec-validate.ts";
 import { MAX_NOTE_BYTES } from "./vault-index.ts";
-import { screenContent } from "./write-validation.ts";
+import { screenContent, screenMetadata } from "./write-validation.ts";
 
 export const SPEC_UPDATE_SCALAR_FIELDS = ["title", "type", "status", "parent", "superseded-by", "verified-against"] as const;
 export const SPEC_UPDATE_LIST_FIELDS = ["depends-on", "references", "implements", "covers", "tags", "paths"] as const;
@@ -90,7 +90,7 @@ export function attributeSpecErrors(issues: SpecValidationIssue[], path: string)
 function screen(after: string, source: SpecSourceSpec, config: VmemConfig, path: string): void {
   if (Buffer.byteLength(after) > MAX_NOTE_BYTES) refuse("SIZE", "updated spec exceeds the read limit; reduce its frontmatter or split the file before retrying", path);
   const vault = { ...source, kind: "personal" as const };
-  const issues = [...screenContent(after, vault, config), ...screenContent(JSON.stringify(parseFrontmatter(after).data), vault, config)]
+  const issues = [...screenContent(after, vault, config), ...screenMetadata(parseFrontmatter(after).data, { vault, config }, path)]
     .filter(issue => issue.severity === "error").map(issue => ({ ...issue, path, message: `${issue.message}; remove the content matched by ${issue.code} from ${path} and retry` }));
   if (issues.length) throw new Refusal([...new Map(issues.map(issue => [`${issue.code}:${issue.message}`, issue])).values()]);
 }

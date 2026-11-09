@@ -103,6 +103,15 @@ for (const [name, title, pii, code] of [
   assertRefused(result, code); expect(f.read()).toBe(f.original); expect(JSON.stringify(result)).not.toContain(title);
 }, 30_000);
 
+test("AC7: a pre-existing quoted secret key refuses an unrelated title update", () => {
+  const f = fixture(), before = f.original.replace("custom: {answer: 42}", '"password": "synthetic-value"\r\ncustom: {answer: 42}');
+  f.put("nested/SPEC.md", before);
+  const result = f.update({ set: { title: "Unrelated edit" } });
+  assertRefused(result, "V06");
+  expect(f.read()).toBe(before);
+  expect(JSON.stringify(result)).not.toContain("synthetic-value");
+}, 30_000);
+
 test("PII allow permits email/phone, policies refuse channels, actors match MCP and marker attribution", () => {
   const allow = fixture(); expect(allow.update({ set: { title: "fixture@example.invalid +1 (415) 555-0123" } }).ok).toBe(true);
   for (const write of ["cli", "none"] as const) {
