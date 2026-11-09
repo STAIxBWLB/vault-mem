@@ -179,6 +179,20 @@ test("merge preserves Setext absorb headings without changing prose", () => {
   expect(preview.merge!.body).toContain("Absorb Finding\n=============="); expect(preview.merge!.body).toContain("Absorb Evidence\n---------------"); expect(preview.merge!.body).toContain("Absorb prose exactly.");
 });
 
+test("merge keeps a later authored H1 when the original absorb body starts with Topics", () => {
+  const f = fixture(), file = join(f.notes, "absorb.md");
+  const header = parseFrontmatter(note("Absorb Finding", "")).frontmatter!;
+  writeFileSync(file, header + "## Topics\n\n- [[research]]\n\n# Later Authored Title\n\nPreserved authored prose.\n");
+  writeFileSync(join(f.notes, "peer.md"), note("Peer Finding", "Follow [[absorb]]."));
+  const before = disk(f.root), preview = f.merge();
+  expect(preview).toMatchObject({ ok: true, applied: false, preview: true });
+  expect(preview.merge!.body).toContain("## Later Authored Title\n\nPreserved authored prose.");
+  expect(disk(f.root)).toEqual(before);
+  expect(f.merge({ confirm: true, fingerprint: preview.fingerprint })).toMatchObject({ ok: true, applied: true });
+  expect(parseFrontmatter(readFileSync(join(f.notes, "keep.md"), "utf8")).body).toBe(preview.merge!.body);
+  expect(parseFrontmatter(readFileSync(file, "utf8")).body).toContain("# Later Authored Title\n\nPreserved authored prose.");
+});
+
 test("merge preview and confirm preserve ATX-looking text inside a leading raw HTML block", () => {
   const f = fixture(), raw = "<div>\n# raw HTML text\n</div>";
   writeFileSync(join(f.notes, "absorb.md"), note("Absorb Finding", `${raw}\n\n## Evidence\n\nAbsorbed evidence.`).replace("# Absorb Finding\n\n", ""));
@@ -231,6 +245,17 @@ test("merge refuses an older keeper superseded by absorb and tells the caller to
   writeFileSync(file, note("Keep Finding", "Keep evidence.", { status: "superseded", superseded_by: "[[absorb]]" }));
   const before = disk(f.root), result = f.merge(); expect(result).toMatchObject({ ok: false, applied: false });
   expect(result.issues).toContainEqual(expect.objectContaining({ code: "V10", message: expect.stringMatching(/superseded by.*swap keep and absorb.*fresh merge preview/) }));
+  expect(disk(f.root)).toEqual(before);
+});
+
+for (const supersedes of ["[[keep]]", ["[[keep]]"], ["[[notes/KEEP.md]]"]]) test(`merge refuses an older keeper named by absorb supersedes ${JSON.stringify(supersedes)}`, () => {
+  const f = fixture();
+  writeFileSync(join(f.notes, "absorb.md"), note("Absorb Finding", "Newer absorbed evidence.", { supersedes }));
+  writeFileSync(join(f.notes, "peer.md"), note("Peer Finding", "Follow [[absorb]]."));
+  const before = disk(f.root), preview = f.merge();
+  expect(preview).toMatchObject({ ok: false, applied: false });
+  expect(preview.issues).toContainEqual(expect.objectContaining({ code: "V10", path: "notes/absorb.md", message: expect.stringMatching(/supersedes.*older.*swap keep and absorb.*fresh merge preview/) }));
+  expect(preview).not.toHaveProperty("merge");
   expect(disk(f.root)).toEqual(before);
 });
 

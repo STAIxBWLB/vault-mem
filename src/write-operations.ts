@@ -241,13 +241,13 @@ function mergeHeadingLines(body: string): string[] {
   });
 }
 /** Remove only a leading title H1; demote other ATX headings and leave Setext/code/HTML untouched. */
-function demoteMergeHeadings(body: string): string {
+function demoteMergeHeadings(body: string, removeLeadingTitle: boolean): string {
   const visible = mergeHeadingLines(body), raw = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
   const leading = raw.findIndex(line => line.trim());
   return raw.map((line, index) => {
     const heading = /^ {0,3}(#{1,6})(?:[ \t]+|$)/.exec(visible[index] ?? "");
     if (!heading) return line;
-    if (index === leading && heading[1]!.length === 1 && /^ {0,3}#[ \t]+\S/.test(line)) return "";
+    if (removeLeadingTitle && index === leading && heading[1]!.length === 1 && /^ {0,3}#[ \t]+\S/.test(line)) return "";
     return heading[1]!.length < 6 ? line.replace(/^( {0,3})(#+)/, "$1#$2") : line;
   }).join("");
 }
@@ -281,7 +281,9 @@ export function planMerge(operation: Extract<WriteOp, { op: "merge" }>, notes: M
   const keepTopics = mergeTopics(keepDoc.data.topics, keep), absorbTopics = mergeTopics(absorbDoc.data.topics, absorb), topics: string[] = [], seen = new Set<string>();
   for (const topic of [...keepTopics, ...absorbTopics]) if (!seen.has(topicKey(topic))) { seen.add(topicKey(topic)); topics.push(topic); }
   const newline = /\r?\n/.exec(keepDoc.body)?.[0] ?? "\n";
-  const first = withoutMergeTopics(keepDoc.body, keepTopics, keep), second = demoteMergeHeadings(withoutMergeTopics(absorbDoc.body, absorbTopics, absorb));
+  const originalLeadingLine = absorbed.body.split(/\r?\n/).find(line => line.trim()) ?? "";
+  const removeLeadingTitle = /^ {0,3}#[ \t]+\S/.test(originalLeadingLine);
+  const first = withoutMergeTopics(keepDoc.body, keepTopics, keep), second = demoteMergeHeadings(withoutMergeTopics(absorbDoc.body, absorbTopics, absorb), removeLeadingTitle);
   const body = mergeGap(mergeGap(first, newline) + `## Merged from [[${absorb.slice(6, -3)}]]${newline}${newline}` + second, newline) + `## Topics${newline}${newline}` + topics.map(topic => `- ${topic}${newline}`).join("");
   if (Buffer.byteLength(body) > MAX_WRITE_BYTES) refuse("V09", "merged body exceeds 256 KiB; shorten either note's content before retrying the merge", keep);
   try {
