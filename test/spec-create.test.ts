@@ -111,7 +111,11 @@ test("wrapped Git index output overflow identifies the bounded gitlink check and
   expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
 }, 30_000);
 
-for (const [indexed, requested] of [["Vendor/Café", "vendor/café/new/SPEC.md"], ["Vendor/Café", "vendor/CAFÉ/new/SPEC.md"]] as const) test(`create refuses missing gitlink ${indexed} through canonical Unicode and case alias ${requested}`, () => {
+for (const [indexed, requested] of [
+  ["Vendor/Café", "vendor/café/new/SPEC.md"], ["Vendor/Café", "vendor/CAFÉ/new/SPEC.md"],
+  ["Café/Café", "Café/Café/new/SPEC.md"], ["Café/Café", "Café/Café/new/SPEC.md"],
+  ["Café-Café", "Café-Café/new/SPEC.md"],
+] as const) test(`create refuses missing gitlink ${indexed} through canonical Unicode and case alias ${requested}`, () => {
   const f = fixture(), commit = f.git(["rev-parse", "HEAD"]);
   stageAncestorIndex(f, `160000 ${commit}\t${indexed}\n`);
   expect(existsSync(join(f.repo, indexed))).toBe(false);
@@ -120,7 +124,7 @@ for (const [indexed, requested] of [["Vendor/Café", "vendor/café/new/SPEC.md"
   expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "PATH", message: expect.stringContaining("gitlink") }));
   expect(output.stageQueries).toHaveLength(1);
   expect(output.stageQueries[0]!).toMatchObject({ maxBuffer: 64 * 1024, records: 1 });
-  expect(existsSync(join(f.repo, "vendor"))).toBe(false);
+  expect(existsSync(join(f.repo, requested.split("/")[0]!))).toBe(false);
   expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
 }, 30_000);
 

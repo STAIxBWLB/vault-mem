@@ -103,7 +103,7 @@ function ancestorPathspecs(root: string, ancestors: string[], path: string): str
   for (const ancestor of ancestors) for (const spelling of new Set([ancestor, relative(root, canonicalPath(join(root, ancestor))).split(sep).join("/")])) {
     let variants = [""];
     for (const character of spelling.normalize("NFC")) {
-      const cases = /^[A-Za-z]$/.test(character) ? [character] : [...new Set([character, character.toLowerCase(), character.toUpperCase()])];
+      const cases = /^[A-Za-z]$/.test(character) ? [character] : [...new Set([character, character.toLowerCase(), character.toUpperCase()].flatMap(value => [value.normalize("NFC"), value.normalize("NFD")]))];
       if (variants.length * cases.length > ANCESTOR_SPELLINGS) ancestorRequestLimit(path);
       variants = variants.flatMap(prefix => cases.map(value => prefix + value));
     }
