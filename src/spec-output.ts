@@ -117,7 +117,9 @@ export function renderSpecUpdate(r: SpecWriteResult, o: TextOptions): string {
   const verdict = r.ok ? r.changed ? "updated" : "unchanged" : "refused";
   return blocks(heading(`spec update ${r.id ?? ""}: ${verdict}`.trim(), o),
     fields([["source", r.source], ["worktree", r.worktree], ["path", r.path], ["sha256", r.sha256], ["actor", r.actor]], o),
-    issueTable(r.issues, o));
+    issueTable(r.issues.map(issue => ({ ...issue, message: [issue.message,
+      issue.target !== undefined ? `target: ${issue.target}` : undefined,
+      issue.originalTarget !== undefined ? `original target: ${issue.originalTarget}` : undefined].filter(Boolean).join("; ") })), o));
 }
 
 export function renderSpec(command: SpecCommand, result: unknown, o: TextOptions, context: SpecTextContext): string {

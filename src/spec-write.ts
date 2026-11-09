@@ -19,7 +19,7 @@ export interface SpecUpdateRequest {
   id: string; source?: string; worktree?: string; expectedSha?: string;
   set?: Record<string, string>; unset?: string[]; add?: Record<string, string[]>; remove?: Record<string, string[]>;
 }
-export interface SpecWriteIssue { code: string; severity: "error" | "warning"; message: string; path?: string; target?: string; field?: string }
+export interface SpecWriteIssue { code: string; severity: "error" | "warning"; message: string; path?: string; target?: string; originalTarget?: string; field?: string }
 export interface SpecWriteResult {
   ok: boolean; changed: boolean; actor: "agent" | "person"; source?: string; worktree?: string; id?: string; path?: string; sha256?: string; issues: SpecWriteIssue[];
 }
@@ -85,7 +85,7 @@ export function prospectiveSpecSnapshot(current: SpecSnapshot, edits: ReadonlyMa
 }
 /** Validation can blame a related file (for example a later duplicate). The mutation receipt always names the written file. */
 export function attributeSpecErrors(issues: SpecValidationIssue[], path: string): SpecWriteIssue[] {
-  return issues.map(issue => ({ ...issue, path, ...(issue.path !== path ? { target: issue.path } : {}), message: `${issue.message}; correct the update to ${path} and retry` }));
+  return issues.map(issue => ({ ...issue, path, ...(issue.path !== path ? { target: issue.path, ...(issue.target !== undefined ? { originalTarget: issue.target } : {}) } : {}), message: `${issue.message}; correct the update to ${path} and retry` }));
 }
 function screen(after: string, source: SpecSourceSpec, config: VmemConfig, path: string): void {
   if (Buffer.byteLength(after) > MAX_NOTE_BYTES) refuse("SIZE", "updated spec exceeds the read limit; reduce its frontmatter or split the file before retrying", path);

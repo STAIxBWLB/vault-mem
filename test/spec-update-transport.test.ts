@@ -113,3 +113,33 @@ test("spec update accepts SHA-1 and SHA-256 verification commits in either hex c
   }
   for (const value of ["a".repeat(39), "a".repeat(41), "a".repeat(63), "a".repeat(65), "g".repeat(40)]) expect(pattern.test(value)).toBe(false);
 }, 30_000);
+
+test("transport patterns reject malformed stamps even when the existing spec has malformed verification debt", () => {
+  const f = fixture(), schema = specCommandSchema("update");
+  writeFileSync(f.file, readFileSync(f.file, "utf8").replace("status: draft\n", "status: draft\nverified-against: legacy-invalid\n"));
+  const before = readFileSync(f.file, "utf8"), server = createSpecMcp(f.home, f.env);
+  for (const value of ["g".repeat(40), "a".repeat(41), "a".repeat(63), "g".repeat(64)]) {
+    const request = { id: "root", set: { "verified-against": value } };
+    expect(argumentError(request, schema)).toContain("required pattern");
+    expect(() => runSpecCommand(["update", "root", "--set", JSON.stringify(request.set)], f.env)).toThrow("required pattern");
+    expect(() => server.handlers.vmem_spec_update!(request)).toThrow("required pattern");
+    expect(readFileSync(f.file, "utf8")).toBe(before);
+  }
+  for (const value of ["g".repeat(64), "A".repeat(64)]) {
+    expect(argumentError({ id: "root", expectedSha: value }, schema)).toContain("required pattern");
+    expect(() => runSpecCommand(["update", "root", "--expected-sha", value], f.env)).toThrow("required pattern");
+    expect(readFileSync(f.file, "utf8")).toBe(before);
+  }
+}, 30_000);
+
+test("human spec refusals name dangling ids and retain both related file and original reference", () => {
+  const f = fixture();
+  const dangling = runSpecCommand(["update", "root", "--set", '{"parent":"missing-parent"}'], f.env);
+  expect(dangling.code).toBe(1); expect(dangling.text).toContain("missing-parent");
+  writeFileSync(join(f.repo, "child.md"), '---\nid: child\ntype: module\ntitle: Child\nparent: root\n---\n');
+  const related = runSpecCommand(["update", "root", "--set", '{"type":"submodule"}'], f.env);
+  expect(related.code).toBe(1); expect(related.text).toContain("child.md");
+  expect(related.text.replace(/\s+/g, " ")).toContain("original target: root");
+  const result = JSON.parse(runSpecCommand(["update", "root", "--set", '{"type":"submodule"}', "--json"], f.env).text);
+  expect(result.issues).toContainEqual(expect.objectContaining({ code: "type_rank", path: "SPEC.md", target: "child.md", originalTarget: "root" }));
+}, 30_000);

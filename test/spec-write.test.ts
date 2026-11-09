@@ -78,7 +78,7 @@ test("the gate permits old errors and attributes related-file errors to the file
   expect(f.update({ set: { title: "Unrelated fix" } }).ok).toBe(true);
   const before = f.read("design.md"), result = f.update({ id: "root", set: { type: "submodule" } });
   assertRefused(result, "type_rank", "design.md");
-  expect(result.issues).toContainEqual(expect.objectContaining({ path: "design.md", target: "nested/SPEC.md", code: "type_rank" }));
+  expect(result.issues).toContainEqual(expect.objectContaining({ path: "design.md", target: "nested/SPEC.md", originalTarget: "root", code: "type_rank" }));
   expect(f.read("design.md")).toBe(before);
 }, 30_000);
 
