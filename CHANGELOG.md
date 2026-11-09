@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Spec create refuses a new Markdown input past the discovery cap, and create/update titles reject controls and line separators. Cleanup errors preserve their directory and cause. Delete acknowledgement budgets are preview-invariant, blocked path refusals request a fresh preview, and applied-delete errors direct inspection of the parent directory and lock state instead of re-confirmation (#175, #176).
+
 - Add `vmem_spec_delete` and `vmem spec delete`: read-only previews list every backlink kind and child, with a path/SHA/list fingerprint. Confirm recomputes under the shared mutation lock, refuses stale acknowledgements and allows only listed dangling links to the removed id. Other introduced errors remain blocked before result limits. All three spec write tools are implemented (#97, T4c).
 
 - Add `vmem_spec_create` and `vmem spec create` with ordered frontmatter, type-specific headings and draft defaults. Creation shares spec write policy, secret/PII screens, actor attribution, mutation locks and the introduced-error gate; unsafe, ignored or existing targets refuse without overwrite. Delete remains unimplemented (#97, T4b).

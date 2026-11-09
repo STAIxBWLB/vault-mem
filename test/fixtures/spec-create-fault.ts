@@ -29,7 +29,7 @@ mock.module("node:fs", () => ({ ...original,
     return fd;
   },
   writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
-    if (mode === "temp-write" && temps.has(Number(args[0]))) throw new Error("synthetic create staging fault");
+    if ((mode === "temp-write" || mode === "cleanup-permission") && temps.has(Number(args[0]))) throw new Error("synthetic create staging fault");
     return original.writeFileSync(...args);
   },
   fchmodSync: (fd: number, mode: number) => { original.fchmodSync(fd, mode); if (temps.has(fd) && mode === expectedFileMode) modes.add(fd); },
@@ -60,6 +60,10 @@ mock.module("node:fs", () => ({ ...original,
   renameSync: (...args: Parameters<typeof fs.renameSync>) => {
     if (!updating && String(args[0]).includes(".spec-")) throw new Error("unexpected create rename fallback");
     original.renameSync(...args);
+  },
+  rmdirSync: (...args: Parameters<typeof fs.rmdirSync>) => {
+    if (fault === "cleanup-permission" && String(args[0]) === join(root, "new/deep")) throw Object.assign(new Error("synthetic created-directory access failure"), { code: "EACCES" });
+    return original.rmdirSync(...args);
   },
 }));
 const { createSpec } = await import("../../src/spec-write.ts");

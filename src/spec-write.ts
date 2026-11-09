@@ -7,7 +7,7 @@ import { emitFrontmatter, parseFrontmatter } from "./frontmatter.ts";
 import { AGENT_MARKERS } from "./log-format.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry, syncDirectory } from "./registry.ts";
-import { discoverSpecs, resolveSpecWorktree, type SpecCandidate, type SpecDocument, type SpecSnapshot } from "./spec-source.ts";
+import { discoverSpecs, resolveSpecWorktree, MAX_SPEC_MARKDOWN_PATHS, type SpecCandidate, type SpecDocument, type SpecSnapshot } from "./spec-source.ts";
 import { introducedSpecErrors, type SpecValidationIssue } from "./spec-validate.ts";
 import { MAX_NOTE_BYTES } from "./vault-index.ts";
 import { screenContent, screenMetadata } from "./write-validation.ts";
@@ -40,6 +40,7 @@ function retrySpecOperation(operation: SpecWriteOperation): string {
   if (operation === "delete") return "request a fresh preview with vmem spec delete, review its backlinks and children, then confirm the delete with that fingerprint";
   return operation === "create" ? "reread the source tree and retry the create" : "reread vmem spec get and retry the update with its sha256 (--expected-sha)";
 }
+const deletedSpecInspection = "inspect the deleted file's parent directory, and inspect the lock state under VMEM_HOME";
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 class Refusal extends Error {
@@ -57,21 +58,22 @@ function deniedSpecPath(file: string, denyPaths: string[]): boolean {
   return isDenied(canonicalPath(file), denyPaths) || isDenied(file, denyPaths);
 }
 
-function pathParts(path: string): string[] {
-  if (typeof path !== "string" || isAbsolute(path) || !path.endsWith(".md") || path.includes("\\") || /[\p{Cc}]/u.test(path) || path.split("/").some(part => !part || part === "." || part === ".." || part.toLowerCase() === ".git")) refuse("PATH", "spec path is not contained Markdown; use a relative .md path outside Git administrative directories", typeof path === "string" ? path : undefined);
+function pathParts(path: string, operation: SpecWriteOperation = "create"): string[] {
+  if (typeof path !== "string" || isAbsolute(path) || !path.endsWith(".md") || path.includes("\\") || /[\p{Cc}]/u.test(path) || path.split("/").some(part => !part || part === "." || part === ".." || part.toLowerCase() === ".git")) refuse("PATH", `spec path is not contained Markdown; use a relative .md path outside Git administrative directories${operation === "delete" ? `, then ${retrySpecOperation(operation)}` : ""}`, typeof path === "string" ? path : undefined);
   return path.split("/");
 }
 
 /** Read without following links or accepting a torn/oversized file. Parent paths are checked before every write stage. */
-function plainPath(root: string, path: string, denyPaths: string[] = []): string {
-  pathParts(path);
+function plainPath(root: string, path: string, denyPaths: string[] = [], operation: SpecWriteOperation = "update"): string {
+  pathParts(path, operation);
+  const next = operation === "delete" ? `, then ${retrySpecOperation(operation)}` : " and retry";
   let file = root;
-  if (lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory()) refuse("PATH", "worktree root changed; restore the original plain root and retry", path);
+  if (lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory()) refuse("PATH", `worktree root changed; restore the original plain root${next}`, path);
   for (const [index, part] of path.split("/").entries()) {
     file = join(file, part); const stat = lstatSync(file);
-    if (stat.isSymbolicLink() || (index === path.split("/").length - 1 ? !stat.isFile() : !stat.isDirectory())) refuse("PATH", "spec path has a symlink or non-plain component; restore the plain in-worktree file and retry", path);
+    if (stat.isSymbolicLink() || (index === path.split("/").length - 1 ? !stat.isFile() : !stat.isDirectory())) refuse("PATH", `spec path has a symlink or non-plain component; restore the plain in-worktree file${next}`, path);
   }
-  if (!within(root, realpathSync(file)) || deniedSpecPath(file, denyPaths)) refuse("PATH", "spec path is denied or leaves the worktree; choose an allowed plain spec file", path);
+  if (!within(root, realpathSync(file)) || deniedSpecPath(file, denyPaths)) refuse("PATH", `spec path is denied or leaves the worktree; choose an allowed plain spec file${operation === "delete" ? next : ""}`, path);
   return file;
 }
 function readBounded(file: string, path: string, operation: SpecWriteOperation): { source: string; mode: number; identity: string } {
@@ -89,7 +91,7 @@ function readBounded(file: string, path: string, operation: SpecWriteOperation):
   } finally { closeSync(fd); }
 }
 
-function readPlain(root: string, path: string, denyPaths: string[], operation: SpecWriteOperation) { return readBounded(plainPath(root, path, denyPaths), path, operation); }
+function readPlain(root: string, path: string, denyPaths: string[], operation: SpecWriteOperation) { return readBounded(plainPath(root, path, denyPaths, operation), path, operation); }
 
 /** The prospective file must belong to the same tree that discovery will scan. */
 function guardCreateRepository(root: string, path: string, ancestors: string[], deepest: string, env: NodeJS.ProcessEnv): void {
@@ -164,9 +166,9 @@ function publishSpec(temp: string, file: string, change: SpecMutation, result: S
   result.changed = true; result.sha256 = hash(change.after);
   if (change.before === null) unlinkSync(temp);
 }
-function createdDirectoryCleanupIssue(error: unknown, race: boolean): SpecWriteIssue {
-  if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOTEMPTY") return { code: "CLEANUP", severity: "warning", message: `created parent directory was kept (ENOTEMPTY) because it now contains another file or directory; ${race ? "this is expected after a refused create race; " : ""}inspect the preserved contents and choose an absent target before retrying the create` };
-  return { code: "CLEANUP", severity: "error", message: "owned empty parent directory cleanup failed; inspect the target's parent directories before retrying" };
+function createdDirectoryCleanupIssue(error: unknown, race: boolean, directory: string): SpecWriteIssue {
+  if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOTEMPTY") return { code: "CLEANUP", severity: "warning", message: `created parent directory was kept (${directory}, ENOTEMPTY) because it now contains another file or directory; ${race ? "this is expected after a refused create race; " : ""}inspect the preserved contents and choose an absent target before retrying the create` };
+  return { code: "CLEANUP", severity: "error", message: `owned parent directory cleanup failed for ${directory} (${writeErrorCause(error)}); inspect its ownership and access, preserve unrelated contents and repair the reported cause before retrying the create` };
 }
 function cleanupCreatedDirs(owned: Map<string, string>, result: SpecWriteResult): void {
   if (result.changed) return;
@@ -174,7 +176,7 @@ function cleanupCreatedDirs(owned: Map<string, string>, result: SpecWriteResult)
   for (const [dir, stamp] of [...owned].reverse()) {
     try { if (identity(dir) !== stamp) throw new Error("directory ownership changed"); rmdirSync(dir); }
     catch (error) {
-      const item = createdDirectoryCleanupIssue(error, race);
+      const item = createdDirectoryCleanupIssue(error, race, dir);
       if (item.severity === "error") result.ok = false;
       result.issues.push({ ...item, ...(result.path ? { path: result.path } : {}) });
     }
@@ -249,7 +251,14 @@ function guardSpecWrite(home: string, request: Pick<SpecUpdateRequest, "source" 
   return guard;
 }
 
-/** Common policy/binding/lock/CAS/validation/atomic path. Future create/delete planners can share these guards. */
+/** Count every Git-listed input, not only admitted spec candidates. */
+function guardCreateDiscoveryBudget(snapshot: SpecSnapshot, change: SpecMutation): void {
+  if (change.before !== null) return;
+  const paths = snapshot.markdownPaths;
+  if (!paths) refuse("LIMIT", "spec create discovery budget is unavailable; rescan the source with the current vmem install before retrying the create", change.path);
+  if (!paths.includes(change.path) && paths.length >= MAX_SPEC_MARKDOWN_PATHS) refuse("LIMIT", `spec create would exceed the ${MAX_SPEC_MARKDOWN_PATHS}-Markdown discovery cap; remove or ignore Markdown files (untrack tracked exclusions with git rm --cached), then retry the create`, change.path);
+}
+/** Shared authorization, lock, validation and publication path for spec mutations. */
 export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" | "source" | "worktree" | "expectedSha">, plan: (snapshot: SpecSnapshot) => SpecMutation, options: SpecWriteOptions = {}, operation: SpecWriteOperation = "update"): SpecWriteResult {
   const env = options.env ?? process.env, channel = options.channel ?? "cli";
   const context = { ...options, operation };
@@ -266,6 +275,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
       return first.path;
     });
     const { config, source, root, homeRoot } = startup;
+    guardCreateDiscoveryBudget(initial, first);
     const assertBinding = () => {
       if (lockFile && lockIdentity !== undefined && identity(lockFile) !== lockIdentity) refuse("LOCKED", `spec mutation lock changed ownership; inspect the lock under VMEM_HOME and wait for the other writer, then ${retrySpecOperation(operation)}`, result.path);
       guardSpecWrite(home, request, context, startup);
@@ -294,6 +304,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     if (current.commonDir !== initial.commonDir || identity(initial.commonDir) !== commonIdentity || change.path !== first.path || change.before !== first.before) refuse("DRIFT", `spec ${operation} changed since the request read; ${retrySpecOperation(operation)}`, first.path);
     const original = readMutation(root, change, config.denyPaths ?? [], env, operation);
     if (original.source !== change.before) refuse("DRIFT", `spec ${operation} changed under the mutation lock; ${retrySpecOperation(operation)}`, change.path);
+    guardCreateDiscoveryBudget(current, change);
     const prospective = prospectiveSpecSnapshot(current, new Map([[change.path, change.after]]));
     screenMutation(change, source, config, operation);
     const introduced = introducedSpecErrors(current, prospective, { env }, allowedDeleteLinks(current, change));
@@ -303,7 +314,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
       if (!isDeepStrictEqual(discoverSpecs(source, { worktree: root, env }), current)) refuse("DRIFT", `spec tree changed while validating deletion; ${retrySpecOperation(operation)}`, change.path);
       const latest = readMutation(root, change, config.denyPaths ?? [], env, operation);
       if (latest.source !== change.before || latest.identity !== original.identity) refuse("DRIFT", `spec changed before deletion; ${retrySpecOperation(operation)}`, change.path);
-      const file = plainPath(root, change.path, config.denyPaths ?? []);
+      const file = plainPath(root, change.path, config.denyPaths ?? [], operation);
       assertBinding();
       unlinkSync(file); result.changed = true; syncDirectory(dirname(file)); result.ok = true; return result;
     }
@@ -320,7 +331,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     publishSpec(temp, file, change, result); temp = undefined;
     syncDirectory(parent); syncCreatedParents(createdDirs); result.ok = true;
   } catch (error) {
-    result.issues = error instanceof Refusal ? error.issues : [{ code: "IO", severity: "error", message: `spec ${operation} failed (${writeErrorCause(error)}); inspect the source tree and target directory, check permissions and free space for the target and VMEM_HOME lock directory, repair the reported cause, then ${retrySpecOperation(operation)}`, ...(result.path ? { path: result.path } : {}) }];
+    result.issues = error instanceof Refusal ? error.issues : [{ code: "IO", severity: "error", message: `spec ${operation} failed (${writeErrorCause(error)}); ${operation === "delete" && result.changed ? `${deletedSpecInspection}, check permissions and free space, and repair the reported cause` : `inspect the source tree and target directory, check permissions and free space for the target and VMEM_HOME lock directory, repair the reported cause, then ${retrySpecOperation(operation)}`}`, ...(result.path ? { path: result.path } : {}) }];
     result.path ??= result.issues.find(issue => issue.path)?.path;
   } finally {
     if (temp) {
@@ -329,15 +340,16 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     }
     if (lockFd !== undefined) {
       try { closeSync(lockFd); }
-      catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "spec lock descriptor close failed; inspect the write receipt and lock state before retrying", ...(result.path ? { path: result.path } : {}) }); }
+      catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `spec lock descriptor close failed; ${operation === "delete" && result.changed ? deletedSpecInspection : "inspect the write receipt and lock state before retrying"}`, ...(result.path ? { path: result.path } : {}) }); }
       try { if (lockFile && identity(lockFile) === lockIdentity) unlinkSync(lockFile); }
-      catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "spec lock cleanup failed; inspect the owned lock under VMEM_HOME before retrying", ...(result.path ? { path: result.path } : {}) }); }
+      catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `spec lock cleanup failed; ${operation === "delete" && result.changed ? deletedSpecInspection : "inspect the owned lock under VMEM_HOME before retrying"}`, ...(result.path ? { path: result.path } : {}) }); }
     }
     cleanupCreatedDirs(createdDirs, result);
   }
   return result;
 }
 
+function validSpecTitle(value: string): boolean { return !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value); }
 function updateFrontmatter(document: SpecCandidate, request: SpecUpdateRequest): string {
   const path = document.path, changes: Record<string, unknown> = {};
   const invalid = (message: string): never => refuse("INPUT", `${message}; use only the documented spec update set/unset/add/remove fields`, path);
@@ -346,6 +358,7 @@ function updateFrontmatter(document: SpecCandidate, request: SpecUpdateRequest):
   if (request.unset !== undefined && (!Array.isArray(request.unset) || request.unset.some(key => typeof key !== "string" || !(SPEC_UPDATE_OPTIONAL_FIELDS as readonly string[]).includes(key)))) invalid("unset accepts optional fields only; id, type and title are required");
   for (const [key, value] of Object.entries(request.set ?? {})) {
     if (!(SPEC_UPDATE_SCALAR_FIELDS as readonly string[]).includes(key) || typeof value !== "string" || !value.trim()) invalid("set accepts known nonempty scalar fields only; id is immutable");
+    if (key === "title" && !validSpecTitle(value)) invalid("title must be one line without control or line-separator characters; use plain single-line text");
     if (key === "type" && !["goal", "architecture", "module", "submodule"].includes(value) || key === "status" && !["draft", "active", "deprecated"].includes(value)) invalid("unknown type or status vocabulary");
     if (request.unset?.includes(key)) invalid("a field cannot be set and unset together");
     changes[key] = value;
@@ -386,7 +399,7 @@ export function createSpec(home: string, request: SpecCreateRequest, options: Sp
     for (const field of ["path", "id", "type", "title"] as const) if (typeof request[field] !== "string" || !request[field].trim()) invalid(`${field} must be a nonempty string`);
     if (!Object.hasOwn(SPEC_HEADINGS, request.type)) invalid("unknown type vocabulary");
     if (request.status !== undefined && !["draft", "active", "deprecated"].includes(request.status)) invalid("unknown status vocabulary");
-    if (/[\r\n]/.test(request.title)) invalid("title must be a single line for the generated H1 heading");
+    if (!validSpecTitle(request.title)) invalid("title must be one line without control or line-separator characters; use plain single-line text");
     const data: Record<string, unknown> = {};
     for (const field of fields) {
       const value = field === "status" ? request.status ?? "draft" : request[field];
@@ -412,9 +425,9 @@ function deletionPreview(snapshot: SpecSnapshot, document: SpecCandidate, previe
   const childIds = new Set(backlinks.filter(edge => edge.kind === "parent").map(edge => edge.source));
   const children = graph.nodes.filter(node => childIds.has(node.id)).sort((a, b) => compare(a.id, b.id) || compare(a.path, b.path));
   const sha256 = hash(document.source), fingerprint = hash(JSON.stringify({ worktree: snapshot.root, path: document.path, sha256, backlinks, children }));
-  const result = { preview, fingerprint, sha256, backlinks, children };
-  if (Buffer.byteLength(JSON.stringify(result)) > 224 * 1024) refuse("LIMIT", "complete delete acknowledgement exceeds the response budget; repair or remove backlinks before requesting a fresh preview", document.path);
-  return result;
+  const acknowledgement = { fingerprint, sha256, backlinks, children };
+  if (Buffer.byteLength(JSON.stringify(acknowledgement)) > 224 * 1024) refuse("LIMIT", "complete delete acknowledgement exceeds the response budget; repair or remove backlinks before requesting a fresh preview", document.path);
+  return { preview, ...acknowledgement };
 }
 export function deleteSpec(home: string, request: SpecDeleteRequest, options: SpecWriteOptions = {}): SpecDeleteResult {
   return mutateSpec(home, request, snapshot => {
