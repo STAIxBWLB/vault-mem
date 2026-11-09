@@ -108,3 +108,13 @@ test("MCP delete rejects changed startup binding before previewing or mutating",
   expect(readFileSync(f.file, "utf8")).toBe(f.original);
   expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
 });
+
+test("human delete refusals keep the related path and original target visible", () => {
+  const f = fixture();
+  writeFileSync(join(f.repo, "Z.md"), '---\nid: root\ntype: submodule\ntitle: Duplicate\n---\n');
+  const preview = JSON.parse(runSpecCommand(["delete", "root", "--json"], f.env).text) as SpecDeleteResult;
+  const result = runSpecCommand(["delete", "root", "--confirm", "--fingerprint", preview.fingerprint!], f.env);
+  expect(result.code).toBe(1); expect(result.text).toContain("child.md");
+  expect(result.text.replace(/\s+/g, " ")).toContain("original target: root");
+  expect(readFileSync(f.file, "utf8")).toBe(f.original);
+});
