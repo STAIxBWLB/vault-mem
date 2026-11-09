@@ -39,7 +39,7 @@ export function runReadCommand(command: string, args: string[], home: string, te
     if (command === "rebuild") result = { vault: vault.id, ...scan };
     else if (command === "search") result = index.search(positional[1]!, { limit, type: options["--type"] as string | undefined, domain: options["--domain"] as string | undefined });
     else if (command === "show") result = index.show(positional[1]!, maxBytes, section, offset);
-    else if (command === "links") result = index.links(positional[1]!, limit).map(link => link.resolved ? link : { ...link, suggested: index.suggestTitle(link.target) ?? null });
+    else if (command === "links") result = index.links(positional[1]!, limit);
     else throw new Error("unknown read command");
   } finally { index.close(); }
   if (options["--json"]) return { text: JSON.stringify(result), code: 0 };

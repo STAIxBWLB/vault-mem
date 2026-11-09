@@ -3,7 +3,7 @@
  * command prints with `--json`, and never shows more than that result carries.
  */
 import type { SearchResult, NoteReadResult } from "./vault-index.ts";
-import type { ResolvedLink, TitleSuggestion } from "./links.ts";
+import type { ResolvedLink, SuggestedLink } from "./links.ts";
 import type { LogReadResult, LogReceipt } from "./log-types.ts";
 import type { LintCode, LintReport } from "./analysis-types.ts";
 import type { GraphNeighborhood } from "./vault-graph.ts";
@@ -33,13 +33,12 @@ export function showText(r: NoteReadResult, o: TextOptions, c: { vault: string; 
 }
 
 /** A listed link; a dead one may carry the one hinted target, as `vmem links --json` and `vmem_links` return it. */
-type ListedLink = ResolvedLink & { suggested?: TitleSuggestion | null };
-export function linksText(links: ListedLink[], o: TextOptions, c: { vault: string; target: string; limit: number }): string {
+export function linksText(links: SuggestedLink[], o: TextOptions, c: { vault: string; target: string; limit: number }): string {
   const from = links[0]?.source ?? c.target;
   const count = `${plural(links.length, "link")} from ${clean(from)}`;
   if (!links.length) return count;
   const target = (l: ResolvedLink) => l.target + (l.heading !== null ? `#${l.heading}` : "") + (l.block !== null ? `#^${l.block}` : "");
-  const resolution = (l: ListedLink): CellInput => l.resolved ?? tone(`${l.reason ?? "unresolved"}${l.suggested ? `; suggested ${clean(l.suggested.path)} (${l.suggested.score.toFixed(3)})` : ""}`, "warn");
+  const resolution = (l: SuggestedLink): CellInput => l.resolved ?? tone(`${l.reason ?? "unresolved"}${l.suggested ? `; suggested ${clean(l.suggested.path)} (${l.suggested.score.toFixed(3)})` : ""}`, "warn");
   const rows = links.map(l => [target(l), resolution(l), l.line]);
   const more = links.length >= c.limit && c.limit < 500 ? nextCommand("next", command("links", c.vault, c.target, "--limit", String(Math.min(500, c.limit * 2))), o) : undefined;
   return blocks(heading("OUT", o) + "\n" + table(["TARGET", "RESOLVED", "LINE"], rows, o), [count, more].filter(Boolean).join("\n"));

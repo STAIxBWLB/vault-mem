@@ -151,7 +151,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_links: args => read(args, index => {
       const direction = str(args.direction) ?? "both", limit = (args.limit as number | undefined) ?? 50;
       const out = direction === "in" ? [] : index.links(str(args.path)!, limit);
-      return { out: out.filter(l => l.resolved), dead: out.filter(l => !l.resolved).map(l => ({ ...l, suggested: index.suggestTitle(l.target) ?? null })), in: direction === "out" ? [] : index.backlinks(str(args.path)!, limit) };
+      return { out: out.filter(l => l.resolved), dead: out.filter(l => !l.resolved), in: direction === "out" ? [] : index.backlinks(str(args.path)!, limit) };
     }),
     vmem_mocs: args => read(args, index => ({ mocs: index.mocs() })),
     vmem_check: args => write(args, { op: "check", path: notePath(str(args.path) ?? "checked-note"), text: str(args.text)! }),

@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { AnalysisSnapshot } from "./analysis-types.ts";
 import type { VaultSpec, SpecSourceSpec } from "./config.ts";
 import { parseFrontmatter, type FrontmatterDocument } from "./frontmatter.ts";
-import { normalizeTarget, noteKey, proseLines, resolveLinks, type LinkNote, type ResolvedLink, type TitleSuggestion } from "./links.ts";
+import { normalizeTarget, noteKey, proseLines, resolveLinks, type LinkNote, type ResolvedLink, type SuggestedLink, type TitleSuggestion } from "./links.ts";
 
 export const MAX_NOTE_BYTES = 2 * 1024 * 1024;
 export const MAX_RESULTS = 500;
@@ -53,8 +53,11 @@ export function splitTerms(words: string[]): { tokens: string[]; runs: string[] 
 export const MAX_READ_BYTES = 64 * 1024;
 /** A hint must beat this: a term that appears in most titles scores at or below zero, and one shared common word stays under it. */
 export const MIN_SUGGESTION_SCORE = 0.5;
-/** A hint is looked up for at most the 1024 bytes a link target is reported within; longer text gets no suggestion. */
-const MAX_HINT_BYTES = 1024;
+/**
+ * A link's target, label, heading and block are reported within this many bytes of their raw text, and a hint is
+ * looked up for at most the same bound, so a reported row and the hint for it never judge different text.
+ */
+const LINK_TEXT_BYTES = 1024;
 export interface IndexedNote extends LinkNote { hash: string; description: string; type: string; domain: string }
 export interface NoteReadResult {
   path: string;
@@ -430,13 +433,16 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
    * matches through the bigram table and a Latin term through unicode61, and the two scores are summed, because a part
    * that many titles share scores near zero on its own and would otherwise hide a title that carries the whole text.
    * The score is positive bm25, rounded to three decimals, so a larger value is a closer title. A hint is never an
-   * error: text past `MAX_HINT_BYTES`, or text FTS5 cannot parse, returns undefined instead of throwing. Read-only.
+   * error: raw text past `LINK_TEXT_BYTES`, or text FTS5 cannot parse, returns undefined instead of throwing. The bound
+   * is read on the raw text, before normalization and never on the truncated target a row displays, so `links` and
+   * `lint` name the same hint for the same dead link. Read-only.
    */
   suggestTitle(text: string, minimum = MIN_SUGGESTION_SCORE): TitleSuggestion | undefined {
+    if (Buffer.byteLength(text) > LINK_TEXT_BYTES) return undefined;
     // Link text is note content, so it can carry a control character. unicode61 already indexes one as a separator,
     // and U+0000 kept inside a quoted term ends the string in SQLite and makes FTS5 throw "unterminated string".
     const query = text.replace(/\p{Cc}/gu, " ").trim();
-    if (!query || Buffer.byteLength(query) > MAX_HINT_BYTES) return undefined;
+    if (!query) return undefined;
     const { tokens, runs } = splitTerms(query.split(/\s+/));
     if (!tokens.length && !runs.length) return undefined;
     const gramQuery = `{title} : (${runs.map(gramPhrase).join(" AND ")})`, tokenQuery = `{title} : (${tokens.join(" AND ")})`;
@@ -593,8 +599,12 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     } finally { rows.finalize(); }
     return out;
   }
-  links(target: string, limit = 50): ResolvedLink[] {
+  links(target: string, limit = 50): SuggestedLink[] {
     const path = this.find(target);
-    return this.db.query<{ data: string }, [string, number]>("SELECT data FROM links WHERE source=? ORDER BY ordinal LIMIT ?").all(path, resultLimit(limit)).map(row => JSON.parse(row.data) as ResolvedLink).map(link => ({ ...link, target: boundedText(link.target, 1024).content, label: link.label === null ? null : boundedText(link.label, 1024).content, heading: link.heading === null ? null : boundedText(link.heading, 1024).content, block: link.block === null ? null : boundedText(link.block, 1024).content }));
+    return this.db.query<{ data: string }, [string, number]>("SELECT data FROM links WHERE source=? ORDER BY ordinal LIMIT ?").all(path, resultLimit(limit)).map(row => JSON.parse(row.data) as ResolvedLink).map(link => ({
+      ...link, target: boundedText(link.target, LINK_TEXT_BYTES).content, label: link.label === null ? null : boundedText(link.label, LINK_TEXT_BYTES).content, heading: link.heading === null ? null : boundedText(link.heading, LINK_TEXT_BYTES).content, block: link.block === null ? null : boundedText(link.block, LINK_TEXT_BYTES).content,
+      // The hint reads the raw text, never the bounded `target` above: a link past the bound has to miss here and in
+      // lint alike, or one surface names a suggestion the other, reading the whole text, cannot.
+      ...(link.resolved === null ? { suggested: this.suggestTitle(link.target) ?? null } : {}) }));
   }
 }

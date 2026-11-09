@@ -62,6 +62,8 @@ const EDGE_NOTES: Record<string, string> = {
     "Unquotable: [[unquotable \"]] and [[\"\"]].",
     "Blank: [[\u0000]] and [[\u0001\u0002]].",
     `Long: [[${"가".repeat(171)}]].`,
+    // 341 syllables is 1023 bytes, the last length inside the bound; one syllable more, with or without a NUL, is past it.
+    `Past: [[${"나".repeat(341)}다]] and [[${"나".repeat(341)}\u0000다]].`,
   ].join("\n")),
 };
 /** Every path under root with its size and mtime, to prove a read wrote nothing there. */
@@ -179,6 +181,34 @@ test("#165 AC3 fix: a NUL dead link is reported by links and both MCP tools, not
   const report = JSON.stringify(await server.handlers.vmem_lint!({ vault: "demo" }));
   expect(report).toContain("suggested `bad.md`");
   expect(report).toContain("SUMMARY errors=");
+});
+
+test("#165 AC3 fix: links, vmem_links and lint hint one link text identically, past the byte bound too", async () => {
+  const f = vaultOf(EDGE_NOTES), inside = "나".repeat(341), past = inside + "다", nul = inside + "\u0000다";
+  const cli = JSON.parse(run(["links", "demo", "hub", "--json"], f.env).text) as { target: string; resolved: string | null; suggested: { path: string } | null }[];
+  const server = createVaultMcp(f.home, { VMEM_HOME: f.home });
+  const mcp = await server.handlers.vmem_links!({ vault: "demo", path: "hub" }) as { dead: { target: string; suggested: { path: string } | null }[] };
+  const findings = (JSON.parse(run(["lint", "demo", "--json"], f.env).text) as { findings: { L01: string[] } }).findings.L01;
+  // A row reports its target capped at 1024 bytes while lint names the whole text, so each surface is read through the
+  // text it can hold: the longest reported target the full text starts with is that link's own row.
+  const row = <T extends { target: string }>(rows: T[], text: string) => rows.filter(item => item.target && text.startsWith(item.target)).sort((a, b) => b.target.length - a.target.length)[0]!;
+  const hintOf = (text: string) => {
+    const lines = findings.filter(line => line.includes(`[[${text}]]`));
+    expect(lines.length).toBe(1);
+    return { cli: row(cli, text).suggested, mcp: row(mcp.dead, text).suggested,
+      lint: /suggested `([^`]+)`/.exec(lines[0]!)?.[1] ?? (lines[0]!.includes("hint not computed") ? "not computed" : null) };
+  };
+  // Inside the bound every reader names the same title from the same lookup, score included.
+  const short = hintOf("가".repeat(171));
+  expect(short.cli).toMatchObject({ path: "s513.md" });
+  expect(short.cli).toEqual(short.mcp);
+  expect(short.lint).toBe("s513.md");
+  // Past the bound the raw text is not looked up at all, so no reader may name a hint: the capped target a row shows
+  // must not answer a lookup that lint, holding the whole text, cannot make.
+  for (const text of [past, nul]) expect(hintOf(text)).toEqual({ cli: null, mcp: null, lint: null });
+  // The rows did report the capped raw text, so the agreement above is about the text and not about a missing link.
+  expect(row(cli, past).target).toBe(inside);
+  expect(row(cli, nul).target).toBe(inside + "\u0000");
 });
 
 test("#165 AC3 fix: past the hint bound a line says not computed, while an attempted miss stays silent", () => {
