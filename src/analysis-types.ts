@@ -11,7 +11,7 @@ export interface AnalysisSnapshot {
   /** Bounded auxiliary source-path existence warnings captured outside the pure lint transform. */
   sourceWarnings?: Record<string,string[]>;
 }
-export type LintCode = "L01" | "L02" | "L03" | "L09" | "L10" | "L11" | "L12" | "L13" | "L14";
+export type LintCode = "L01" | "L02" | "L03" | "L09" | "L10" | "L11" | "L12" | "L13" | "L14" | "L15";
 export interface LintReport {
   findings: Record<LintCode, string[]>;
   errors: number;

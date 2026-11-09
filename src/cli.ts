@@ -212,7 +212,7 @@ export async function runMcp(env: NodeJS.ProcessEnv = process.env): Promise<void
     import("./promote.ts"), import("./org-promote.ts"), import("./skills-mine.ts"), import("./amem/seam.ts")]);
   await seam.preloadAmem();
   const server = createVaultMcp(resolveHome(env).home, env);
-  await serveMcp({ tools: server.tools, handlers: server.handlers, name: "vmem", version });
+  await serveMcp({ tools: server.tools, handlers: server.handlers, name: "vmem", version, instructions: server.instructions });
 }
 /** Async commands. Only `promote-from-amem` and `skills mine` load the agent-mem seam, and only when they run. */
 export async function runAsync(argv: string[], env: NodeJS.ProcessEnv = process.env, io: { stdinIsTTY?: boolean; stdout?: Stdout } = {}): Promise<{ text: string; code: number }> {

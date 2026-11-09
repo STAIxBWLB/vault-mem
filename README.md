@@ -245,6 +245,8 @@ Move and delete without `confirm` write nothing and return the preview and `fing
 
 File reads and reports: `vmem_read_file` and `vmem_list_files` read only these roots: `ops/`, `reports/`, `self/`, `templates/`, `AGENTS.md` and `README.md`. They refuse `notes/` (use `vmem_read`), `log` (use `vmem_log_tail`), absolute paths, `.` or `..` segments, dot paths such as `.git`, any symlinked component, denied paths, non-UTF-8 files and files over 2 MiB. Paging, `maxBytes` and `offset` match `vmem_read`; listings leave out dot, linked, special and denied entries. Neither tool takes a lock, touches the index or writes a file. `vmem_report` is `vmem report` over MCP: the same path rules, screening, receipt and default `EXTRACT` event (a `log` override sets another event, for example `LINT` or `GRAPH`), with `write: mcp` required; MCP events always carry the agent attribution.
 
+The `initialize` result carries short `instructions` (under 400 bytes): the vault is durable, linked knowledge; navigate by searching first with `vmem_search` and then reading the best match with `vmem_read` by section; every write is validated and a refused write changes nothing.
+
 # Host setup
 
 ```sh
@@ -295,7 +297,7 @@ vmem promote-from-amem personal mem:<id> --link-to existing-note  # link an exis
 
 ## Lint and graph analysis
 
-`vmem lint <vault>` checks L01/L02/L03/L09/L10/L11/L12 and L13 (lowercase ASCII kebab-case filenames). `--note notes/example.md` limits note findings. Section names and `SUMMARY errors=N warnings=N` follow the Python reference. `--write` writes a screened lint report and LINT event; `--dry-run` previews without persistence. Findings may identify paths, link targets and malformed log prefixes. Note bodies are never included in analysis results.
+`vmem lint <vault>` checks L01/L02/L03/L09/L10/L11/L12 and L13 (lowercase ASCII kebab-case filenames). L15 is a warning, not a write error: a note with `confidence: proven` and an empty `source` (absent, empty string or empty list) is listed with what to add, and existing notes are never refused. `--note notes/example.md` limits note findings. Section names and `SUMMARY errors=N warnings=N` follow the Python reference. `--write` writes a screened lint report and LINT event; `--dry-run` previews without persistence. Findings may identify paths, link targets and malformed log prefixes. Note bodies are never included in analysis results.
 
 `vmem graph build <vault> [--dry-run]` writes `reports/vault-graph.json`, a dated graph report, graph trend history and GRAPH events through `applyWrite`. Old dated reports are preserved. Trend history appends one row per build, including repeated builds on the same date. Output receipts expose partial report/log failure; these separate writes are not a single transaction. A `- [[x]] (relation)` line written by `vmem link --relation` keeps its relation as `rel` on the `wiki_link` edge (`supports`, `contradicts`, `extends`, `applies-to`, `context-for`); other links carry no `rel`. Edges stay undirected, so `rel` does not say which note supports which, and when a pair carries different relations the first in note path order is kept. `vmem graph neighbors <vault> <stem> [--hops 1..2] [--limit 1..500] [--relation REL]` reads a bounded neighborhood; `--relation` (MCP `relation`) follows only edges of that relation, `wiki_link` meaning untyped links, and an unknown relation is refused. Matching MCP tools are `vmem_lint`, `vmem_graph_build`, and `vmem_graph_neighbors`; MCP report writes require `write=mcp`.
 

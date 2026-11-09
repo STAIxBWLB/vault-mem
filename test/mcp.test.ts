@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { addSpec, addVault } from "../src/registry.ts";
 import { serveMcp, FRAME_BYTES, validArguments, argumentError } from "../src/mcp.ts";
-import { createVaultMcp, VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
+import { createVaultMcp, VMEM_INSTRUCTIONS, VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
 import { run } from "../src/cli.ts";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -59,6 +59,20 @@ test("tools/list: vault enum is the registered ids, default is first personal, e
   // Graph, agent-mem and org-promotion providers are implemented; the org target is an enum of registered org vaults.
   expect(tools.filter(t => /graph/.test(t.name)).map(t => t.name)).toEqual(["vmem_graph_build", "vmem_graph_neighbors", "vmem_spec_graph"]);
   expect(tools.find(t => t.name === "vmem_promote").inputSchema.properties.to.enum).toEqual(["team"]);
+});
+
+test("#165: initialize sends pinned vault instructions under 400 bytes", async () => {
+  expect(VMEM_INSTRUCTIONS).toBe("vmem is a vault of durable, linked knowledge: notes with frontmatter, wiki-links and an append-only log. Navigate it by searching first with vmem_search, then reading the best match with vmem_read, using section to read one H2 at a time. Every write is validated: a refused write returns issues and changes nothing.");
+  expect(Buffer.byteLength(VMEM_INSTRUCTIONS)).toBeLessThan(400);
+  const f = fixture(), server = createVaultMcp(f.home);
+  expect(server.instructions).toBe(VMEM_INSTRUCTIONS);
+  const input = new PassThrough(), output = new PassThrough(); let text = "";
+  output.on("data", chunk => { text += chunk.toString(); });
+  const done = serveMcp({ tools: server.tools, handlers: server.handlers, input, output, instructions: server.instructions });
+  input.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } }) + "\n");
+  input.end(); await done;
+  const [init] = text.trim().split("\n").map(line => JSON.parse(line));
+  expect(init.result.instructions).toBe(VMEM_INSTRUCTIONS);
 });
 
 test("reads go through the index with defaults and bounds", async () => {
@@ -151,6 +165,7 @@ test("bin `vmem mcp` speaks only protocol on stdout without a TTY; importing the
   const lines = result.stdout.toString().trim().split("\n");
   expect(lines).toHaveLength(2);
   for (const line of lines) expect(JSON.parse(line).jsonrpc).toBe("2.0");
+  expect(JSON.parse(lines[0]!).result.instructions).toBe(VMEM_INSTRUCTIONS);
   expect(payload(JSON.parse(lines[1]!)).hits).toHaveLength(1);
   const probe = Bun.spawnSync([process.execPath, "-e", `await import("./src/mcp-vault.ts"); await import("./src/mcp.ts"); console.log(Object.keys(require.cache).filter(k => k.includes("agent-mem") && !k.includes("platform")).length)`], { stdout: "pipe", stderr: "pipe" });
   expect(probe.stdout.toString().trim()).toBe("0");

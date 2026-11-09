@@ -35,6 +35,9 @@ const metadata = { type: "object", maxProperties: 32, properties: { authors: { t
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
   "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_stats", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
+/** Server `initialize` instructions: purpose, navigation order and the write contract. Pinned by a test, under 400 bytes. */
+export const VMEM_INSTRUCTIONS = "vmem is a vault of durable, linked knowledge: notes with frontmatter, wiki-links and an append-only log. Navigate it by searching first with vmem_search, then reading the best match with vmem_read, using section to read one H2 at a time. Every write is validated: a refused write returns issues and changes nothing.";
+
 /** Tool definitions for a fixed vault set: `vault` is an enum of the registered ids. */
 export function vaultTools(ids: readonly string[], orgIds: readonly string[] = []): McpTool[] {
   const vault = ids.length ? { type: "string", enum: [...ids] } : string(32);
@@ -82,7 +85,7 @@ const str = (value: unknown): string | undefined => typeof value === "string" ? 
  * Handlers over the shared providers (VaultIndex, applyWrite, appendLog/readLog). The vault set and
  * the default (first personal) are fixed when the server starts; later registry changes need a restart.
  */
-export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.env): { tools: McpTool[]; handlers: Record<string, McpHandler>; vaults: VaultSpec[]; defaultVault: string | undefined } {
+export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.env): { tools: McpTool[]; handlers: Record<string, McpHandler>; vaults: VaultSpec[]; defaultVault: string | undefined; instructions: string } {
   const vaults = loadRegistry(home).vaults, ids = vaults.map(v => v.id);
   const defaultVault = (vaults.find(v => v.kind === "personal") ?? vaults[0])?.id;
   const pick = (args: Record<string, unknown>): VaultSpec => {
@@ -191,5 +194,5 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     try { return await handler(args); }
     catch (error) { return refusal((error as { code?: unknown }).code === "V04" ? "V04" : "REFUSED", error instanceof Error ? error.message.slice(0, 500) : "operation refused"); }
   };
-  return { tools: [...vaultTools(ids, vaults.filter(v => v.kind === "org").map(v => v.id)), ...specs.tools], handlers: guarded, vaults, defaultVault };
+  return { tools: [...vaultTools(ids, vaults.filter(v => v.kind === "org").map(v => v.id)), ...specs.tools], handlers: guarded, vaults, defaultVault, instructions: VMEM_INSTRUCTIONS };
 }

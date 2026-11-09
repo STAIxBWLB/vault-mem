@@ -9,8 +9,10 @@ const LEGACY = new Set("CREATE UPDATE MIGRATE REFACTOR MERGE MOVE RELOCATE RENAM
 const CODE_TITLES: Record<LintCode, string> = {
   L01: "L01 — dead wiki-link", L02: "L02 — 필수 frontmatter / 허용값", L03: "L03 — orphan",
   L09: "L09 — 로그 포맷", L10: "L10 — project 값", L11: "L11 — graph report staleness", L12: "L12 — island community", L13: "L13 — filename", L14: "L14 — source paths",
+  L15: "L15 — proven confidence의 source",
 };
 const truth = yamlTruthy;
+const emptySource = (value: unknown) => !truth(value) || typeof value === "string" && !value.trim();
 /** Python scalar formatting matters to per-code diagnostic parity. */
 function py(x: unknown): string {
   const scalar = scalarText(x); if (scalar !== undefined) return scalar;
@@ -74,7 +76,7 @@ function graphChecks(snapshot: AnalysisSnapshot): { l11: string[]; l12: string[]
 export function lintVault(snapshot: AnalysisSnapshot, only?: string): LintReport { return lintDetails(snapshot, only).report; }
 /** The report plus what only its markdown carries: the note count, check titles and per-check info lines, for the CLI text view. */
 export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report: LintReport; notes: number; titles: Record<LintCode, string>; info: Partial<Record<LintCode, string>> } {
-  const findings: Record<LintCode,string[]> = {L01:[],L02:[],L03:[],L09:[],L10:[],L11:[],L12:[],L13:[],L14:[]};
+  const findings: Record<LintCode,string[]> = {L01:[],L02:[],L03:[],L09:[],L10:[],L11:[],L12:[],L13:[],L14:[],L15:[]};
   const notes = [...snapshot.notes].sort((a,b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map(n => ({...n,...legacyDocument(n.source),stem: n.path.replace(/^notes\//, "").slice(0,-3)}));
   const stems = new Set(notes.map(n => n.stem)), inlinks = new Map(notes.map(n => [n.stem,0]));
   let superseded = 0;
@@ -97,6 +99,7 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
     if (fm.type === "moc") { if (!truth(fm.description)) findings.L02.push(prefix + "`type: moc` 노트는 `description` 필수"); }
     else if (!truth(fm.topics)) findings.L02.push(prefix + "`topics` 없음/빈 배열");
     for (const [key,allowed] of [["confidence",CONFIDENCE],["status",STATUS]] as const) if (fm[key] !== undefined && fm[key] !== null && !allowed.includes(py(fm[key]))) findings.L02.push(prefix + `\`${key}: ${py(fm[key])}\` 허용값 아님 (${allowed.join(" | ")})${key === "status" ? " (status는 노트 생애주기이지 사업 진행 상태가 아님 — 작업 상태는 본문에)" : ""}`);
+    if (py(fm.confidence) === "proven" && emptySource(fm.source)) findings.L15.push(prefix + "`confidence: proven`에 `source` 없음 — 근거(memory id·URL·workspace 경로)를 추가하거나 confidence를 낮추기");
     const project = fm.project;
     if (typeof project === "string" && project.trim()) {
       const targets = links(project);
@@ -120,9 +123,9 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
   }
   if (data > 20000) findings.L09.push(`log ${data} 라인 > 20000 — 수동 아카이브 권장`);
   const graph = graphChecks(snapshot); findings.L11 = graph.l11; findings.L12 = graph.l12;
-  if (only) for (const code of ["L01","L02","L03","L10","L13","L14"] as const) findings[code] = findings[code].filter(s => s.startsWith(`\`${only}\``));
+  if (only) for (const code of ["L01","L02","L03","L10","L13","L14","L15"] as const) findings[code] = findings[code].filter(s => s.startsWith(`\`${only}\``));
   const errors = findings.L01.length + findings.L02.length + findings.L13.length;
-  const warnings = findings.L03.length + findings.L09.length + findings.L10.length + findings.L11.length + findings.L12.length + findings.L14.length;
+  const warnings = findings.L03.length + findings.L09.length + findings.L10.length + findings.L11.length + findings.L12.length + findings.L14.length + findings.L15.length;
   const summary = `SUMMARY errors=${errors} warnings=${warnings}`;
   const extra: Partial<Record<LintCode,string>> = {
     L02: `정보: \`status: superseded\` ${superseded}건${superseded === 0 ? " — supersede 프로토콜 미가동" : ""}`,
