@@ -245,7 +245,7 @@ Move and delete without `confirm` write nothing and return the preview and `fing
 
 File reads and reports: `vmem_read_file` and `vmem_list_files` read only these roots: `ops/`, `reports/`, `self/`, `templates/`, `AGENTS.md` and `README.md`. They refuse `notes/` (use `vmem_read`), `log` (use `vmem_log_tail`), absolute paths, `.` or `..` segments, dot paths such as `.git`, any symlinked component, denied paths, non-UTF-8 files and files over 2 MiB. Paging, `maxBytes` and `offset` match `vmem_read`; listings leave out dot, linked, special and denied entries. Neither tool takes a lock, touches the index or writes a file. `vmem_report` is `vmem report` over MCP: the same path rules, screening, receipt and default `EXTRACT` event (a `log` override sets another event, for example `LINT` or `GRAPH`), with `write: mcp` required; MCP events always carry the agent attribution.
 
-The `initialize` result carries short `instructions` (under 400 bytes): the vault is durable, linked knowledge; navigate by searching first with `vmem_search` and then reading the best match with `vmem_read` by section; every write is validated and a refused write changes nothing.
+The `initialize` result carries short `instructions` (under 400 bytes): the vault is durable, linked knowledge; navigate by searching first with `vmem_search` and then reading the best match with `vmem_read` by section; writes are validated and receipted, and because a cleanup failure after publication keeps `applied` true, read `applied` and `changes` before retrying.
 
 # Host setup
 
