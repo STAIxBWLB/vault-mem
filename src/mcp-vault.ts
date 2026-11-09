@@ -33,7 +33,7 @@ const metadata = { type: "object", maxProperties: 32, properties: { authors: { t
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_stats", ...SPEC_COMMANDS.map(item => item.name)] as const;
+  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_stats", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Server `initialize` instructions: purpose, navigation order and the write contract. Pinned by a test, under 400 bytes. */
 export const VMEM_INSTRUCTIONS = "vmem is a vault of durable, linked knowledge: notes with frontmatter, wiki-links and an append-only log. Search first with vmem_search, then read the best match with vmem_read, using section for one H2. Writes are validated and receipted: a refusal lists issues, and a failure after publication can leave changes behind, so read the receipt and its issues before retrying.";
@@ -61,6 +61,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_supersede", "Mark a note superseded by another.", object({ vault, old: note, next: note, log: logEvent }, ["old", "next"]), "write"),
     tool("vmem_log_append", "Append one validated event line to the vault log.", object({ vault, type: { type: "string", enum: LOG_TYPES }, project: string(64), source: string(512), dest: string(512), note: string(500) }, ["type", "project", "source", "note"]), "write"),
     tool("vmem_move", "Two-step rename with link rewrites: without confirm returns preview and fingerprint; then confirm=true with that fingerprint (pass log on the confirm call).", object({ vault, from: note, to: note, ...twoStep, log: logEvent }, ["from", "to"]), "confirm"),
+    tool("vmem_merge", "Two-step note merge: without confirm returns merged body, source/topic unions, inbound link rewrites and fingerprint without writing. Then confirm=true with that fingerprint writes keep, repoints inbound links and marks absorb superseded under one mutation lock (pass log on the confirm call). Different types, person/moc notes and oversized results refuse.", object({ vault, keep: note, absorb: note, ...twoStep, log: logEvent }, ["keep", "absorb"]), "confirm"),
     tool("vmem_delete", "Two-step delete: without confirm returns preview (or refusal), backlinks and fingerprint; then confirm=true with that fingerprint (pass log on the confirm call).", object({ vault, path: note, ...twoStep, log: logEvent }, ["path"]), "confirm"),
     tool("vmem_promote_from_amem", "Two-step promotion of one durable agent-mem entry (id from amem_vault_candidates) into a vault note: without confirm returns the full note text, possible duplicates and fingerprint; confirm=true with that fingerprint creates the note, logs LEARN and records the agent-mem vault link. linkTo links an existing note instead. Configured canonTables add advisory canonical row matches and link-existing choices, outside the fingerprint and never blocking confirm.",
       object({ vault, id: { type: "string", minLength: 32, maxLength: 36 }, stem: string(120), type: string(64), domain: string(64), topics: { type: "array", maxItems: 32, items: string(200) }, description: string(1000), title: string(300), body: string(65536, 0), linkTo: note, project: string(400), ...twoStep }, ["id"]), "confirm"),
@@ -178,6 +179,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
       return receipt.ok ? receipt : { ...receipt, refused: true };
     },
     vmem_move: args => write(args, { op: "move", from: str(args.from)!, to: str(args.to)! }, twoStep(args)),
+    vmem_merge: args => write(args, { op: "merge", keep: str(args.keep)!, absorb: str(args.absorb)! }, twoStep(args)),
     vmem_delete: args => {
       const receipt = write(args, { op: "delete", path: str(args.path)! }, twoStep(args));
       if (args.confirm === true) return receipt;

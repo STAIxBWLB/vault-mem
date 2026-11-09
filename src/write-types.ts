@@ -1,7 +1,10 @@
 import type { PiiSurface } from "./config.ts";
 import type { LogEvent, LogReceipt } from "./log-types.ts";
 import type { VaultSpec, VmemConfig } from "./config.ts";
+export const MAX_WRITE_BYTES = 256 * 1024;
 export interface PatchEdit { oldString: string; newString: string }
+export interface MergeInboundLink { path: string; field: string; target: string; replacement: string; line?: number; heading?: string; block?: string }
+export interface MergePreview { keep: string; absorb: string; body: string; source: string[]; topics: string[]; inboundLinks: MergeInboundLink[] }
 export type WriteOp =
   | { op: "check"; path: string; text: string }
   | { op: "create"; path: string; frontmatter: Record<string, unknown>; body?: string }
@@ -11,6 +14,7 @@ export type WriteOp =
   | { op: "frontmatter"; path: string; set: Record<string, unknown>; unset?: string[]; expectedSha?: string }
   | { op: "link"; from: string; to: string; relation: "supports" | "contradicts" | "extends" | "applies-to" | "context-for"; context?: string; bidirectional?: boolean }
   | { op: "supersede"; old: string; next: string }
+  | { op: "merge"; keep: string; absorb: string }
   | { op: "move"; from: string; to: string }
   | { op: "delete"; path: string }
   | { op: "tidy" }
@@ -49,6 +53,7 @@ export interface WriteReceipt {
   fingerprint?: string;
   preview?: boolean;
   possibleDuplicates?: string[];
+  merge?: MergePreview;
   indexUpdated: boolean;
   logged?: boolean;
   log?: LogReceipt;

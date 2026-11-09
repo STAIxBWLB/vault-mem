@@ -12,7 +12,7 @@ import { argumentError } from "./mcp.ts";
 import { parseTidyMap, tidyVault, TIDY_RULES } from "./tidy.ts";
 import { PLAIN, type TextOptions } from "./text-output.ts";
 import { renderTidy, renderWriteReceipt } from "./write-output.ts";
-const COMMANDS = new Set(["new", "patch", "append", "frontmatter", "link", "supersede", "move", "delete", "tidy", "report", "check"]);
+const COMMANDS = new Set(["new", "patch", "append", "frontmatter", "link", "supersede", "merge", "move", "delete", "tidy", "report", "check"]);
 export function isWriteCommand(command: string): boolean { return COMMANDS.has(command); }
 function object(text: string, label: string): Record<string, unknown> {
   let value: unknown;
@@ -48,12 +48,12 @@ export function runWriteCommand(command: string, args: string[], home: string, e
     new: ["--type", "--domain", "--topics", "--description", "--title", "--source", "--confidence", "--status", "--extra", "--body"],
     patch: ["--old", "--new", "--edits", "--expected-sha"], append: ["--section", "--markdown", "--expected-sha"],
     frontmatter: ["--set", "--unset", "--expected-sha"], link: ["--relation", "--context"],
-    move: ["--fingerprint"], delete: ["--fingerprint"], tidy: ["--fingerprint", "--map"], report: ["--body"], check: ["--path"], supersede: [],
+    merge: ["--fingerprint"], move: ["--fingerprint"], delete: ["--fingerprint"], tidy: ["--fingerprint", "--map"], report: ["--body"], check: ["--path"], supersede: [],
   };
   // For tidy, --log selects the log-redaction rule; tidy always writes its own LINT event. Check never appends an event.
   const values = valueOptions[command] ? [...valueOptions[command]!, ...(["tidy", "check"].includes(command) ? [] : ["--log"])] : undefined;
   if (!values) throw new Error("unknown writer command");
-  const twoStep = ["move", "delete", "tidy"].includes(command);
+  const twoStep = ["merge", "move", "delete", "tidy"].includes(command);
   const booleans = ["--json", "--dry-run", ...(twoStep ? ["--confirm"] : []), ...(command === "link" ? ["--one-way"] : []), ...(command === "tidy" ? TIDY_RULES.map(rule => `--${rule}`).concat("--all") : [])];
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -108,6 +108,7 @@ export function runWriteCommand(command: string, args: string[], home: string, e
     case "frontmatter": operation = { op: "frontmatter", path: target, set: optional("--set") ? object(required("--set"), "set") : {}, unset: optional("--unset")?.split(","), expectedSha: optional("--expected-sha") }; break;
     case "link": operation = { op: "link", from: target, to: positional[2]!, relation: required("--relation") as Extract<WriteOp, { op: "link" }>["relation"], context: optional("--context"), bidirectional: !flags["--one-way"] }; break;
     case "supersede": operation = { op: "supersede", old: target, next: positional[2]! }; break;
+    case "merge": operation = { op: "merge", keep: target, absorb: positional[2]! }; break;
     case "move": operation = { op: "move", from: target, to: positional[2]! }; break;
     case "delete": operation = { op: "delete", path: target }; break;
     case "tidy": operation = { op: "tidy" }; break;
