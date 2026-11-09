@@ -60,7 +60,7 @@ export function logAppendText(r: LogReceipt, o: TextOptions, c: { vault: string;
   return blocks(line, issueTable(r.issues, o));
 }
 
-const LEVELS: Record<LintCode, "error" | "warn"> = { L01: "error", L02: "error", L03: "warn", L09: "warn", L10: "warn", L11: "warn", L12: "warn", L13: "error", L14: "warn" };
+const LEVELS: Record<LintCode, "error" | "warn"> = { L01: "error", L02: "error", L03: "warn", L09: "warn", L10: "warn", L11: "warn", L12: "warn", L13: "error", L14: "warn", L15: "warn" };
 const verdict = (r: { errors: number; warnings: number; summary: string }, o: TextOptions) => paint(clean(r.summary), r.errors ? "fail" : r.warnings ? "warn" : "ok", o);
 export function lintText(d: { report: LintReport; notes: number; titles: Record<LintCode, string>; info: Partial<Record<LintCode, string>> }, o: TextOptions, c: { vault: string; note?: string }): string {
   const rows = (Object.keys(d.report.findings) as LintCode[]).flatMap(code => {

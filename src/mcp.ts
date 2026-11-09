@@ -5,7 +5,7 @@ import type { Readable, Writable } from "node:stream";
 export const FRAME_BYTES = 65_536, RESULT_BYTES = 262_144;
 export interface McpTool { name: string; description: string; inputSchema: Record<string, unknown>; annotations: Record<string, boolean> }
 export type McpHandler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
-export interface McpServerOptions { tools: readonly McpTool[]; handlers: Record<string, McpHandler>; input?: Readable; output?: Writable; name?: string; version?: string }
+export interface McpServerOptions { tools: readonly McpTool[]; handlers: Record<string, McpHandler>; input?: Readable; output?: Writable; name?: string; version?: string; instructions?: string }
 const protocols = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const plain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v) && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
 
@@ -80,7 +80,8 @@ export async function serveMcp(options: McpServerOptions): Promise<void> {
       if (phase !== "new" || !plain(msg.params) || typeof msg.params.protocolVersion !== "string" || !plain(msg.params.capabilities) || !plain(msg.params.clientInfo)) { await error(id, -32602, "Invalid initialization"); return; }
       phase = "initializing";
       await send({ jsonrpc: "2.0", id, result: { protocolVersion: protocols.includes(msg.params.protocolVersion) ? msg.params.protocolVersion : protocols[0],
-        capabilities: { tools: { listChanged: false } }, serverInfo: { name: options.name ?? "vmem", version: options.version ?? "unreleased" } } });
+        capabilities: { tools: { listChanged: false } }, serverInfo: { name: options.name ?? "vmem", version: options.version ?? "unreleased" },
+        ...(options.instructions !== undefined ? { instructions: options.instructions } : {}) } });
       return;
     }
     if (phase !== "ready") { await error(id, -32002, "Initialize the session first"); return; }

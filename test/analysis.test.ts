@@ -42,6 +42,26 @@ test("lint preserves legacy rule semantics, invalid YAML, fences, project checks
   expect(report.markdown).toContain("## L02 — 필수 frontmatter / 허용값");
   const only=lintVault(analysisCorpus(),"notes/b.md");expect(only.findings.L01).toHaveLength(1);expect(only.findings.L02).toHaveLength(2);
 });
+test("#165 L15 warns when proven confidence has no source and never refuses the note",()=>{
+  const fixtureNote=(extra:string)=>`---\ntype: insight\ndescription: Synthetic fixture.\ntopics: ["[[projects]]"]\n${extra}---\n`;
+  const report=lintVault({today:"2026-08-19",logPath:"/fixture/log",log:"",reports:{},registryIds:null,notes:[
+    {path:"projects.md",source:"---\ntype: moc\ndescription: Synthetic directory.\ntopics: [\"[[projects]]\"]\n---\n"},
+    {path:"proven-with-source.md",source:fixtureNote("confidence: proven\nsource: work/report.md\n")},
+    {path:"proven-no-source.md",source:fixtureNote("confidence: proven\n")},
+    {path:"proven-empty-source.md",source:fixtureNote('confidence: proven\nsource: ""\n')},
+    {path:"likely-no-source.md",source:fixtureNote("confidence: likely\n")},
+  ]});
+  expect(report.findings.L15).toEqual([
+    "`notes/proven-empty-source.md`: `confidence: proven`에 `source` 없음 — 근거(memory id·URL·workspace 경로)를 추가하거나 confidence를 낮추기",
+    "`notes/proven-no-source.md`: `confidence: proven`에 `source` 없음 — 근거(memory id·URL·workspace 경로)를 추가하거나 confidence를 낮추기",
+  ]);
+  expect(report.errors).toBe(0);
+  expect(report.findings.L02).toEqual([]);
+  expect(report.markdown).toContain("## L15 — proven confidence의 source (warn, 2건)");
+  expect(lintVault({today:"2026-08-19",logPath:"/fixture/log",log:"",reports:{},registryIds:null,notes:[
+    {path:"proven-no-source.md",source:fixtureNote("confidence: proven\n")},
+  ]},"notes/proven-no-source.md").findings.L15).toHaveLength(1);
+});
 test("analysis snapshot retains invalid rows, updates incrementally and consumers never reopen note files",()=>{
   const f=fixture(),index=new VaultIndex(f.home,f.spec);
   try {
