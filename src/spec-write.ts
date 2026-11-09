@@ -12,6 +12,7 @@ import { introducedSpecErrors, type SpecValidationIssue } from "./spec-validate.
 import { MAX_NOTE_BYTES } from "./vault-index.ts";
 import { screenContent, screenMetadata } from "./write-validation.ts";
 import { specGit } from "./spec-git.ts";
+import { specGitlinkAncestors } from "./spec-gitlinks.ts";
 import { buildSpecGraph, type SpecEdge, type SpecNode } from "./spec-graph.ts";
 
 export const SPEC_UPDATE_SCALAR_FIELDS = ["title", "type", "status", "parent", "superseded-by", "verified-against"] as const;
@@ -93,52 +94,17 @@ function readBounded(file: string, path: string, operation: SpecWriteOperation):
 
 function readPlain(root: string, path: string, denyPaths: string[], operation: SpecWriteOperation) { return readBounded(plainPath(root, path, denyPaths, operation), path, operation); }
 
-const ANCESTOR_INDEX_BYTES = 64 * 1024, ANCESTOR_REQUEST_BYTES = 128 * 1024, ANCESTOR_SPELLINGS = 1024;
-const ancestorKey = (value: string) => canonicalPath(value).normalize("NFC").toLowerCase();
-function ancestorRequestLimit(path: string): never {
-  refuse("LIMIT", `gitlink ancestor lookup exceeds its ${ANCESTOR_SPELLINGS}-spelling or ${ANCESTOR_REQUEST_BYTES}-byte request budget; inspect indexed ancestor spellings with git ls-files --stage or choose a shallower, unambiguous target path before retrying the create`, path);
-}
-function ancestorPathspecs(root: string, ancestors: string[], path: string): string[] {
-  const result = new Set<string>(); let bytes = 0;
-  for (const ancestor of ancestors) for (const spelling of new Set([ancestor, relative(root, canonicalPath(join(root, ancestor))).split(sep).join("/")])) {
-    let variants = [""];
-    for (const character of spelling.normalize("NFC")) {
-      const cases = /^[A-Za-z]$/.test(character) ? [character] : [...new Set([character, character.toLowerCase(), character.toUpperCase()].flatMap(value => [value.normalize("NFC"), value.normalize("NFD")]))];
-      if (variants.length * cases.length > ANCESTOR_SPELLINGS) ancestorRequestLimit(path);
-      variants = variants.flatMap(prefix => cases.map(value => prefix + value));
-    }
-    for (const value of new Set([spelling, ...variants].flatMap(value => [value, value.normalize("NFC"), value.normalize("NFD")]))) {
-      const [first, ...rest] = value.replace(/[A-Z]/g, character => character.toLowerCase());
-      // A leading escape forces exact glob matching: a plain directory pathspec recurses.
-      const pattern = `:(top,icase,glob)\\${first}${rest.join("").replace(/[*?[\]\\]/g, "\\$&")}`;
-      if (result.has(pattern)) continue;
-      bytes += Buffer.byteLength(pattern) + 1;
-      if (result.size >= ANCESTOR_SPELLINGS || bytes > ANCESTOR_REQUEST_BYTES) ancestorRequestLimit(path);
-      result.add(pattern);
-    }
-  }
-  return [...result];
-}
-function ancestorIndexEntries(root: string, paths: string[], path: string, env: NodeJS.ProcessEnv): string[] {
-  try { return specGit(root, ["-c", "core.precomposeunicode=false", "ls-files", "--stage", "-z", "--", ...paths], { env, maxBuffer: ANCESTOR_INDEX_BYTES }).stdout.toString("utf8").split("\0"); }
-  catch (error) {
-    const cause = error as { code?: unknown; cause?: { code?: unknown } } | undefined;
-    const code = cause?.code ?? cause?.cause?.code;
-    if (code === "ENOBUFS") refuse("LIMIT", `index response is too large for the ${ANCESTOR_INDEX_BYTES}-byte gitlink ancestor check (ENOBUFS); inspect git ls-files --stage for ancestor aliases or conflict entries, or choose a shallower, unambiguous target path before retrying the create`, path);
-    if (code === "E2BIG") ancestorRequestLimit(path);
-    throw error;
-  }
-}
 /** Once per create stage; filesystem-only checks remain safe to repeat during mkdir. */
 function guardCreateRepository(root: string, change: SpecMutation, denyPaths: string[], env: NodeJS.ProcessEnv): void {
   if (change.before !== null) return;
   const path = change.path, { deepest, parts } = createPath(root, path, denyPaths);
   const ancestors = parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/"));
   if (ancestors.length) {
-    const keys = new Set(ancestors.map(ancestor => ancestorKey(join(root, ancestor))));
-    for (const entry of ancestorIndexEntries(root, ancestorPathspecs(root, ancestors, path), path, env)) {
-      const tab = entry.indexOf("\t");
-      if (entry.startsWith("160000 ") && tab >= 0 && keys.has(ancestorKey(join(root, entry.slice(tab + 1))))) refuse("PATH", "spec path crosses or aliases a submodule gitlink; create the spec in that repository's own source", path);
+    try {
+      if (specGitlinkAncestors(root, ancestors, env).matched) refuse("PATH", "spec path crosses or aliases a submodule gitlink; create the spec in that repository's own source", path);
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "LIMIT") refuse("LIMIT", (error as Error).message, path);
+      throw error;
     }
   }
   const top = specGit(canonicalPath(deepest), ["rev-parse", "--show-toplevel"], { env }).stdout.toString("utf8").replace(/\r?\n$/, "");

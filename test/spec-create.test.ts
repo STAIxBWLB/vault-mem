@@ -43,7 +43,7 @@ function stageAncestorIndex(f: ReturnType<typeof fixture>, input: string): void 
 }
 interface AncestorLookupResult {
   result: SpecWriteResult;
-  stageQueries: { args: string[]; maxBuffer: number; bytes: number; records: number; phase: string }[];
+  lookups: { ancestors: string[]; matched: boolean; bytes: number; records: number; phase: string }[];
   rootChecks: number; ignoreChecks: number; injected: boolean;
 }
 function ancestorLookup(f: ReturnType<typeof fixture>, mode: string, path: string): AncestorLookupResult {
@@ -52,18 +52,18 @@ function ancestorLookup(f: ReturnType<typeof fixture>, mode: string, path: strin
   return JSON.parse(child.stdout.toString()) as AncestorLookupResult;
 }
 
-for (const path of ["src/new/deep/SPEC.md", "src/[branch]*?/new/SPEC.md"]) test(`create ${path} bounds native index lookups to its own ancestors once per write stage`, () => {
+for (const path of ["src/new/deep/SPEC.md", "src/[branch]*?/new/SPEC.md"]) test(`create ${path} streams native index records once per write stage with compact ancestor results`, () => {
   const f = fixture(), blob = f.git(["rev-parse", "HEAD:source.ts"]);
   // A native sparse index supplies many siblings without creating working files.
-  // Unescaped glob selectors would also select the branch-* sibling paths.
+  // The real stream must handle more than a buffered lookup's 64 KiB of rows.
   stageAncestorIndex(f, Array.from({ length: 2000 }, (_, index) => `100644 ${blob}\tsrc/branch-${String(index).padStart(4, "0")}.ts\n`).join(""));
   const output = ancestorLookup(f, "observe", path);
   expect(output.result).toMatchObject({ ok: true, changed: true, path });
-  expect(output.stageQueries).toHaveLength(3);
-  expect(output.stageQueries.map(query => query.phase)).toEqual(["initial", "locked", "publication"]);
-  for (const query of output.stageQueries) {
-    expect(query.maxBuffer).toBe(64 * 1024);
-    expect(query.bytes).toBe(0); expect(query.records).toBe(0);
+  expect(output.lookups).toHaveLength(3);
+  expect(output.lookups.map(lookup => lookup.phase)).toEqual(["initial", "locked", "publication"]);
+  for (const lookup of output.lookups) {
+    expect(lookup.matched).toBe(false);
+    expect(lookup.bytes).toBeGreaterThan(64 * 1024); expect(lookup.records).toBeGreaterThanOrEqual(2000);
   }
   expect(output.rootChecks).toBe(3); expect(output.ignoreChecks).toBe(3);
   expect(existsSync(join(f.repo, path))).toBe(true);
@@ -74,7 +74,7 @@ for (const mode of ["late-gitlink", "late-nested-repo"]) test(`create rechecks $
   const f = fixture(), path = "src/new/deep/SPEC.md", before = readFileSync(join(f.repo, "SPEC.md"));
   const output = ancestorLookup(f, mode, path);
   expect(output.injected).toBe(true);
-  expect(output.stageQueries.map(query => query.phase)).toEqual(["initial", "locked", "publication"]);
+  expect(output.lookups.map(lookup => lookup.phase)).toEqual(["initial", "locked", "publication"]);
   expect(output.result).toMatchObject({ ok: false, changed: false, path });
   expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "PATH", message: expect.stringMatching(/nested repository|gitlink/) }));
   expect(existsSync(join(f.repo, path))).toBe(false);
@@ -88,24 +88,23 @@ for (const mode of ["late-gitlink", "late-nested-repo"]) test(`create rechecks $
   }
 }, 30_000);
 
-test("ambiguous Unicode ancestor expansion refuses within the request spelling budget", () => {
-  const f = fixture(), ancestor = "É".repeat(11), path = `${ancestor}/SPEC.md`;
+for (const ancestor of ["가나다라마바사아자차카타파", "ÉéÁáÑñÜüÇçÔôÀ"]) test(`create accepts long Unicode ancestor ${ancestor} without variant-product expansion`, () => {
+  const f = fixture(), path = `${ancestor}/new/SPEC.md`;
   const output = ancestorLookup(f, "observe", path);
-  expect(output.result).toMatchObject({ ok: false, changed: false, path });
-  expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "LIMIT", message: expect.stringContaining("1024") }));
-  expect(output.result.issues[0]!.message).toContain("request budget");
-  expect(output.result.issues[0]!.message).toMatch(/inspect.*ancestor|shallower|unambiguous/);
-  expect(output.stageQueries).toEqual([]);
-  expect(existsSync(join(f.repo, ancestor))).toBe(false);
-  expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
+  expect(output.result).toMatchObject({ ok: true, changed: true, path });
+  expect(output.lookups.map(lookup => lookup.phase)).toEqual(["initial", "locked", "publication"]);
+  expect(output.lookups.every(lookup => !lookup.matched)).toBe(true);
+  expect(existsSync(join(f.repo, path))).toBe(true);
+  expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
 }, 30_000);
 
-test("wrapped Git index output overflow identifies the bounded gitlink check and a practical next step", () => {
+test("streaming Git index output limit identifies the gitlink scan and a practical next step", () => {
   const f = fixture(), path = "src/new/deep/SPEC.md", output = ancestorLookup(f, "overflow", path);
   expect(output.result).toMatchObject({ ok: false, changed: false, path });
+  expect(output.result.issues[0]!.code).toBe("LIMIT");
   const message = output.result.issues[0]!.message;
-  expect(message).toContain("gitlink"); expect(message).toMatch(/ENOBUFS|index.*too large/i);
-  expect(message).toMatch(/inspect.*index|shallower|unambiguous/i);
+  expect(message).toContain("gitlink"); expect(message).toContain("output limit");
+  expect(message).toMatch(/inspect.*index|reduce.*index/i);
   expect(message).not.toContain("SPEC.md paths more specific");
   expect(existsSync(join(f.repo, "src"))).toBe(false);
   expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
@@ -122,8 +121,10 @@ for (const [indexed, requested] of [
   const output = ancestorLookup(f, "observe", requested);
   expect(output.result).toMatchObject({ ok: false, changed: false, path: requested });
   expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "PATH", message: expect.stringContaining("gitlink") }));
-  expect(output.stageQueries).toHaveLength(1);
-  expect(output.stageQueries[0]!).toMatchObject({ maxBuffer: 64 * 1024, records: 1 });
+  expect(output.lookups).toHaveLength(1);
+  expect(output.lookups[0]!).toMatchObject({ matched: true, phase: "initial" });
+  expect(output.lookups[0]!.records).toBeGreaterThanOrEqual(1);
+  expect(output.lookups[0]!.bytes).toBeGreaterThan(0);
   expect(existsSync(join(f.repo, requested.split("/")[0]!))).toBe(false);
   expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
 }, 30_000);
