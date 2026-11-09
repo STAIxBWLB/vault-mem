@@ -48,6 +48,22 @@ const MIXED_NOTES: Record<string, string> = {
   "mixed.md": note("벡터 검색 AI", "Mixed."),
   ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`semi${i}.md`, note(`벡터 검색 ${i}`, `Semi ${i}.`)])),
 };
+// A link text is note content, so it can carry a control character or be far longer than a search query, and neither
+// may cost the reader its hint or cost links and lint their whole report. The three Hangul titles use distinct
+// characters, so a queried length matches only its own note and a 1023-byte text cannot resolve through a longer title.
+const EDGE_NOTES: Record<string, string> = {
+  "bad.md": note("bad target", "Bad."),
+  "s513.md": note("가".repeat(171), "Short."),
+  "s1023.md": note("나".repeat(341), "Long."),
+  "s1026.md": note("다".repeat(342), "Longer."),
+  "hub.md": note("Hub", [
+    "Nul: [[bad\u0000target]].",
+    "Control: [[bad\u0001target]] and [[bad\u0007target]].",
+    "Unquotable: [[unquotable \"]] and [[\"\"]].",
+    "Blank: [[\u0000]] and [[\u0001\u0002]].",
+    `Long: [[${"가".repeat(171)}]].`,
+  ].join("\n")),
+};
 /** Every path under root with its size and mtime, to prove a read wrote nothing there. */
 function tree(root: string): string[] {
   const out: string[] = [];
@@ -103,6 +119,66 @@ test("#165 AC3 fix: lint names the mixed-script title and never reports a near m
   expect(mixed[0]).toContain("suggested `mixed.md` (score ");
   expect(lines.filter(line => line.includes("[[벡터 검색 7]]")).join("\n")).toContain("suggested `semi7.md` (score ");
   for (const line of lines.filter(line => line.includes("[[벡터 검색 ML]]"))) expect(line).not.toContain("suggested");
+});
+
+test("#165 AC3 fix: a hint never throws on link text, and a control character reads as a separator", () => {
+  const f = vaultOf(EDGE_NOTES), index = new VaultIndex(f.home, f.spec);
+  try {
+    index.scan();
+    // unicode61 already indexes a control character as a separator, so the lookup reads the same text the same way.
+    // A U+0000 left inside a quoted term ended the string in SQLite instead: FTS5 threw "unterminated string" and the
+    // whole links or lint command died with it.
+    expect(() => index.suggestTitle("bad\u0000target")).not.toThrow();
+    expect(index.suggestTitle("bad\u0000target")).toMatchObject({ path: "bad.md", title: "bad target" });
+    for (const text of ["bad\u0001target", "bad\u0007target"]) expect(index.suggestTitle(text)).toMatchObject({ path: "bad.md" });
+    // Arbitrary note content is a miss at worst, never an error: a hint that cannot be computed is simply no hint.
+    for (const text of ["\u0000", "\u0001\u0002", "\u007f", "\"", "\"\"", "unquotable \"", "a\u0000", "  "]) {
+      expect(index.suggestTitle(text)).toBeUndefined();
+    }
+  } finally { index.close(); }
+});
+
+test("#165 AC3 fix: a hint covers link text up to the 1024-byte link bound", () => {
+  const f = vaultOf(EDGE_NOTES), index = new VaultIndex(f.home, f.spec);
+  try {
+    index.scan();
+    // A 171-syllable Hangul title is 513 bytes, one past the old silent cut-off, and the link text naming it exactly
+    // must still be told which note it meant.
+    expect(index.suggestTitle("가".repeat(171))).toMatchObject({ path: "s513.md" });
+    // 341 syllables is 1023 bytes, the last length inside the bound.
+    expect(index.suggestTitle("나".repeat(341))).toMatchObject({ path: "s1023.md" });
+    // One syllable past the bound is not looked up, so the longest text gets no suggestion rather than a partial one.
+    expect(index.suggestTitle("다".repeat(342))).toBeUndefined();
+  } finally { index.close(); }
+});
+
+test("#165 AC3 fix: lint suggests the 513-byte title a link names and reports a NUL link with its hint", () => {
+  const f = vaultOf(EDGE_NOTES), snapshot = analysisInput(f.home, "demo", { hints: true }).snapshot;
+  const long = "가".repeat(171);
+  expect(snapshot.linkHints![long]).toMatchObject({ path: "s513.md" });
+  const lines = lintVault(snapshot).findings.L01;
+  const named = lines.filter(line => line.includes(`[[${long}]]`));
+  expect(named.length).toBe(1);
+  expect(named[0]).toContain("suggested `s513.md` (score ");
+  // The NUL link is an ordinary dead link: reported with its hint, never as a crash and never as a silent miss.
+  expect(lines.filter(line => line.includes("bad\u0000target")).join("\n")).toContain("suggested `bad.md` (score ");
+});
+
+test("#165 AC3 fix: a NUL dead link is reported by links and both MCP tools, not thrown out of them", async () => {
+  const f = vaultOf(EDGE_NOTES);
+  const links = JSON.parse(run(["links", "demo", "hub", "--json"], f.env).text) as { target: string; suggested: { path: string } | null }[];
+  expect(links.find(link => link.target === "bad\u0000target")).toMatchObject({ suggested: { path: "bad.md" } });
+  expect(links.find(link => link.target === "unquotable \"")!.suggested).toBeNull();
+  expect(run(["links", "demo", "hub"], f.env).text).toContain("suggested bad.md (");
+  const lint = run(["lint", "demo"], f.env).text;
+  expect(lint).toContain("suggested `bad.md`");
+  expect(lint).toContain("SUMMARY errors=");
+  const server = createVaultMcp(f.home, { VMEM_HOME: f.home });
+  const mcp = await server.handlers.vmem_links!({ vault: "demo", path: "hub" }) as { dead: { target: string; suggested: { path: string } | null }[] };
+  expect(mcp.dead.find(link => link.target === "bad\u0000target")!.suggested).toMatchObject({ path: "bad.md" });
+  const report = JSON.stringify(await server.handlers.vmem_lint!({ vault: "demo" }));
+  expect(report).toContain("suggested `bad.md`");
+  expect(report).toContain("SUMMARY errors=");
 });
 
 test("#165 AC3 fix: past the hint bound a line says not computed, while an attempted miss stays silent", () => {

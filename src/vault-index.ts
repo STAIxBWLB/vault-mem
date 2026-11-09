@@ -53,6 +53,8 @@ export function splitTerms(words: string[]): { tokens: string[]; runs: string[] 
 export const MAX_READ_BYTES = 64 * 1024;
 /** A hint must beat this: a term that appears in most titles scores at or below zero, and one shared common word stays under it. */
 export const MIN_SUGGESTION_SCORE = 0.5;
+/** A hint is looked up for at most the 1024 bytes a link target is reported within; longer text gets no suggestion. */
+const MAX_HINT_BYTES = 1024;
 export interface IndexedNote extends LinkNote { hash: string; description: string; type: string; domain: string }
 export interface NoteReadResult {
   path: string;
@@ -427,24 +429,33 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
    * name a note whose title actually carries the link text. A title must carry every part of the text: a CJK run
    * matches through the bigram table and a Latin term through unicode61, and the two scores are summed, because a part
    * that many titles share scores near zero on its own and would otherwise hide a title that carries the whole text.
-   * The score is positive bm25, rounded to three decimals, so a larger value is a closer title. Read-only.
+   * The score is positive bm25, rounded to three decimals, so a larger value is a closer title. A hint is never an
+   * error: text past `MAX_HINT_BYTES`, or text FTS5 cannot parse, returns undefined instead of throwing. Read-only.
    */
   suggestTitle(text: string, minimum = MIN_SUGGESTION_SCORE): TitleSuggestion | undefined {
-    const query = text.trim();
-    if (!query || Buffer.byteLength(query) > 512) return undefined;
+    // Link text is note content, so it can carry a control character. unicode61 already indexes one as a separator,
+    // and U+0000 kept inside a quoted term ends the string in SQLite and makes FTS5 throw "unterminated string".
+    const query = text.replace(/\p{Cc}/gu, " ").trim();
+    if (!query || Buffer.byteLength(query) > MAX_HINT_BYTES) return undefined;
     const { tokens, runs } = splitTerms(query.split(/\s+/));
     if (!tokens.length && !runs.length) return undefined;
     const gramQuery = `{title} : (${runs.map(gramPhrase).join(" AND ")})`, tokenQuery = `{title} : (${tokens.join(" AND ")})`;
-    const row = runs.length && tokens.length
-      ? this.db.query<TitleSuggestion, string[]>(`SELECT n.path, n.title, g.score + f.score AS score
-        FROM (SELECT path, -bm25(grams,0,5,2,1) AS score FROM grams WHERE grams MATCH ?) g
-        JOIN (SELECT path, -bm25(fts,0,5,2,1) AS score FROM fts WHERE fts MATCH ?) f ON f.path = g.path
-        JOIN notes n ON n.path = g.path ORDER BY score DESC, n.path LIMIT 1`).get(gramQuery, tokenQuery)
-      : runs.length
-      ? this.db.query<TitleSuggestion, string[]>(`SELECT n.path, n.title, -bm25(grams,0,5,2,1) AS score FROM grams JOIN notes n ON n.path=grams.path
-        WHERE grams MATCH ? ORDER BY score DESC, n.path LIMIT 1`).get(gramQuery)
-      : this.db.query<TitleSuggestion, string[]>(`SELECT n.path, n.title, -bm25(fts,0,5,2,1) AS score FROM fts JOIN notes n ON n.path=fts.path
-        WHERE fts MATCH ? ORDER BY score DESC, n.path LIMIT 1`).get(tokenQuery);
+    let row: TitleSuggestion | null | undefined;
+    try {
+      row = runs.length && tokens.length
+        ? this.db.query<TitleSuggestion, string[]>(`SELECT n.path, n.title, g.score + f.score AS score
+          FROM (SELECT path, -bm25(grams,0,5,2,1) AS score FROM grams WHERE grams MATCH ?) g
+          JOIN (SELECT path, -bm25(fts,0,5,2,1) AS score FROM fts WHERE fts MATCH ?) f ON f.path = g.path
+          JOIN notes n ON n.path = g.path ORDER BY score DESC, n.path LIMIT 1`).get(gramQuery, tokenQuery)
+        : runs.length
+        ? this.db.query<TitleSuggestion, string[]>(`SELECT n.path, n.title, -bm25(grams,0,5,2,1) AS score FROM grams JOIN notes n ON n.path=grams.path
+          WHERE grams MATCH ? ORDER BY score DESC, n.path LIMIT 1`).get(gramQuery)
+        : this.db.query<TitleSuggestion, string[]>(`SELECT n.path, n.title, -bm25(fts,0,5,2,1) AS score FROM fts JOIN notes n ON n.path=fts.path
+          WHERE fts MATCH ? ORDER BY score DESC, n.path LIMIT 1`).get(tokenQuery);
+    } catch {
+      // A hint is advisory: text FTS5 still cannot parse yields no suggestion instead of failing links and lint.
+      return undefined;
+    }
     if (!row || !(row.score > minimum)) return undefined;
     return { path: row.path, title: boundedText(row.title, 512).content, score: Math.round(row.score * 1000) / 1000 };
   }
