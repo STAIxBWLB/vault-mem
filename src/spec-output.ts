@@ -113,9 +113,10 @@ export function renderSpecValidate(r: SpecValidateResult, o: TextOptions, contex
 }
 
 /** A frontmatter mutation receipt shows the verdict and SHA without repeating authored content. */
-export function renderSpecUpdate(r: SpecWriteResult, o: TextOptions): string {
-  const verdict = r.changed ? r.ok ? "updated" : "updated with errors" : r.ok ? "unchanged" : "refused";
-  return blocks(heading(`spec update ${r.id ?? ""}: ${verdict}`.trim(), o),
+export function renderSpecUpdate(r: SpecWriteResult, o: TextOptions, command: "create" | "update" = "update"): string {
+  const applied = command === "create" ? "created" : "updated";
+  const verdict = r.changed ? r.ok ? applied : `${applied} with errors` : r.ok ? "unchanged" : "refused";
+  return blocks(heading(`spec ${command} ${r.id ?? ""}: ${verdict}`.trim(), o),
     fields([["source", r.source], ["worktree", r.worktree], ["path", r.path], ["sha256", r.sha256], ["actor", r.actor]], o),
     issueTable(r.issues.map(issue => ({ ...issue, message: [issue.message,
       issue.target !== undefined ? `target: ${issue.target}` : undefined,
@@ -123,7 +124,7 @@ export function renderSpecUpdate(r: SpecWriteResult, o: TextOptions): string {
 }
 
 export function renderSpec(command: SpecCommand, result: unknown, o: TextOptions, context: SpecTextContext): string {
-  if (command === "update") return renderSpecUpdate(result as SpecWriteResult, o);
+  if (command === "update" || command === "create") return renderSpecUpdate(result as SpecWriteResult, o, command);
   if (command === "get") return renderSpecGet(result as SpecGetResult, o, context);
   if (command === "graph") return renderSpecGraph(result as SpecGraphResult, o, context);
   if (command === "grep") return renderSpecGrep(result as SpecGrepResult, o, context);

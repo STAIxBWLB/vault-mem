@@ -62,10 +62,10 @@ test("CLI freshness exit codes, command help, closed flags and manifest match th
   expect(run(["completion", "bash"], f.env).text).toContain("get graph grep validate");
   const manifest = JSON.parse(run(["manifest", "--json"], f.env).text);
   for (const item of SPEC_COMMANDS) {
-    expect(manifest.mcp.tools).toContainEqual(item.command === "update" ? item.name : { name: item.name, readOnly: true });
+    expect(manifest.mcp.tools).toContainEqual(item.command === "update" || item.command === "create" ? item.name : { name: item.name, readOnly: true });
     expect(manifest.commands).toContain(`spec ${item.command}`);
   }
-  expect(JSON.stringify(manifest.mcp.tools)).not.toContain("vmem_spec_create");
+  expect(JSON.stringify(manifest.mcp.tools)).not.toContain("vmem_spec_delete");
 });
 
 

@@ -8,9 +8,9 @@ import { PLAIN, type TextOptions } from "./text-output.ts";
 import { renderSpec } from "./spec-output.ts";
 import type { SpecWriteResult } from "./spec-write.ts";
 
-/** Spec definitions retain read annotations for reads; update is a policy-gated mutation. */
+/** Spec definitions retain read annotations for reads; create/update are policy-gated mutations. */
 export const specTools = (): McpTool[] => SPEC_COMMANDS.map(item => ({ name: item.name, description: item.description, inputSchema: item.inputSchema,
-  annotations: { readOnlyHint: item.command !== "update", destructiveHint: false, idempotentHint: true, openWorldHint: false } }));
+  annotations: { readOnlyHint: item.command !== "update" && item.command !== "create", destructiveHint: false, idempotentHint: item.command !== "create", openWorldHint: false } }));
 
 export function createSpecMcp(home: string, env: NodeJS.ProcessEnv = process.env): { tools: McpTool[]; handlers: Record<string, McpHandler> } {
   const registered = loadRegistry(home).specs ?? [];
@@ -37,7 +37,9 @@ export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.
   if (!item) throw new Error("spec: unknown command; use vmem spec --help");
   const values: Record<string, unknown> = {}, positional: string[] = [];
   const properties = item.inputSchema.properties as Record<string, { type: string }>;
-  const flags = new Map(Object.keys(properties).filter(key => key !== "id" && key !== "query").map(key => ["--" + key.replace(/[A-Z]/g, value => "-" + value.toLowerCase()), key]));
+  const takesId = item.command === "get" || item.command === "graph" || item.command === "update";
+  const positionalKey = item.command === "create" ? "path" : takesId ? "id" : item.command === "grep" ? "query" : undefined;
+  const flags = new Map(Object.keys(properties).filter(key => key !== positionalKey).map(key => ["--" + key.replace(/[A-Z]/g, value => "-" + value.toLowerCase()), key]));
   const seen = new Set<string>(); let json = false, repo: string | undefined, positionalOnly = false;
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]!;
@@ -64,15 +66,14 @@ export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.
       catch { throw new Error(`${flag}: invalid JSON; supply a JSON ${properties[key!]!.type} as shown by vmem spec ${item.command} --help`); }
     } else values[key!] = value;
   }
-  const takesId = item.command === "get" || item.command === "graph" || item.command === "update";
-  if (positional.length > (item.command === "validate" ? 0 : 1) || (takesId && positional.length !== 1)) throw new Error(`spec ${item.command}: unexpected targets; use vmem ${item.usage}`);
-  if (positional[0] !== undefined) values[takesId ? "id" : "query"] = positional[0];
+  if (positional.length > (item.command === "validate" ? 0 : 1) || ((takesId || item.command === "create") && positional.length !== 1)) throw new Error(`spec ${item.command}: unexpected targets; use vmem ${item.usage}`);
+  if (positional[0] !== undefined && positionalKey !== undefined) values[positionalKey] = positional[0];
   const invalid = argumentError(values, item.inputSchema);
   if (invalid) throw new Error(`${invalid}; see vmem spec ${item.command} --help to correct the arguments`);
   if (repo !== undefined && (values.source !== undefined || values.worktree !== undefined)) throw new Error("--repo cannot be combined with --source or --worktree; choose registry-free or registered validation");
   const result = repo !== undefined
     ? validateSpecRepo(repo, { requireFresh: values.requireFresh as boolean | undefined, limit: values.limit as number | undefined, env }).report
     : executeSpecCommand(resolveHome(env).home, item.command, values, env);
-  const code = (item.command === "validate" || item.command === "update") && !(result as { ok: boolean }).ok ? 1 : 0;
+  const code = (item.command === "validate" || item.command === "update" || item.command === "create") && !(result as { ok: boolean }).ok ? 1 : 0;
   return { text: json ? JSON.stringify(result) : renderSpec(item.command, result, text, { args, values, ...(repo !== undefined ? { repo } : {}) }), code };
 }
