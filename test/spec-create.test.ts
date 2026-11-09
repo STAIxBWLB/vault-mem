@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type SpecSourceSpec } from "../src/config.ts";
+import { CONFIG_FILE, type SpecSourceSpec } from "../src/config.ts";
 import { parseFrontmatter } from "../src/frontmatter.ts";
 import { AGENT_MARKERS } from "../src/log-format.ts";
 import { addSpec } from "../src/registry.ts";
@@ -107,12 +107,26 @@ test("create refuses invalid metadata, preserves pre-existing errors and isolate
   expect(existsSync(join(f.repo, "linked.md"))).toBe(false); expect(existsSync(join(linked, "linked.md"))).toBe(true);
 }, 30_000);
 
-for (const mode of ["policy-drift", "target-appears", "temp-write", "tree-drift", "publish", "publish-race", "link-EPERM", "link-ENOTSUP", "link-EXDEV"]) test(`create ${mode} refusal cleans owned staging and preserves a concurrent writer's file`, () => {
+for (const mode of ["policy-drift", "final-policy", "final-home-spec", "final-home-vault", "lock-permission", "target-appears", "temp-write", "tree-drift", "publish", "publish-race", "link-EPERM", "link-ENOTSUP", "link-EXDEV"]) test(`create ${mode} refusal cleans owned staging and preserves a concurrent writer's file`, () => {
   const f = fixture();
+  if (mode === "final-home-spec") f.git(["-c", "init.templateDir=", "init", "--quiet"], f.root);
+  if (mode === "final-home-vault") mkdirSync(join(f.root, "notes"));
   const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-create-fault.ts"), f.home, mode], { env: { ...process.env, ...f.env }, stdout: "pipe", stderr: "pipe", timeout: 20000 });
   expect(child.exitCode).toBe(0);
   const result = JSON.parse(child.stdout.toString()) as SpecWriteResult;
   expect(result).toMatchObject({ ok: false, changed: false });
+  if (mode === "final-policy") expect(result.issues[0]!.code).toBe("REGISTRY_DRIFT");
+  if (mode.startsWith("final-home-")) {
+    expect(result.issues[0]!.code).toBe("HOME");
+    const registered = JSON.parse(readFileSync(join(f.home, CONFIG_FILE), "utf8"));
+    expect([...registered.vaults, ...registered.specs]).toContainEqual(expect.objectContaining({ id: "container", path: f.root }));
+  }
+  if (mode === "lock-permission") {
+    expect(result.issues[0]!.code).toBe("IO");
+    expect(result.issues[0]!.message).toContain("EACCES");
+    expect(result.issues[0]!.message).toContain("permissions and free space");
+    expect(result.issues[0]!.message).not.toContain("wait for the other mutation");
+  }
   if (mode.startsWith("link-")) {
     expect(result.issues).toContainEqual(expect.objectContaining({ code: "LINK", path: "new/deep/SPEC.md", message: expect.stringContaining(mode.slice(5)) }));
     expect(result.issues[0]!.message).toContain("filesystem hard-link support and permissions");
@@ -125,4 +139,38 @@ for (const mode of ["policy-drift", "target-appears", "temp-write", "tree-drift"
     if (mode === "publish-race") expect(result.issues[0]!.code).toBe("EEXIST");
   } else expect(existsSync(join(f.repo, "new"))).toBe(false);
   expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
+}, 30_000);
+
+for (const mode of ["dir-fsync", "lock-close", "mcp-dir-fsync", "mcp-lock-close"]) test(`post-link ${mode} retains created bytes, SHA and applied-with-errors receipt`, () => {
+  const f = fixture();
+  const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-create-fault.ts"), f.home, mode], { env: { ...process.env, ...f.env }, stdout: "pipe", stderr: "pipe", timeout: 20000 });
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  const output = JSON.parse(child.stdout.toString()) as { result: SpecWriteResult; text: string };
+  expect(output.result).toMatchObject({ ok: false, changed: true, path: "new/deep/SPEC.md" });
+  expect(output.text).toContain("created with errors"); expect(output.text).not.toContain(": refused");
+  const bytes = readFileSync(join(f.repo, "new/deep/SPEC.md"));
+  expect(parseFrontmatter(bytes.toString()).data.title).toBe("Attempted create");
+  expect(output.result.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+  expect(readdirSync(join(f.repo, "new/deep"))).toEqual(["SPEC.md"]);
+  expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
+  if (mode.endsWith("lock-close")) expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "CLEANUP", message: expect.stringContaining("descriptor close") }));
+  if (mode.startsWith("mcp-")) {
+    expect(output.result.actor).toBe("agent");
+    expect(output.result).not.toHaveProperty("refused");
+  }
+}, 30_000);
+
+test("create refuses a case-alias parent when only its canonical target matches denyPaths", () => {
+  const f = fixture(); mkdirSync(join(f.repo, "case"));
+  const configFile = join(f.home, CONFIG_FILE), config = JSON.parse(readFileSync(configFile, "utf8"));
+  config.denyPaths = [join(f.repo, "case/new/SPEC.md")]; writeFileSync(configFile, JSON.stringify(config));
+  const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-create-deny-alias.ts"), f.home], { env: { ...process.env, ...f.env }, stdout: "pipe", stderr: "pipe", timeout: 20000 });
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  const output = JSON.parse(child.stdout.toString()) as { result: SpecWriteResult; lexicalDenied: boolean; canonicalDenied: boolean; canonical: string };
+  expect(output.lexicalDenied).toBe(false); expect(output.canonicalDenied).toBe(true);
+  expect(output.canonical).toBe(join(f.repo, "case/new/SPEC.md"));
+  expect(output.result).toMatchObject({ ok: false, changed: false, path: "Case/new/SPEC.md" });
+  expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "PATH" }));
+  expect(readdirSync(join(f.repo, "case"))).toEqual([]);
+  expect(existsSync(join(f.home, "spec-mutations"))).toBe(false);
 }, 30_000);

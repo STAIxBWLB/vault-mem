@@ -127,9 +127,9 @@ function publishSpec(temp: string, file: string, change: SpecMutation, result: S
   if (change.before === null) {
     try { linkSync(temp, file); }
     catch (error) {
-      const code = (error as NodeJS.ErrnoException).code ?? "IO";
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
       if (code === "EEXIST") refuse("EEXIST", "create target appeared before publication; inspect the existing file and choose an absent path before retrying", change.path);
-      refuse("LINK", `create hard-link publication failed (${code}: ${error instanceof Error ? error.message : "unavailable link"}); check filesystem hard-link support and permissions, then choose a writable worktree on a filesystem supporting same-directory hard links; create never falls back to rename`, change.path);
+      refuse("LINK", `create hard-link publication failed (${writeErrorCause(error)}); check filesystem hard-link support and permissions and free space, then choose a writable worktree on a filesystem supporting same-directory hard links; create never falls back to rename`, change.path);
     }
   }
   else renameSync(temp, file);

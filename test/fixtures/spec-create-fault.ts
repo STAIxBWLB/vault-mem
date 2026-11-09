@@ -1,16 +1,25 @@
 import { mock } from "bun:test";
 import * as fs from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import type { SpecWriteResult } from "../../src/spec-write.ts";
 const [home, mode] = process.argv.slice(2);
 if (!home || !mode) throw new Error("synthetic create fault fixture needs home and mode");
 const original = { ...fs }, configFile = join(home, "vmem.config.json"), config = JSON.parse(original.readFileSync(configFile, "utf8"));
-const root = config.specs[0].path, target = join(root, "new/deep/SPEC.md"), temps = new Set<number>(), modes = new Set<number>(), synced = new Set<number>();
-let injected = false;
+const root = config.specs[0].path, target = join(root, "new/deep/SPEC.md"), temps = new Set<number>(), modes = new Set<number>(), synced = new Set<number>(), tempReads = new Set<number>();
+const fault = mode.replace(/^mcp-/, "");
+let injected = false, published = false, lockDescriptor: number | undefined;
+let registerContainer: (() => void) | undefined;
 mock.module("node:fs", () => ({ ...original,
   openSync: (...args: Parameters<typeof fs.openSync>) => {
-    const fd = original.openSync(...args), file = String(args[0]);
-    if (file.includes(".spec-")) temps.add(fd);
+    const file = String(args[0]);
+    if (fault === "lock-permission" && file.endsWith(".lock") && file.includes("/spec-mutations/")) throw Object.assign(new Error("synthetic non-writable lock directory"), { code: "EACCES" });
+    const fd = original.openSync(...args);
+    if (file.includes(".spec-")) {
+      temps.add(fd);
+      if ((Number(args[1]) & (original.constants.O_WRONLY | original.constants.O_RDWR)) === 0) tempReads.add(fd);
+    }
     if (file.endsWith(".lock") && file.includes("/spec-mutations/")) {
+      lockDescriptor = fd;
       if (mode === "policy-drift") { config.specs[0].write = "none"; original.writeFileSync(configFile, JSON.stringify(config)); }
       if (mode === "target-appears") { original.mkdirSync(join(root, "new/deep"), { recursive: true }); original.writeFileSync(target, "foreign file\n"); }
     }
@@ -22,6 +31,7 @@ mock.module("node:fs", () => ({ ...original,
   },
   fchmodSync: (fd: number, mode: number) => { original.fchmodSync(fd, mode); if (temps.has(fd) && mode === 0o600) modes.add(fd); },
   fsyncSync: (fd: number) => {
+    if (fault === "dir-fsync" && published && original.fstatSync(fd).isDirectory()) throw new Error("synthetic create directory sync failure");
     if (!injected && temps.has(fd) && mode === "tree-drift") { injected = true; original.appendFileSync(join(root, "SPEC.md"), "External tree edit.\n"); }
     original.fsyncSync(fd); if (temps.has(fd) && modes.has(fd)) synced.add(fd);
   },
@@ -30,9 +40,33 @@ mock.module("node:fs", () => ({ ...original,
     if (mode.startsWith("link-")) throw Object.assign(new Error("synthetic unsupported link"), { code: mode.slice(5) });
     if (mode === "publish") throw new Error("synthetic create publication fault");
     if (mode === "publish-race") original.writeFileSync(target, "foreign file\n");
-    return original.linkSync(...args);
+    original.linkSync(...args); published = true;
   },
-  renameSync: () => { throw new Error("unexpected create rename fallback"); },
+  closeSync: (fd: number) => {
+    if (tempReads.delete(fd)) {
+      if (fault === "final-policy") { config.specs[0].write = "none"; original.writeFileSync(configFile, JSON.stringify(config)); }
+      if (fault.startsWith("final-home-")) registerContainer!();
+    }
+    original.closeSync(fd);
+    if (fault === "lock-close" && published && fd === lockDescriptor) throw new Error("synthetic create lock close failure");
+  },
+  renameSync: (...args: Parameters<typeof fs.renameSync>) => {
+    if (String(args[0]).includes(".spec-")) throw new Error("unexpected create rename fallback");
+    original.renameSync(...args);
+  },
 }));
 const { createSpec } = await import("../../src/spec-write.ts");
-console.log(JSON.stringify(createSpec(home, { path: "new/deep/SPEC.md", id: "child", type: "module", title: "Attempted create", parent: "root" }, { env: process.env })));
+if (fault.startsWith("final-home-")) {
+  const { addSpec, addVault } = await import("../../src/registry.ts");
+  registerContainer = () => {
+    if (fault === "final-home-spec") addSpec(home, { id: "container", path: dirname(home), write: "none", pii: "deny" }, process.env);
+    else addVault(home, { id: "container", path: dirname(home), kind: "personal", write: "none", pii: "deny" });
+  };
+}
+const request = { path: "new/deep/SPEC.md", id: "child", type: "module", title: "Attempted create", parent: "root" };
+const { createSpecMcp } = await import("../../src/mcp-spec.ts");
+const result = (mode.startsWith("mcp-") ? createSpecMcp(home, process.env).handlers.vmem_spec_create!(request) : createSpec(home, request, { env: process.env })) as SpecWriteResult;
+if (fault === "dir-fsync" || fault === "lock-close") {
+  const { renderSpecUpdate } = await import("../../src/spec-output.ts"), { PLAIN } = await import("../../src/text-output.ts");
+  console.log(JSON.stringify({ result, text: renderSpecUpdate(result, PLAIN, "create") }));
+} else console.log(JSON.stringify(result));

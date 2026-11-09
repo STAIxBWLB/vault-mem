@@ -54,9 +54,8 @@ test("create shares a bounded closed schema, advertises mutation and keeps delet
   }
   const invalidStamp = "a".repeat(41);
   expect(pattern.test(invalidStamp)).toBe(false);
-  const refused = server.handlers.vmem_spec_create!({ ...input, "verified-against": invalidStamp }) as SpecWriteResult;
-  expect(refused).toMatchObject({ ok: false, changed: false, path: "child.md" });
-  expect(refused.issues).toContainEqual(expect.objectContaining({ code: "invalid_verified_against", path: "child.md", field: "verified-against" }));
+  expect(argumentError({ ...input, "verified-against": invalidStamp }, schema)).toContain("pattern");
+  expect(() => server.handlers.vmem_spec_create!({ ...input, "verified-against": invalidStamp })).toThrow("required pattern");
   expect(existsSync(join(f.repo, "child.md"))).toBe(false);
 });
 
@@ -86,13 +85,23 @@ test("MCP creates are agent writes and both transports enforce source policy wit
   for (const write of ["cli", "none"] as const) {
     const denied = fixture(write), mcp = createSpecMcp(denied.home, denied.env);
     const result = mcp.handlers.vmem_spec_create!(input) as SpecWriteResult;
-    expect(result).toMatchObject({ ok: false, changed: false, actor: "agent" });
+    expect(result).toMatchObject({ ok: false, changed: false, actor: "agent", refused: true });
     expect(result.issues.some(issue => issue.message.includes(write))).toBe(true);
     expect(existsSync(join(denied.repo, "child.md"))).toBe(false);
     const resultCli = runSpecCommand(cli, denied.env);
     expect(resultCli.code).toBe(write === "cli" ? 0 : 1);
     expect(existsSync(join(denied.repo, "child.md"))).toBe(write === "cli");
   }
+});
+
+test("MCP create marks validation refusals while schema and source lookup errors still throw", () => {
+  const f = fixture(), server = createSpecMcp(f.home, f.env);
+  const result = server.handlers.vmem_spec_create!({ ...input, "depends-on": ["missing"] }) as SpecWriteResult;
+  expect(result).toMatchObject({ ok: false, changed: false, refused: true, path: "child.md", actor: "agent" });
+  expect(result.issues).toContainEqual(expect.objectContaining({ code: "dangling_link", path: "child.md" }));
+  expect(() => server.handlers.vmem_spec_create!({ ...input, source: "missing" })).toThrow("no matching source");
+  expect(() => server.handlers.vmem_spec_create!({ ...input, rogue: "field" })).toThrow("unknown argument: rogue");
+  expect(existsSync(join(f.repo, "child.md"))).toBe(false);
 });
 
 test("MCP spec create rejects registry binding drift before writing", () => {
