@@ -231,7 +231,7 @@ test("#165 part 5: without a registered workspace the ratio reads nothing and sa
   const f = fixture(), now = new Date(2026, 10, 4, 12, 0);
   writeFileSync(join(f.notes, "one.md"), cited('["src/notes.txt"]'));
   const stats = vaultStats(f.home, "mine", { now });
-  expect(stats.ratio).toEqual({ notes: 0, sources: 0, skipped: 1, skippedNonFile: 0, truncatedNotes: 0, median: null, p90: null, overOne: 0, largest: [] });
+  expect(stats.ratio).toEqual({ notes: 0, sources: 0, skipped: 1, skippedNonFile: 0, emptySourceNotes: 0, truncatedNotes: 0, median: null, p90: null, overOne: 0, largest: [] });
   expect(run(["stats", "mine"], { VMEM_HOME: f.home }).text).toContain("no note cites a readable workspace file; 1 source reference skipped");
 });
 
@@ -294,14 +294,36 @@ test("#82 fix: the caps bound the reads a pass makes, not only the bytes it coun
   expect({ sources: missing.sources, skipped: missing.skipped }).toEqual({ sources: 0, skipped: 3 });
 });
 
-test("#82 fix: a note whose only readable source is empty says so instead of claiming nothing was readable", () => {
+test("#184 fix: a note whose only readable source is empty is counted apart, never as a skipped reference", () => {
   const f = workspace(), src = join(f.dir, "src");
   mkdirSync(src, { recursive: true });
   writeFileSync(join(src, "empty.txt"), "");
   writeFileSync(join(f.notes, "empty.md"), cited('["src/empty.txt"]'));
   const ratio = vaultStats(f.home, "mine", { now: new Date(2026, 10, 4, 12, 0) }).ratio;
-  expect({ notes: ratio.notes, sources: ratio.sources, skipped: ratio.skipped }).toEqual({ notes: 0, sources: 1, skipped: 1 });
-  expect(run(["stats", "mine"], { VMEM_HOME: f.home }).text).toContain("no cited source had a nonzero size; 1 source reference skipped");
+  // The empty file was read, so `sources` counts it and `skipped` stays 0; the note gets its own field instead.
+  expect({ notes: ratio.notes, sources: ratio.sources, skipped: ratio.skipped, emptySourceNotes: ratio.emptySourceNotes })
+    .toEqual({ notes: 0, sources: 1, skipped: 0, emptySourceNotes: 1 });
+  const text = run(["stats", "mine"], { VMEM_HOME: f.home }).text;
+  expect(text).toContain("no cited source had a nonzero size; 1 note with only empty sources");
+  expect(text).not.toContain("source reference skipped");
+});
+
+test("#184 fix: notes with empty sources and skipped references are counted in their own units at once", () => {
+  const f = workspace(), src = join(f.dir, "src");
+  mkdirSync(src, { recursive: true });
+  writeFileSync(join(src, "empty.txt"), "");
+  writeFileSync(join(src, "full.txt"), "x".repeat(40));
+  writeFileSync(join(f.notes, "empty.md"), cited('["src/empty.txt"]'));
+  writeFileSync(join(f.notes, "missing.md"), cited('["src/missing.txt"]'));
+  writeFileSync(join(f.notes, "full.md"), cited('["src/full.txt"]'));
+  const ratio = vaultStats(f.home, "mine", { now: new Date(2026, 10, 4, 12, 0) }).ratio;
+  // One note has a ratio, one reference was skipped as missing, one note is the separate empty-source note; both the
+  // empty file and the full one were read, which is why `sources` is 2 while `skipped` stays at the one reference.
+  expect({ notes: ratio.notes, sources: ratio.sources, skipped: ratio.skipped, emptySourceNotes: ratio.emptySourceNotes })
+    .toEqual({ notes: 1, sources: 2, skipped: 1, emptySourceNotes: 1 });
+  const text = run(["stats", "mine"], { VMEM_HOME: f.home }).text;
+  expect(text).toContain("skipped  1 source reference\n");
+  expect(text).toContain("empty    1 note with only empty sources");
 });
 
 test("#82 fix: sourced notes past the note cap are counted, in the index, the ratio and the text output", () => {
@@ -322,4 +344,3 @@ test("#82 fix: sourced notes past the note cap are counted, in the index, the ra
   expect(renderStats(stats, options)).not.toContain("past the 10000-note cap");
   expect(renderStats({ ...stats, ratio: { ...stats.ratio, truncatedNotes: 7 } }, options)).toContain("truncated  7 notes past the 10000-note cap");
 });
-

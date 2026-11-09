@@ -167,7 +167,7 @@ test("#114 AC1/AC4: recover says what it would remove and prints the confirm com
 test("#114 AC1: stats prints field blocks, manifest marks read-only tools and setup prints HOST/CHANGE/PATH and the apply command", () => {
   const stats = renderStats({ vault: "mine", asOf: "2026-11-04", notes: { total: 3, byType: { concept: 1, finding: 2 }, byDomain: { ai: 3 }, byStatus: {} }, modified: { last7Days: 1, last30Days: 3 },
     size: { total: { notes: 3, bytes: 2048, words: 300 }, byType: {}, byDomain: {} },
-    ratio: { notes: 2, sources: 3, skipped: 1, skippedNonFile: 1, truncatedNotes: 4, median: 0.5, p90: 1.2, overOne: 1, largest: [{ path: "notes/a.md", ratio: 1.2 }] },
+    ratio: { notes: 2, sources: 3, skipped: 1, skippedNonFile: 1, emptySourceNotes: 0, truncatedNotes: 4, median: 0.5, p90: 1.2, overOne: 1, largest: [{ path: "notes/a.md", ratio: 1.2 }] },
     log: { days: 30, since: "2026-10-06", total: 2, byType: { INGEST: 0, LEARN: 2 }, warnings: ["skipped 1 line"], issues: [] } }, PLAIN);
   expect(stats).toBe([
     "mine  3 notes as of 2026-11-04", "",
@@ -182,7 +182,7 @@ test("#114 AC1: stats prints field blocks, manifest marks read-only tools and se
   ].join("\n"));
   const empty = renderStats({ vault: "mine", asOf: "2026-11-04", notes: { total: 0, byType: {}, byDomain: {}, byStatus: {} }, modified: { last7Days: 0, last30Days: 0 },
     size: { total: { notes: 0, bytes: 0, words: 0 }, byType: {}, byDomain: {} },
-    ratio: { notes: 0, sources: 0, skipped: 2, skippedNonFile: 2, truncatedNotes: 0, median: null, p90: null, overOne: 0, largest: [] },
+    ratio: { notes: 0, sources: 0, skipped: 2, skippedNonFile: 2, emptySourceNotes: 0, truncatedNotes: 0, median: null, p90: null, overOne: 0, largest: [] },
     log: { days: 30, since: "2026-10-06", total: 0, byType: { INGEST: 0, LEARN: 0 }, warnings: [], issues: [] } }, PLAIN);
   expect(empty).toContain("Note-to-source ratio\nno note cites a readable workspace file; 2 source references skipped");
   // The truncation line appears only when the index cut sourced notes, so the common output keeps its shape.
