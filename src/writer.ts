@@ -1,4 +1,4 @@
-import { anchorIndex, normalizeTarget } from "./links.ts";
+import { anchorIndex, normalizeTarget, extractLinks } from "./links.ts";
 import { localDate } from "./local-date.ts";
 import { appendLog, checkLogEvent, matchesBinding } from "./vault-log.ts";
 import type { LogEvent } from "./log-types.ts";
@@ -99,7 +99,12 @@ function checkExpected(request: WriteRequest, notes: Map<string, string>): void 
 /** Preserve referenced content identity and the existing no-self-supersession invariant. */
 function checkMergeReferences(preview: MergePreview, notes: Map<string, string>): void {
   const anchors = anchorIndex(parseFrontmatter(notes.get(preview.keep)!).body, true);
-  for (const link of preview.inboundLinks) {
+  // Copied fragment-only links change their containing note from absorb to keep,
+  // even though no target text is rewritten or listed among inbound replacements.
+  const selfFragments = extractLinks(parseFrontmatter(notes.get(preview.absorb)!).body)
+    .filter(link => link.target === "" && (link.heading !== null || link.block !== null))
+    .map(link => ({ path: preview.absorb, field: "body", heading: link.heading ?? undefined, block: link.block ?? undefined }));
+  for (const link of [...preview.inboundLinks, ...selfFragments]) {
     if (link.path === preview.keep && /^superseded_by(?:$|\[)/.test(link.field)) refuse("V10", `${preview.keep} is superseded by ${preview.absorb}; swap keep and absorb, then request a fresh merge preview`, preview.keep);
     const fragment = link.block ? `^${link.block}` : link.heading;
     const collides = link.block ? anchors.blocks.has(normalizeTarget(link.block)) : link.heading ? anchors.headings.has(normalizeTarget(link.heading)) : false;

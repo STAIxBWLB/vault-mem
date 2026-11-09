@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeSource, sourceReferences } from "./source.ts";
 import { parseFrontmatter, emitFrontmatter, frontmatterReferences } from "./frontmatter.ts";
-import { LINK_RELATIONS, normalizeTarget, proseLines, visibleProseLines, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
+import { LINK_RELATIONS, normalizeTarget, proseLines, visibleProseLines, setextParagraphs, rewriteLinkTargets, extractLinks, resolveLinks, type LinkNote } from "./links.ts";
 import { MAX_WRITE_BYTES, type MergeInboundLink, type MergePreview, type PatchEdit, type PlannedChange, type WriteIssue, type WriteOp } from "./write-types.ts";
 export class WriteRefusal extends Error {
   constructor(readonly issues: WriteIssue[]) { super(issues[0]?.message ?? "write refused"); }
@@ -234,19 +234,21 @@ function withoutMergeTopics(body: string, topics: string[], path: string): strin
 /** Drop absorb's first H1, demoting the remaining prose headings without touching code or paragraph text. */
 function demoteMergeHeadings(body: string): string {
   const visible = visibleProseLines(body), raw = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
-  let dropped = false;
+  const paragraphs = new Map(setextParagraphs(body).map(paragraph => [paragraph.start, paragraph]));
+  let dropped = false, through = -1;
   return raw.map((line, index) => {
+    if (index <= through) return "";
+    const paragraph = paragraphs.get(index);
+    if (paragraph) {
+      through = paragraph.end;
+      if (paragraph.level === 1 && !dropped) { dropped = true; return ""; }
+      const newline = /\r?\n$/.exec(raw[paragraph.end]!)?.[0] ?? "";
+      return `${paragraph.level === 1 ? "##" : "###"} ${paragraph.text}${newline}`;
+    }
     const heading = /^ {0,3}(#{1,6})(?:[ \t]+|$)/.exec(visible[index] ?? "");
     if (heading) {
       if (heading[1]!.length === 1 && !dropped) { dropped = true; return ""; }
       return heading[1]!.length < 6 ? line.replace(/^( {0,3})(#+)/, "$1#$2") : line;
-    }
-    if (index + 1 < visible.length && visible[index]!.trim() && /^ {0,3}(?:=+|-+)[ \t]*$/.test(visible[index + 1]!)) {
-      const first = visible[index + 1]!.trim().startsWith("=");
-      if (first && !dropped) { dropped = true; raw[index + 1] = ""; return ""; }
-      const newline = /\r?\n$/.exec(line)?.[0] ?? "";
-      raw[index + 1] = "";
-      return `${first ? "##" : "###"} ${line.replace(/^ {0,3}/, "").replace(/\r?\n$/, "")}${newline}`;
     }
     return line;
   }).join("");

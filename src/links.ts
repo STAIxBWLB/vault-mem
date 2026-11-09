@@ -112,15 +112,53 @@ export function rewriteLinkTargets(body: string, replace: (target: string) => st
 export function noteKey(value: string): string {
   return normalizeTarget(value.replace(/^\.\//, "").replace(/^notes\//i, "").replace(/\.md$/i, ""));
 }
+export interface SetextParagraph { start: number; end: number; level: 1 | 2; text: string }
+/** Unambiguous Setext paragraphs, with zero-based inclusive line bounds. Container/code blocks stay untouched. */
+export function setextParagraphs(body: string): SetextParagraph[] {
+  const prose = proseLines(body), visible = visibleProseLines(body), result: SetextParagraph[] = [];
+  let start = 0, parts: string[] = [], unsafe = false, afterBlank = true, afterContainerHeading = false;
+  const containers: number[] = [];
+  for (let i = 0; i < prose.length; i++) {
+    const line = prose[i]!, shown = visible[i] ?? "";
+    if (!line.trim()) { parts = []; unsafe = false; afterBlank = true; continue; }
+    let indent = 0;
+    for (const character of /^[ \t]*/.exec(line)![0]) indent += character === "\t" ? 4 - indent % 4 : 1;
+    const list = /^( {0,3})([-+*]|[0-9]{1,9}[.)])([ \t]+|$)/.exec(line), quote = /^( {0,3})>([ \t]?)/.exec(line);
+    const underline = /^ {0,3}(?:=+|-+)[ \t]*$/.test(line);
+    const block = /^ {0,3}#{1,6}(?:[ \t]+|$)/.test(shown) || /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]+){2,}-)[ \t]*$/.test(line);
+    if (afterBlank || afterContainerHeading || block || underline || list || quote) while (containers.length && containers.at(-1)! > indent) containers.pop();
+    if (list) {
+      const end = list[1]!.length + list[2]!.length; let content = end;
+      for (const character of list[3]!) content += character === "\t" ? 4 - content % 4 : 1;
+      containers.push(content > end && content - end <= 4 ? content : end + 1);
+    } else if (quote) containers.push(quote[1]!.length + 2);
+    afterBlank = false;
+    afterContainerHeading = false;
+    if (underline) {
+      if (parts.length && !unsafe) result.push({ start, end: i, level: line.trim().startsWith("=") ? 1 : 2, text: parts.join(" ") });
+      while (containers.length && containers.at(-1)! > indent) containers.pop();
+      parts = []; unsafe = false; continue;
+    }
+    if (block) {
+      afterContainerHeading = containers.length > 0;
+      parts = []; unsafe = false; continue;
+    }
+    if (!parts.length) start = i;
+    unsafe ||= containers.length > 0 || shown !== line || /^(?: {4}|[ \t]*\t)/.test(line) || /^ {0,3}(?:<|\[[^\]]+\]:)/.test(line) || line.includes("|") || /(?: {2,}|\\)$/.test(line);
+    parts.push(line.trim());
+  }
+  return result;
+}
 export function anchorIndex(body: string, inlineCode = false): { headings: Set<string>; blocks: Set<string> } {
   const lines = inlineCode ? visibleProseLines(body) : proseLines(body), headings = new Set<string>(), blocks = new Set<string>();
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!, atx = /^ {0,3}#{1,6}([ \t]+.*|)$/.exec(line);
     if (atx) headings.add(normalizeTarget(atx[1]!.replace(/[ \t]+#+[ \t]*$/, "").trim()));
-    if (i > 0 && /^ {0,3}(?:=+|-+)\s*$/.test(line) && lines[i - 1]!.trim()) headings.add(normalizeTarget(lines[i - 1]!.trim()));
+    if (!inlineCode && i > 0 && /^ {0,3}(?:=+|-+)\s*$/.test(line) && lines[i - 1]!.trim()) headings.add(normalizeTarget(lines[i - 1]!.trim()));
     const block = /(?:^|\s)\^([\w-]+)\s*$/.exec(line);
     if (block) blocks.add(normalizeTarget(block[1]!));
   }
+  if (inlineCode) for (const paragraph of setextParagraphs(body)) headings.add(normalizeTarget(paragraph.text));
   return { headings, blocks };
 }
 type Analysis = { body: string; links?: Link[]; anchors?: ReturnType<typeof anchorIndex> };
