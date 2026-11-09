@@ -7,6 +7,8 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdir
 import { dirname, join, resolve } from "node:path";
 import { effectiveDomains, type VaultSpec, type VmemConfig } from "./config.ts";
 import type { AnalysisSnapshot } from "./analysis-types.ts";
+import { deadLinkTexts } from "./vault-lint.ts";
+import type { TitleSuggestion } from "./links.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry } from "./registry.ts";
 import { VaultIndex } from "./vault-index.ts";
@@ -31,7 +33,7 @@ export function analysisRead(file: string, maximum = 2 * 1024 * 1024): string | 
 function permitted(file: string, config: VmemConfig): void {
   if (isDenied(canonicalPath(file), config.denyPaths ?? [])) throw new Error("analysis: input path is denied");
 }
-export function analysisInput(home: string, id: string, options: { today?: string; memory?: boolean; expectedVault?: VaultSpec } = {}): { snapshot: AnalysisSnapshot; vault: VaultSpec; config: VmemConfig; identity: {dev:number;ino:number} } {
+export function analysisInput(home: string, id: string, options: { today?: string; memory?: boolean; expectedVault?: VaultSpec; hints?: boolean } = {}): { snapshot: AnalysisSnapshot; vault: VaultSpec; config: VmemConfig; identity: {dev:number;ino:number} } {
   const config = loadRegistry(home), vault = config.vaults.find(v => v.id === id);
   if (!vault) throw new Error("analysis: unknown vault id");
   if (options.expectedVault && JSON.stringify(options.expectedVault) !== JSON.stringify(vault)) throw new Error("analysis: startup vault binding changed; restart MCP");
@@ -78,6 +80,11 @@ export function analysisInput(home: string, id: string, options: { today?: strin
       if(found.length)warnings[note.path]=found;
     }catch{ /* Invalid frontmatter remains visible to L02; do not infer missing source paths. */ }
     if(Object.keys(warnings).length)snapshot.sourceWarnings=warnings;
+    if(options.hints){
+      const hints:Record<string,TitleSuggestion>={};
+      for(const text of deadLinkTexts(snapshot.notes)){const hint=index.suggestTitle(text);if(hint)hints[text]=hint;}
+      if(Object.keys(hints).length)snapshot.linkHints=hints;
+    }
     return {vault,config,identity:{dev:Number(identity.dev),ino:Number(identity.ino)},snapshot};
   }
   finally { index.close(); }

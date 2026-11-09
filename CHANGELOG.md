@@ -4,6 +4,8 @@
 
 - Spec create refuses a new Markdown input past the discovery cap, and create/update titles reject controls and line separators. Cleanup errors preserve their directory and cause. Delete acknowledgement budgets are preview-invariant, blocked path refusals request a fresh preview, and applied-delete errors direct inspection of the parent directory and lock state instead of re-confirmation (#175, #176).
 
+- Lint L01, `vmem links` and `vmem_links` offer at most one suggested existing target for each dead link: the closest indexed title to the link text with its positive title score, above a minimum score, using the existing index and FTS. The report says `suggested` and gives the score, and the link is never rewritten (#165, part 3).
+
 - Lint adds L15: a note with `confidence: proven` and an empty `source` is listed as a warning, never refused, so existing notes stay readable. The MCP server now sends pinned `initialize` `instructions` under 400 bytes: search first with `vmem_search`, read the best match by section with `vmem_read`, and expect validated writes (#165, parts 2 and 4).
 
 - Add `vmem_spec_delete` and `vmem spec delete`: read-only previews list every backlink kind and child, with a path/SHA/list fingerprint. Confirm recomputes under the shared mutation lock, refuses stale acknowledgements and allows only listed dangling links to the removed id. Other introduced errors remain blocked before result limits. All three spec write tools are implemented (#97, T4c).

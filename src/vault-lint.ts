@@ -39,6 +39,24 @@ function links(value: unknown): string[] {
   return values.flatMap(v => typeof v === "string" ? [...v.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g)].map(m => m[1]!.trim()) : []);
 }
 const stem = (s: string) => s.trim().replace(/\.md$/, "").split("/").at(-1)!;
+/** Wiki-link texts L01 checks in one note, in the order it reports them: body links, then the link fields. */
+function noteLinkTexts(source: string): string[] {
+  const { fm, body } = legacyDocument(source);
+  return [...links(body), ...FIELDS.flatMap(field => links(fm?.[field]))];
+}
+/**
+ * The dead link texts a snapshot can be hinted for, deduplicated in note and link order and capped at `maximum`.
+ * Captured while the index is open (src/analysis-input.ts), because the lookup needs the title search and
+ * `lintDetails` stays a pure transform.
+ */
+export function deadLinkTexts(notes: readonly { path: string; source: string }[], maximum = 1000): string[] {
+  const stems = new Set(notes.map(note => note.path.replace(/^notes\//, "").slice(0, -3))), texts = new Set<string>();
+  for (const note of notes) {
+    for (const text of noteLinkTexts(note.source)) if (!stems.has(stem(text))) texts.add(text);
+    if (texts.size >= maximum) break;
+  }
+  return [...texts].slice(0, maximum);
+}
 function graphChecks(snapshot: AnalysisSnapshot): { l11: string[]; l12: string[]; info: string } {
   const l11: string[] = [], l12: string[] = [], names = Object.keys(snapshot.reports).filter(s => /^graph-report-.*\.md$/.test(s)).sort();
   const latest = names.at(-1);
@@ -88,7 +106,10 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
     for (const [field,t] of allLinks) {
       const target = stem(t);
       if (stems.has(target)) { if (target !== note.stem) inlinks.set(target,inlinks.get(target)!+1); }
-      else findings.L01.push(prefix + `\`[[${t}]]\` (${field}) → 대상 노트 없음`);
+      else {
+        const hint = snapshot.linkHints?.[t];
+        findings.L01.push(prefix + `\`[[${t}]]\` (${field}) → 대상 노트 없음` + (hint ? ` — suggested \`${hint.path}\` (score ${hint.score.toFixed(3)})` : ""));
+      }
     }
     if (fm === null) { findings.L02.push(prefix + "frontmatter 없음/파싱 실패"); continue; }
     if (fm.status === "superseded") superseded++;

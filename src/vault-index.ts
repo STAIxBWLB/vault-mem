@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { AnalysisSnapshot } from "./analysis-types.ts";
 import type { VaultSpec, SpecSourceSpec } from "./config.ts";
 import { parseFrontmatter, type FrontmatterDocument } from "./frontmatter.ts";
-import { normalizeTarget, noteKey, proseLines, resolveLinks, type LinkNote, type ResolvedLink } from "./links.ts";
+import { normalizeTarget, noteKey, proseLines, resolveLinks, type LinkNote, type ResolvedLink, type TitleSuggestion } from "./links.ts";
 
 export const MAX_NOTE_BYTES = 2 * 1024 * 1024;
 export const MAX_RESULTS = 500;
@@ -51,6 +51,8 @@ export function splitTerms(words: string[]): { tokens: string[]; runs: string[] 
   return { tokens, runs };
 }
 export const MAX_READ_BYTES = 64 * 1024;
+/** A hint must beat this: a term that appears in most titles scores at or below zero, and one shared common word stays under it. */
+export const MIN_SUGGESTION_SCORE = 0.5;
 export interface IndexedNote extends LinkNote { hash: string; description: string; type: string; domain: string }
 export interface NoteReadResult {
   path: string;
@@ -418,6 +420,27 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     return rows.filter(row => !snapshot || snapshot.get(row.path) === row.sourceHash)
       .slice(snapshot ? snapshotOffset : 0, (snapshot ? snapshotOffset : 0) + (snapshot && allSnapshotRows ? 10000 : limit))
       .map(({ sourceHash: _, ...row }) => ({ ...row, title: boundedText(row.title, 512).content, snippet: boundedText(row.snippet, 1024).content, type: boundedText(row.type, 256).content, domain: boundedText(row.domain, 256).content }));
+  }
+  /**
+   * The one indexed title closest to a dead link's text, or undefined when no title matches or the best match is at
+   * or below `minimum`. Same literal AND terms as `search`, matched in the title column only, because a hint should
+   * name a note whose title actually carries the link text. The score is positive bm25, rounded to three decimals,
+   * so a larger value is a closer title. Read-only.
+   */
+  suggestTitle(text: string, minimum = MIN_SUGGESTION_SCORE): TitleSuggestion | undefined {
+    const query = text.trim();
+    if (!query || Buffer.byteLength(query) > 512) return undefined;
+    const { tokens, runs } = splitTerms(query.split(/\s+/));
+    if (!tokens.length && !runs.length) return undefined;
+    // A CJK run matches only through the bigram table and a Latin term only through unicode61, so either can drive.
+    const row = runs.length
+      ? this.db.query<TitleSuggestion, string[]>(`SELECT n.path, n.title, -bm25(grams,0,5,2,1) AS score FROM grams JOIN notes n ON n.path=grams.path
+        WHERE grams MATCH ?${tokens.length ? " AND n.path IN (SELECT path FROM fts WHERE fts MATCH ?)" : ""} ORDER BY score DESC, n.path LIMIT 1`)
+        .get(`{title} : (${runs.map(gramPhrase).join(" AND ")})`, ...(tokens.length ? [`{title} : (${tokens.join(" AND ")})`] : []))
+      : this.db.query<TitleSuggestion, string[]>(`SELECT n.path, n.title, -bm25(fts,0,5,2,1) AS score FROM fts JOIN notes n ON n.path=fts.path
+        WHERE fts MATCH ? ORDER BY score DESC, n.path LIMIT 1`).get(`{title} : (${tokens.join(" AND ")})`);
+    if (!row || !(row.score > minimum)) return undefined;
+    return { path: row.path, title: boundedText(row.title, 512).content, score: Math.round(row.score * 1000) / 1000 };
   }
   private find(target: string): string {
     if (!target || Buffer.byteLength(target) > 1024) throw new Error("note: expected target <=1024 bytes");

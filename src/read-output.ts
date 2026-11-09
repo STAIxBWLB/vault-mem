@@ -3,12 +3,12 @@
  * command prints with `--json`, and never shows more than that result carries.
  */
 import type { SearchResult, NoteReadResult } from "./vault-index.ts";
-import type { ResolvedLink } from "./links.ts";
+import type { ResolvedLink, TitleSuggestion } from "./links.ts";
 import type { LogReadResult, LogReceipt } from "./log-types.ts";
 import type { LintCode, LintReport } from "./analysis-types.ts";
 import type { GraphNeighborhood } from "./vault-graph.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
-import { blocks, clean, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type TextOptions, stripTerminal } from "./text-output.ts";
+import { blocks, clean, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
 
 const command = (...words: string[]) => ["vmem", ...words].map(shellWord).join(" ");
 
@@ -32,12 +32,15 @@ export function showText(r: NoteReadResult, o: TextOptions, c: { vault: string; 
   return blocks(head, stripTerminal(r.content).replace(/\n+$/, ""), tail.join("\n"), headings);
 }
 
-export function linksText(links: ResolvedLink[], o: TextOptions, c: { vault: string; target: string; limit: number }): string {
+/** A listed link; a dead one may carry the one hinted target, as `vmem links --json` and `vmem_links` return it. */
+type ListedLink = ResolvedLink & { suggested?: TitleSuggestion | null };
+export function linksText(links: ListedLink[], o: TextOptions, c: { vault: string; target: string; limit: number }): string {
   const from = links[0]?.source ?? c.target;
   const count = `${plural(links.length, "link")} from ${clean(from)}`;
   if (!links.length) return count;
   const target = (l: ResolvedLink) => l.target + (l.heading !== null ? `#${l.heading}` : "") + (l.block !== null ? `#^${l.block}` : "");
-  const rows = links.map(l => [target(l), l.resolved ?? tone(l.reason ?? "unresolved", "warn"), l.line]);
+  const resolution = (l: ListedLink): CellInput => l.resolved ?? tone(`${l.reason ?? "unresolved"}${l.suggested ? `; suggested ${clean(l.suggested.path)} (${l.suggested.score.toFixed(3)})` : ""}`, "warn");
+  const rows = links.map(l => [target(l), resolution(l), l.line]);
   const more = links.length >= c.limit && c.limit < 500 ? nextCommand("next", command("links", c.vault, c.target, "--limit", String(Math.min(500, c.limit * 2))), o) : undefined;
   return blocks(heading("OUT", o) + "\n" + table(["TARGET", "RESOLVED", "LINE"], rows, o), [count, more].filter(Boolean).join("\n"));
 }

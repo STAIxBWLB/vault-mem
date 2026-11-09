@@ -3,7 +3,6 @@ import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
 import { PLAIN, type TextOptions } from "./text-output.ts";
 import { linksText, rebuildText, searchText, showText } from "./read-output.ts";
 import type { NoteReadResult, SearchResult } from "./vault-index.ts";
-import type { ResolvedLink } from "./links.ts";
 const READ_COMMANDS = new Set(["rebuild", "search", "show", "links"]);
 export function isReadCommand(command: string): boolean { return READ_COMMANDS.has(command); }
 export function runReadCommand(command: string, args: string[], home: string, text: TextOptions = PLAIN): { text: string; code: number } {
@@ -40,7 +39,7 @@ export function runReadCommand(command: string, args: string[], home: string, te
     if (command === "rebuild") result = { vault: vault.id, ...scan };
     else if (command === "search") result = index.search(positional[1]!, { limit, type: options["--type"] as string | undefined, domain: options["--domain"] as string | undefined });
     else if (command === "show") result = index.show(positional[1]!, maxBytes, section, offset);
-    else if (command === "links") result = index.links(positional[1]!, limit);
+    else if (command === "links") result = index.links(positional[1]!, limit).map(link => link.resolved ? link : { ...link, suggested: index.suggestTitle(link.target) ?? null });
     else throw new Error("unknown read command");
   } finally { index.close(); }
   if (options["--json"]) return { text: JSON.stringify(result), code: 0 };
@@ -48,6 +47,6 @@ export function runReadCommand(command: string, args: string[], home: string, te
   const out = command === "rebuild" ? rebuildText(result as Parameters<typeof rebuildText>[0], text)
     : command === "search" ? searchText(result as SearchResult[], text, { vault: vaultId, query: target, limit: limit ?? 50, type: options["--type"] as string | undefined, domain: options["--domain"] as string | undefined })
     : command === "show" ? showText(result as NoteReadResult, text, { vault: vaultId, target, maxBytes })
-    : linksText(result as ResolvedLink[], text, { vault: vaultId, target, limit: limit ?? 50 });
+    : linksText(result as Parameters<typeof linksText>[0], text, { vault: vaultId, target, limit: limit ?? 50 });
   return { text: out, code: 0 };
 }

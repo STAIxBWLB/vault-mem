@@ -49,7 +49,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_read", "Read one note by stem, alias or notes/ path: frontmatter, body, sha256. Bounded by maxBytes; section selects an exact H2, offset pages UTF-8 byte ranges, and truncated reads list H2 headings/nextOffset.", object({ path: note, vault, maxBytes: integer(1, 65536), section: string(1024), offset: integer(0, MAX_NOTE_BYTES) }, ["path"])),
     tool("vmem_read_many", "Read up to 20 notes (8 KiB each).", object({ paths: { type: "array", minItems: 1, maxItems: 20, items: note }, vault }, ["paths"])),
     tool("vmem_list", "List indexed notes under notes/ in path order, optionally by stem prefix, with each note's mtime and the filtered total. Pass the returned nextCursor as cursor for the next page.", object({ vault, prefix: string(256, 0), limit: integer(1, 500), cursor: string(1024) })),
-    tool("vmem_links", "Outgoing links (with resolution) and/or incoming backlinks of a note.", object({ path: note, vault, direction: { type: "string", enum: ["out", "in", "both"] }, limit: integer(1, 200) }, ["path"])),
+    tool("vmem_links", "Outgoing links (with resolution) and/or incoming backlinks of a note. Each dead link carries at most one suggested existing target from the title search, with its score; it is a hint and the link is never rewritten.", object({ path: note, vault, direction: { type: "string", enum: ["out", "in", "both"] }, limit: integer(1, 200) }, ["path"])),
     tool("vmem_mocs", "MOC notes with incoming link counts.", object({ vault })),
     tool("vmem_check", "Validate a prospective note text without writing.", object({ vault, path: string(200), text: string(262144, 0) }, ["text"])),
     tool("vmem_log_tail", "Read the newest vault log lines, optionally filtered.", object({ vault, n: integer(1, 200), type: { type: "string", enum: LOG_TYPES }, grep: string(256) })),
@@ -136,7 +136,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_read_file: args => readVaultFile(pick(args), loadRegistry(home).denyPaths ?? [], str(args.path)!, (args.maxBytes as number | undefined) ?? 16384, args.offset as number | undefined),
     vmem_list_files: args => listVaultFiles(pick(args), loadRegistry(home).denyPaths ?? [], str(args.dir)!),
     vmem_report: args => write(args, { op: "report", path: str(args.path)!, text: str(args.body)! }, args.dryRun === true ? { dryRun: true } : {}),
-    vmem_lint: args => args.write === true ? writeAnalysisReports(home,{vault:pick(args).id,kind:"lint",channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env) : lintVault(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),
+    vmem_lint: args => args.write === true ? writeAnalysisReports(home,{vault:pick(args).id,kind:"lint",channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env) : lintVault(analysisInput(home,pick(args).id,{expectedVault:pick(args),hints:true}).snapshot),
     vmem_graph_build: args => writeAnalysisReports(home,{vault:pick(args).id,kind:"graph",workspace:args.workspace === true,channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env),
     vmem_graph_neighbors: args => graphNeighbors(buildGraph(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),str(args.path)!, (args.hops as 1|2|undefined) ?? 1, (args.limit as number|undefined) ?? 50, str(args.relation)),
     vmem_status: () => ({ defaultVault: defaultVault ?? null, vaults: registryStatus(home).filter(v => ids.includes(v.id)) }),
@@ -151,7 +151,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_links: args => read(args, index => {
       const direction = str(args.direction) ?? "both", limit = (args.limit as number | undefined) ?? 50;
       const out = direction === "in" ? [] : index.links(str(args.path)!, limit);
-      return { out: out.filter(l => l.resolved), dead: out.filter(l => !l.resolved), in: direction === "out" ? [] : index.backlinks(str(args.path)!, limit) };
+      return { out: out.filter(l => l.resolved), dead: out.filter(l => !l.resolved).map(l => ({ ...l, suggested: index.suggestTitle(l.target) ?? null })), in: direction === "out" ? [] : index.backlinks(str(args.path)!, limit) };
     }),
     vmem_mocs: args => read(args, index => ({ mocs: index.mocs() })),
     vmem_check: args => write(args, { op: "check", path: notePath(str(args.path) ?? "checked-note"), text: str(args.text)! }),

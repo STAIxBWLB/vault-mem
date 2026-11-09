@@ -76,6 +76,11 @@ test("#114 links, log, rebuild and neighbours render tables, counts and next com
   expect(linksText([link("beta", "beta.md", null, "First"), link("missing", null, "missing-note")], PLAIN, { vault: "demo", target: "alpha", limit: 2 })).toBe([
     "OUT", "TARGET      RESOLVED      LINE", "beta#First  beta.md       3", "missing     missing-note  3", "", "2 links from alpha.md", "next: vmem links demo alpha --limit 4",
   ].join("\n"));
+  // A hinted dead link keeps one RESOLVED cell, and the hint inherits the reason's tone.
+  const hinted = [{ ...link("missing", null, "missing-note"), suggested: { path: "lantern.md", title: "Synthetic Lantern Notes", score: 3.76 } }];
+  expect(linksText(hinted, PLAIN, { vault: "demo", target: "alpha", limit: 2 })).toContain("missing-note; suggested lantern.md (3.760)");
+  expect(linksText(hinted, { color: true }, { vault: "demo", target: "alpha", limit: 2 })).toMatch(/\u001b\[\d+mmissing-note; suggested lantern\.md \(3\.760\)\u001b\[0m/);
+  expect(linksText([link("missing", null, "missing-note")], PLAIN, { vault: "demo", target: "alpha", limit: 2 })).not.toContain("suggested");
   const read = { ok: true, lines: ["2026-11-02 10:00  CONNECT  -  synthetic  — second"], dataLines: 2, warnings: ["incomplete final log line omitted"], issues: [] };
   expect(logReadText(read, PLAIN, { command: "grep", vault: "demo", pattern: "sec ond", limit: 1 })).toBe([
     "2026-11-02 10:00  CONNECT  -  synthetic  — second", "", "1 line (log has 2)", "next: vmem log grep demo 'sec ond' --limit 2", "", "warning: incomplete final log line omitted",
@@ -110,11 +115,15 @@ test("#114 AC1: default output is text and --json prints exactly the previous co
   let expected: { search: string; show: string; links: string };
   try {
     index.scan();
-    expected = { search: JSON.stringify(index.search("lanterns")), show: JSON.stringify(index.show("alpha", 40)), links: JSON.stringify(index.links("alpha")) };
+    const listed = index.links("alpha");
+    expect(listed.map(link => [link.target, link.resolved])).toContainEqual(["missing", null]);
+    // A dead link gains only the hint field; its null here says the title search found nothing for "missing".
+    expected = { search: JSON.stringify(index.search("lanterns")), show: JSON.stringify(index.show("alpha", 40)), links: JSON.stringify(listed.map(link => link.resolved ? link : { ...link, suggested: null })) };
   } finally { index.close(); }
   expect(json(["search", "demo", "lanterns"])).toBe(expected.search);
   expect(json(["show", "demo", "alpha", "--max-bytes", "40"])).toBe(expected.show);
   expect(json(["links", "demo", "alpha"])).toBe(expected.links);
+  expect(JSON.parse(json(["links", "demo", "alpha"])).at(-1)).toMatchObject({ target: "missing", resolved: null, suggested: null });
   expect(json(["rebuild", "demo"])).toBe(JSON.stringify({ vault: "demo", notes: 2, changed: 2, removed: 0 }));
   expect(json(["log", "tail", "demo"])).toBe(JSON.stringify(readLog(f.home, { vault: "demo" })));
   const snapshot = analysisInput(f.home, "demo").snapshot;
