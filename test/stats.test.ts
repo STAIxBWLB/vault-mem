@@ -153,3 +153,83 @@ test("#62 vmem_stats is bound to the vault set fixed at MCP startup", async () =
   addVault(f.home, { id: "mine", path: other, kind: "personal", write: "mcp" });
   expect(await server.handlers.vmem_stats!({ vault: "mine" })).toMatchObject({ refused: true, issues: [{ message: expect.stringContaining("restart the MCP server") }] });
 });
+
+/** A vault inside a configured workspace, so a note's `source` paths resolve from the workspace root. */
+function workspace() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-ratio-"))); roots.push(root);
+  const dir = join(root, "workspace"), vault = join(dir, "vault"), notes = join(vault, "notes"), home = join(root, "state");
+  mkdirSync(notes, { recursive: true });
+  writeFileSync(join(dir, "workspace.config.yaml"), "fixture: true\n");
+  writeFileSync(join(dir, "project-registry.yaml"), "projects: []\n");
+  addVault(home, { id: "mine", path: vault, kind: "personal", write: "mcp", registry: join(dir, "project-registry.yaml") });
+  return { root, dir, vault, notes, home };
+}
+const cited = (source: string, type = "insight", domain = "research") =>
+  `---\ntype: ${type}\ndomain: ${domain}\nsource: ${source}\ndescription: Synthetic note.\n---\n# Synthetic\n`;
+
+test("#165 part 5: stats add note bytes and words in total and by type and domain", () => {
+  const f = fixture(), now = new Date(2026, 10, 4, 12, 0);
+  const files: [string, string][] = [
+    ["one.md", note("insight", "research", "active")],
+    ["two.md", note("insight", "ops")],
+    ["three.md", note("decision", "ops", "done")],
+  ];
+  for (const [name, text] of files) writeFileSync(join(f.notes, name), text);
+  const size = (rows: [string, string][]) => ({
+    notes: rows.length,
+    bytes: rows.reduce((total, [, text]) => total + Buffer.byteLength(text), 0),
+    words: rows.reduce((total, [, text]) => total + text.trim().split(/\s+/u).length, 0),
+  });
+  const stats = vaultStats(f.home, "mine", { now });
+  expect(stats.size.total).toEqual(size(files));
+  expect(stats.size.byType).toEqual({ decision: size(files.slice(2)), insight: size(files.slice(0, 2)) });
+  expect(stats.size.byDomain).toEqual({ ops: size(files.slice(1)), research: size(files.slice(0, 1)) });
+});
+
+test("#165 part 5: the note-to-source ratio reads cited workspace files only, skips the rest and writes nothing", async () => {
+  const f = workspace(), now = new Date(2026, 10, 4, 12, 0), src = join(f.dir, "src");
+  mkdirSync(src, { recursive: true });
+  writeFileSync(join(src, "big.txt"), "x".repeat(4000));
+  writeFileSync(join(src, "small.txt"), "x".repeat(40));
+  writeFileSync(join(src, ".env"), "TOKEN=1\n");
+  writeFileSync(join(src, "huge.txt"), "x".repeat(3 * 1024 * 1024));
+  const texts = {
+    big: cited('["work/src/big.txt"]'), small: cited('["src/small.txt"]'), denied: cited('["src/.env"]'),
+    huge: cited('["src/huge.txt"]'), missing: cited('["src/missing.txt"]'), nonfile: cited('["mem:alpha", "https://example.com/a"]'),
+    invalid: cited('["src/../escape.txt"]'), none: note("insight", "research"),
+  };
+  for (const [name, text] of Object.entries(texts)) writeFileSync(join(f.notes, `${name}.md`), text);
+  const before = tree(f.dir);
+  const stats = vaultStats(f.home, "mine", { now }), ratio = stats.ratio;
+  const round3 = (value: number) => Math.round(value * 1000) / 1000;
+  // One ratio per note whose sources were readable: the note's own bytes over the bytes it cites.
+  const small = Buffer.byteLength(texts.small) / 40, big = Buffer.byteLength(texts.big) / 4000;
+  expect(ratio.notes).toBe(2);
+  expect(ratio.sources).toBe(2);
+  // Skipped: the denylisted, oversized and missing files, the traversing entry, and the memory id and URL.
+  expect({ skipped: ratio.skipped, skippedNonFile: ratio.skippedNonFile }).toEqual({ skipped: 6, skippedNonFile: 2 });
+  expect(ratio.median).toBe(round3((small + big) / 2));
+  expect(ratio.p90).toBe(round3(small));
+  expect(ratio.overOne).toBe(1);
+  expect(ratio.largest).toEqual([{ path: "small.md", ratio: round3(small) }, { path: "big.md", ratio: round3(big) }]);
+  // Every field stays JSON-safe (no Infinity), and MCP, CLI and the library report the same numbers.
+  const [tool] = await mcp(f.home, [["vmem_stats", { vault: "mine" }]]);
+  const printed = JSON.parse(run(["stats", "mine", "--json"], { VMEM_HOME: f.home }).text);
+  const expected = JSON.parse(JSON.stringify({ size: stats.size, ratio }));
+  expect(tool.ratio).toEqual(expected.ratio);
+  expect({ size: printed.size, ratio: printed.ratio }).toEqual(expected);
+  const text = run(["stats", "mine"], { VMEM_HOME: f.home }).text;
+  expect(text).toContain(`Note size\n  total  ${stats.size.total.bytes} bytes`);
+  expect(text).toContain("Note-to-source ratio\n  notes    2 notes\n  sources  2 files");
+  expect(text).toContain("  over 1   1 note\n  skipped  6 source references, 2 not a file\n  largest  small.md 2.65; big.md 0.027");
+  expect(tree(f.dir)).toEqual(before);
+});
+
+test("#165 part 5: without a registered workspace the ratio reads nothing and says how much it skipped", () => {
+  const f = fixture(), now = new Date(2026, 10, 4, 12, 0);
+  writeFileSync(join(f.notes, "one.md"), cited('["src/notes.txt"]'));
+  const stats = vaultStats(f.home, "mine", { now });
+  expect(stats.ratio).toEqual({ notes: 0, sources: 0, skipped: 1, skippedNonFile: 0, median: null, p90: null, overOne: 0, largest: [] });
+  expect(run(["stats", "mine"], { VMEM_HOME: f.home }).text).toContain("no note cites a readable workspace file; 1 source reference skipped");
+});
+
