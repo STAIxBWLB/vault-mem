@@ -15,6 +15,16 @@ export interface ResolvedLink extends Link {
   resolved: string | null;
   reason: "missing-note" | "ambiguous-note" | "missing-heading" | "missing-block" | null;
 }
+/**
+ * The one existing note a dead link most likely meant, from the title search. A hint only: nothing rewrites the
+ * link, and `score` is the positive title bm25, so a larger value is a closer title.
+ */
+export interface TitleSuggestion { path: string; title: string; score: number }
+/**
+ * A link as a reader is told about it: a dead one carries the one title hint it was offered, and a text past the hint
+ * bound or with no matching title carries `null`. Computed from the link's raw text, never its reported target.
+ */
+export type SuggestedLink = ResolvedLink & { suggested?: TitleSuggestion | null };
 export function normalizeTarget(value: string): string { return value.normalize("NFC").toLowerCase(); }
 /** Preserve line positions while hiding fenced code, including unclosed fences. */
 export function proseLines(body: string): string[] {

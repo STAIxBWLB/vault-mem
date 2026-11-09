@@ -28,7 +28,7 @@ function trend(snapshot: AnalysisSnapshot, nodes: number, edges: number, communi
   return lines.join("\n")+"\n";
 }
 export function writeAnalysisReports(home: string, request: AnalysisRequest, env: NodeJS.ProcessEnv = process.env) {
-  const {snapshot,vault,config,identity} = analysisInput(home,request.vault,{today:request.today,expectedVault:request.expectedVault});
+  const {snapshot,vault,config,identity} = analysisInput(home,request.vault,{today:request.today,expectedVault:request.expectedVault,...(request.kind === "lint" ? {hints:true} : {})});
   if (request.workspace && request.kind !== "graph") throw new Error("workspace is only supported for graph build");
   const work = request.workspace ? workspaceInput(snapshot,vault,config) : undefined;
   const binding = {vault,denyPaths:config.denyPaths ?? [],piiPatterns:config.piiPatterns ?? [],dev:Number(identity.dev),ino:Number(identity.ino)};

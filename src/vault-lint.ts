@@ -39,6 +39,43 @@ function links(value: unknown): string[] {
   return values.flatMap(v => typeof v === "string" ? [...v.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g)].map(m => m[1]!.trim()) : []);
 }
 const stem = (s: string) => s.trim().replace(/\.md$/, "").split("/").at(-1)!;
+/** Wiki-link texts L01 checks in one note, in the order it reports them: body links, then the link fields. */
+function noteLinkTexts(source: string): string[] {
+  const { fm, body } = legacyDocument(source);
+  return [...links(body), ...FIELDS.flatMap(field => links(fm?.[field]))];
+}
+/**
+ * A snapshot record entry read as data only. Link text and note path reach these lookups unchanged, and a plain
+ * object answers `constructor`, `toString` or `__proto__` from `Object.prototype`; a snapshot another caller built
+ * can still be a plain record, so inherited members must never resolve as a hint or as warnings.
+ */
+function ownValue<T>(record: Record<string, T> | undefined, key: string): T | undefined {
+  return record !== undefined && Object.hasOwn(record, key) ? record[key] : undefined;
+}
+/** Unique dead link texts one lint run computes hints for; past it the report says so instead of reading as a miss. */
+export const DEAD_LINK_HINT_CAP = 1000;
+/**
+ * The dead link texts a snapshot can be hinted for, deduplicated in note and link order and capped at `maximum`.
+ * Captured while the index is open (src/analysis-input.ts), because the lookup needs the title search and
+ * `lintDetails` stays a pure transform.
+ */
+export function deadLinkTexts(notes: readonly { path: string; source: string }[], maximum = DEAD_LINK_HINT_CAP): string[] {
+  const stems = new Set(notes.map(note => note.path.replace(/^notes\//, "").slice(0, -3))), texts = new Set<string>();
+  for (const note of notes) {
+    for (const text of noteLinkTexts(note.source)) if (!stems.has(stem(text))) texts.add(text);
+    if (texts.size >= maximum) break;
+  }
+  return [...texts].slice(0, maximum);
+}
+/**
+ * The texts a hint pass attempts, the bound it worked within and how many unique texts that bound left out. Counting
+ * the remainder needs the whole traversal, because a reader that knows only the cap cannot tell an attempted miss from
+ * a dead link whose hint was never computed.
+ */
+export function deadLinkScan(notes: readonly { path: string; source: string }[], maximum = DEAD_LINK_HINT_CAP): { texts: string[]; cap: number; skipped: number } {
+  const all = deadLinkTexts(notes, Number.POSITIVE_INFINITY), texts = all.slice(0, maximum);
+  return { texts, cap: maximum, skipped: all.length - texts.length };
+}
 function graphChecks(snapshot: AnalysisSnapshot): { l11: string[]; l12: string[]; info: string } {
   const l11: string[] = [], l12: string[] = [], names = Object.keys(snapshot.reports).filter(s => /^graph-report-.*\.md$/.test(s)).sort();
   const latest = names.at(-1);
@@ -79,16 +116,23 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
   const findings: Record<LintCode,string[]> = {L01:[],L02:[],L03:[],L09:[],L10:[],L11:[],L12:[],L13:[],L14:[],L15:[]};
   const notes = [...snapshot.notes].sort((a,b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map(n => ({...n,...legacyDocument(n.source),stem: n.path.replace(/^notes\//, "").slice(0,-3)}));
   const stems = new Set(notes.map(n => n.stem)), inlinks = new Map(notes.map(n => [n.stem,0]));
+  // A text the hint pass never reached was not looked up, so its line must not read as a title that merely did not match.
+  const bound = snapshot.linkHintBound, attempted = bound ? new Set(bound.attempted) : undefined;
   let superseded = 0;
   for (const note of notes) {
     const rel = `notes/${note.stem}.md`, prefix = `\`${rel}\`: `, fm = note.fm;
-    for(const message of snapshot.sourceWarnings?.[note.path] ?? [])findings.L14.push(prefix+message);
+    for (const message of ownValue(snapshot.sourceWarnings, note.path) ?? []) findings.L14.push(prefix+message);
     const allLinks: [string,string][] = links(note.body).map(t => ["body",t]);
     if (fm) for (const field of FIELDS) for (const t of links(fm[field])) allLinks.push([field,t]);
     for (const [field,t] of allLinks) {
       const target = stem(t);
       if (stems.has(target)) { if (target !== note.stem) inlinks.set(target,inlinks.get(target)!+1); }
-      else findings.L01.push(prefix + `\`[[${t}]]\` (${field}) → 대상 노트 없음`);
+      else {
+        const hint = ownValue(snapshot.linkHints, t);
+        const suffix = hint ? ` — suggested \`${hint.path}\` (score ${hint.score.toFixed(3)})`
+          : bound && !attempted!.has(t) ? ` — hint not computed (cap ${bound.cap})` : "";
+        findings.L01.push(prefix + `\`[[${t}]]\` (${field}) → 대상 노트 없음` + suffix);
+      }
     }
     if (fm === null) { findings.L02.push(prefix + "frontmatter 없음/파싱 실패"); continue; }
     if (fm.status === "superseded") superseded++;
@@ -128,6 +172,7 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
   const warnings = findings.L03.length + findings.L09.length + findings.L10.length + findings.L11.length + findings.L12.length + findings.L14.length + findings.L15.length;
   const summary = `SUMMARY errors=${errors} warnings=${warnings}`;
   const extra: Partial<Record<LintCode,string>> = {
+    L01: bound ? `정보: 힌트 상한 ${bound.cap}개 텍스트 초과 — ${bound.skipped}개 dead link 텍스트는 힌트 미계산 (미탐 아님)` : "",
     L02: `정보: \`status: superseded\` ${superseded}건${superseded === 0 ? " — supersede 프로토콜 미가동" : ""}`,
     L03: "hub MOC `notes/index.md`는 설계상 예외",
     L09: snapshot.log === null ? "정보: log 없음" : `정보: ${legacy ? `legacy TYPE ${legacy}건 (정규화표 등재), 최종 사용 ${last}, 신규 발생 없음` : "legacy TYPE 0건"}`,

@@ -26,7 +26,7 @@ export function runAnalysisCommand(command: string, args: string[], home: string
   if (command === "lint") {
     if (positional.length !== 1) throw new Error("lint: requires one vault id");
     if (flags.has("--write")) { const result = writeAnalysisReports(home,{vault:positional[0]!,kind:"lint",note:values["--note"],dryRun:flags.has("--dry-run")},env); return {text:flags.has("--json") ? JSON.stringify(result) : analysisWriteText(result,text,{kind:"lint",dryRun:flags.has("--dry-run")}),code:result.ok && (result.summary as {errors?:number}).errors === 0 ? 0 : 1}; }
-    const {snapshot} = analysisInput(home,positional[0]!);
+    const {snapshot} = analysisInput(home,positional[0]!,{hints:true});
     const details = lintDetails(snapshot,values["--note"]), report = details.report;
     return {text:flags.has("--json") ? JSON.stringify(report) : lintText(details,text,{vault:positional[0]!,note:values["--note"]}),code:report.errors ? 1 : 0};
   }
