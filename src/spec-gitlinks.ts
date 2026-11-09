@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalPath, memoryGitArgv, memoryGitEnv } from "./platform.ts";
@@ -57,7 +57,9 @@ export function scanGitlinkAncestors(root: string, ancestors: string[], env: Nod
 
 /** Keep the synchronous writer API; the child drains Git asynchronously and returns a compact receipt. */
 export function specGitlinkAncestors(root: string, ancestors: string[], env: NodeJS.ProcessEnv): GitlinkScan {
-  const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), root], { input: JSON.stringify(ancestors.at(-1) ?? ""), env, timeout: LIMITS.timeout + 5000, detached: true, maxBuffer: 16 * 1024, stdio: ["pipe", "pipe", "pipe"] });
+  // Bun supports detached for spawnSync; the owned-group timeout fixture pins it.
+  const options: SpawnSyncOptions & { detached: true } = { input: JSON.stringify(ancestors.at(-1) ?? ""), env, timeout: LIMITS.timeout + 5000, detached: true, maxBuffer: 16 * 1024, stdio: ["pipe", "pipe", "pipe"] };
+  const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), root], options);
   // The worker owns this process group. Reap descendants even if its event loop
   // could not run the inner timeout (for example during a slow filesystem call).
   if (child.pid) {

@@ -37,7 +37,7 @@ for (const [name, changes, cause] of [
   ["record", { recordBytes: 16 }, "16-byte bound"],
 ] as const) test(`index scan refuses a genuine ${name} bound with recovery guidance`, async () => {
   const f = fixture();
-  const result = scanGitlinkAncestors(f.repo, ["src"], f.env, { bytes: 128 * 1024 * 1024, records: 1_000_000, recordBytes: 64 * 1024, timeout: 10000, ...changes });
+  const result = scanGitlinkAncestors(f.repo, ["src"], f.env, Object.assign({ bytes: 128 * 1024 * 1024, records: 1_000_000, recordBytes: 64 * 1024, timeout: 10000 }, changes));
   const error = await result.catch(error => error as Error & { code: string });
   expect(error).toBeInstanceOf(Error);
   expect((error as Error & { code: string }).code).toBe("LIMIT");
