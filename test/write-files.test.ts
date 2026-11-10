@@ -12,9 +12,12 @@ function fixture(kind: string) {
   mkdirSync(parent, { recursive: true });
   const env = { HOME: base, PATH: process.env.PATH, VMEM_HOME: home, AMEM_HOME: join(base, "memory"), AGENTHUB_HOME: join(base, "family") };
   const target = join(parent, note ? "alpha.md" : "SPEC.md");
-  const original = note ? "---\ntitle: Synthetic note\ntype: insight\ndescription: Synthetic write safety evidence.\n---\n# Synthetic note\n" : "---\nid: child\ntype: module\ntitle: Synthetic spec\nparent: root\n---\n# Synthetic spec\n";
+  const original = note ? "---\ntitle: Synthetic note\ntype: insight\ndescription: Synthetic write safety evidence.\ndomain: research\ntopics: ["[[research]]"]\n---\n# Synthetic note\n\n## Topics\n\n- [[research]]\n" : "---\nid: child\ntype: module\ntitle: Synthetic spec\nparent: root\n---\n# Synthetic spec\n";
   if (!kind.endsWith("create")) writeFileSync(target, original);
-  if (note) addVault(home, { id: "mine", path: root, kind: "personal", write: "mcp" });
+  if (note) {
+    writeFileSync(join(parent, "research.md"), "---\ntype: moc\ndescription: Synthetic directory.\n---\n# Research\n");
+    addVault(home, { id: "mine", path: root, kind: "personal", write: "mcp" });
+  }
   else {
     specGit(root, ["-c", "init.templateDir=", "init", "--quiet"], { env });
     writeFileSync(join(root, "SPEC.md"), "---\nid: root\ntype: goal\ntitle: Synthetic root\n---\n# Synthetic root\n");
@@ -29,7 +32,7 @@ function run(f: ReturnType<typeof fixture>, kind: string, fault: string) {
 }
 for (const kind of ["note-update", "note-delete", "spec-update", "spec-create", "spec-delete"]) test(`${kind}: a last-moment parent symlink swap is reported after publication`, () => {
   const f = fixture(kind), output = run(f, kind, "parent-swap");
-  expect(output.injected).toBe(true); expect(output.published).toBe(true);
+  expect(output.injected, JSON.stringify(output.result)).toBe(true); expect(output.published).toBe(true);
   expect(output.result.ok).toBe(false);
   expect(kind.startsWith("note") ? output.result.applied : output.result.changed).toBe(true);
   expect(output.result.refused).toBeUndefined();
@@ -42,7 +45,7 @@ for (const kind of ["note-update", "note-delete", "spec-update", "spec-create", 
 }, 30_000);
 for (const kind of ["note-update", "spec-update"]) for (const fault of ["temp-replaced", "lock-replaced"]) test(`${kind}: ${fault} during cleanup preserves the replacement while its owned descriptor stays open`, () => {
   const f = fixture(kind), output = run(f, kind, fault);
-  expect(output.injected).toBe(true); expect(output.descriptorOpen).toBe(true);
+  expect(output.injected, JSON.stringify(output.result)).toBe(true); expect(output.descriptorOpen).toBe(true);
   expect(readFileSync(output.replacement!, "utf8")).toBe("foreign replacement\n");
   expect(output.result.ok).toBe(false);
   expect(output.result.issues.some(issue => issue.code === "CLEANUP" && issue.message.includes("ownership") || issue.code === "CLEANUP" && issue.message.includes("identity changed"))).toBe(true);
