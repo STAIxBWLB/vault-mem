@@ -227,11 +227,11 @@ test("the final refresh catch retains warm rows even if source error logging thr
   await cache.close();
 });
 
-test("revision changes refresh inbox immediately and warm unchanged snapshots stay below 50 ms", async () => {
-  let revision = 1, runs = 0;
+test("revision changes refresh the inbox once the gap passes, and warm unchanged snapshots stay below 50 ms", async () => {
+  let revision = 1, runs = 0, time = 0;
   const cache = createInboxSnapshot("fixture", [], () => {}, () => ({
     result: Promise.resolve(boundInbox([row(++runs)])), cancel() {},
-  }), () => revision);
+  }), () => revision, () => time);
   try {
     const first = await cache.snapshot();
     for (let n = 0; n < 20; n++) {
@@ -239,10 +239,39 @@ test("revision changes refresh inbox immediately and warm unchanged snapshots st
       expect(warm.cursor).toBe(first.cursor); expect(warm.items).toEqual(first.items);
       expect(performance.now() - start).toBeLessThan(50);
     }
-    expect(runs).toBe(1); revision++;
+    expect(runs).toBe(1);
+    revision++;
+    await cache.snapshot(); await Bun.sleep(0);
+    // Inside the gap the last rows stay: a change alone does not rerun the sources.
+    expect(runs).toBe(1);
+    time = 10_000;
     await cache.snapshot(); await Bun.sleep(0);
     const fresh = await cache.snapshot();
     expect(runs).toBe(2); expect(fresh.cursor).not.toBe(first.cursor); expect(fresh.items[0]!.id).toBe("mem:2");
+  } finally { await cache.close(); }
+});
+
+test("sustained revisions refresh at most once per gap, and an applied console write still refreshes on the next poll", async () => {
+  let revision = 1, runs = 0, time = 0;
+  const cache = createInboxSnapshot("fixture", [], () => {}, () => ({
+    result: Promise.resolve(boundInbox([row(++runs)])), cancel() {},
+  }), () => revision, () => time);
+  try {
+    await cache.snapshot(); await Bun.sleep(0); await cache.snapshot();
+    expect(runs).toBe(1);
+    // Every poll sees a new revision, as steady agent writes produce; the gap still allows one collection.
+    for (let n = 1; n <= 10; n++) {
+      time = n * 900; revision++;
+      await cache.snapshot(); await Bun.sleep(0);
+    }
+    expect(runs).toBe(1);
+    time = 10_000;
+    await cache.snapshot(); await Bun.sleep(0); await cache.snapshot();
+    expect(runs).toBe(2);
+    // An applied console write invalidates both caches; its own log append must not wait for the gap.
+    time = 10_500; revision++;
+    cache.invalidate(); await cache.snapshot(); await Bun.sleep(0);
+    expect(runs).toBe(3);
   } finally { await cache.close(); }
 });
 

@@ -64,6 +64,15 @@ test("the panel restores a full unchanged view on repeated routes, even when the
     expect(JSON.stringify(root.children)).not.toContain("Synthetic unavailable");
     await poll(recovered.cursor);
     expect(JSON.stringify(root.children)).toContain("Synthetic candidate");
+    // A stale page token resets to page 0, so there is no earlier page: the panel hides "First page".
+    panel.show("promote", { page: "9:0" });
+    receive({ ...snapshot, cursor: 5, page: "1:0", nextPage: "1:1", reset: true });
+    expect(JSON.stringify(root.children)).not.toContain("First page");
+    expect(JSON.stringify(root.children)).toContain("Next page");
+    // A live page token keeps the way back to the first page.
+    panel.show("promote", { page: "1:1" });
+    receive({ ...snapshot, cursor: 6, page: "1:1", nextPage: "1:2" });
+    expect(JSON.stringify(root.children)).toContain("First page");
     panel.show("notes", { q: "another-view" });
     receive({ changed: false, cursor: 1 });
     expect(root.children).toHaveLength(0); // never reuse a snapshot belonging to different params

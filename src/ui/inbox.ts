@@ -5,6 +5,9 @@ import type { VaultSpec } from "../config.ts";
 import type { InboxSource } from "./inbox-source.ts";
 
 const CACHE_MS = 60_000;
+// Revision-triggered refreshes keep this gap from the start of the last collection, so steady vault writes cannot
+// rerun every source on each poll. An applied console write invalidates the inbox directly and bypasses the gap.
+const REVISION_MS = 10_000;
 const FIRST_WAIT_MS = 700;
 const SOURCE_MS = 30_000;
 // agent-mem has no total-count API; a saturated candidate source can only report a lower bound.
@@ -72,11 +75,14 @@ export function runInboxSource(home: string, source: InboxSource): { result: Pro
 }
 
 type Runner = typeof runInboxSource;
-export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (message: string) => void, run: Runner = runInboxSource, getRevision?: () => number) {
+/** `now` is looked up per call, so a test that spies on `Date.now` after opening the provider still moves this clock. */
+export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (message: string) => void, run: Runner = runInboxSource, getRevision?: () => number, now: () => number = () => Date.now()) {
   const sources: InboxSource[] = [...vaults.filter(v => v.kind === "org").map(vault => ({ kind: "sync" as const, vault })),
     ...vaults.filter(v => v.kind === "personal").map(vault => ({ kind: "lint" as const, vault })), { kind: "candidates" }];
   const rows = new Map<number, InboxRows>(), firstSeen = new Map<string, string>();
   let cached: InboxRows | undefined, flight: Promise<void> | undefined, at = -Infinity, revision = 0, closed = false;
+  // `stale` is a revision change not yet collected; `due` is the earliest start of the next revision-triggered run.
+  let stale = false, due = -Infinity;
   let cancel: (() => void) | undefined;
   let sourceRevision = getRevision?.(), cursor = nextSnapshotCursor(), waited = false;
   const statusAt = new Date().toISOString();
@@ -87,9 +93,11 @@ export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (mes
     at: statusAt, verbs: [], link: { panel: "overview" },
   }], more: 0 });
   function refresh() {
-    if (closed || flight || Date.now() - at < CACHE_MS) return;
+    if (closed || flight || now() - at < CACHE_MS) return;
     cursor = nextSnapshotCursor();
     const started = revision;
+    // This run collects everything up to `started`; the next revision-triggered run waits for the gap.
+    stale = false; due = now() + REVISION_MS;
     flight = (async () => {
       // One worker at a time, including failed sources. A source's deadline covers its entire expensive step.
       for (const [index, source] of sources.entries()) {
@@ -109,13 +117,13 @@ export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (mes
       const ids = new Set(all.map(i => i.id));
       for (const id of firstSeen.keys()) if (!ids.has(id)) firstSeen.delete(id);
       cached = rows.size === 0 ? status(true) : boundInbox(all, [...rows.values()].reduce((n, r) => n + r.more, 0), [...rows.values()].some(r => r.moreIsLowerBound));
-      // An action during collection makes the next poll refresh again, without erasing the last rows.
-      at = started === revision ? Date.now() : -Infinity;
+      // An action during collection leaves these rows one revision behind: refresh again once the gap passes.
+      at = now(); if (started !== revision) stale = true;
     })().catch(error => {
       // Warm snapshots do not await this promise. Never let a refresh failure escape to the console.
       if (!closed) {
         cached ??= status(true);
-        at = started === revision ? Date.now() : -Infinity;
+        at = now(); if (started !== revision) stale = true;
         try { log(`vmem: inbox refresh failed: ${error instanceof Error ? error.message : String(error)}; inspect System and retry`); }
         catch { /* A failed log sink must not create another unhandled rejection. */ }
       }
@@ -124,7 +132,9 @@ export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (mes
   return {
     async snapshot(): Promise<InboxRows & { cursor: number; refreshing?: boolean }> {
       const current = getRevision?.();
-      if (current !== sourceRevision) { sourceRevision = current; revision++; at = -Infinity; }
+      if (current !== sourceRevision) { sourceRevision = current; revision++; stale = true; }
+      // A revision change refreshes at most once per gap; a console write clears the gate in `invalidate`.
+      if (stale && now() >= due) { stale = false; at = -Infinity; }
       refresh();
       if (!cached && flight && !waited) {
         waited = true;
@@ -134,7 +144,9 @@ export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (mes
       }
       return { ...(cached ?? status(false)), cursor, ...(flight ? { refreshing: true } : {}) };
     },
-    invalidate() { revision++; at = -Infinity; cursor = nextSnapshotCursor(); },
+    // An applied console write is immediate: it bypasses the revision gap for the next poll, including any log
+    // append the same write made, then the gap starts again from that collection.
+    invalidate() { revision++; at = -Infinity; due = -Infinity; cursor = nextSnapshotCursor(); },
     async close() { closed = true; cancel?.(); await flight; },
   };
 }

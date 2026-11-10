@@ -144,6 +144,8 @@ export const plugin: ConsolePlugin = {
 
     const promote = createPromoteSnapshot(revision.current, candidates);
     const inbox = createInboxSnapshot(home, mcp.vaults, ctx.log, undefined, revision.current);
+    // One cursor for the whole Promote failure: a fresh one per failed scan would rebuild the panel every poll.
+    let promoteErrorCursor: number | undefined;
 
     /** One two-step operation: preview, and with the console's confirmation recompute and write only on the same fingerprint. */
     async function twoStep(tool: string, args: Args | string, confirmed: boolean, fingerprint: string | undefined, describe: (preview: Args) => { verb: string; preview: string[]; changes: Change[]; warnings: string[] }): Promise<ActionResult> {
@@ -202,8 +204,18 @@ export const plugin: ConsolePlugin = {
             return { note, links, orgVaults: promotable ? mcp.vaults.filter(v => v.kind === "org").map(v => v.id) : [] };
           }
           case "promote": {
-            try { return await promote.snapshot(args); }
-            catch (error) { ctx.log(`vmem: promotion snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`); return { projects: [], unavailable: "Promotion candidates are unavailable; see System", cursor: nextSnapshotCursor() }; }
+            try {
+              const result = await promote.snapshot(args);
+              promoteErrorCursor = undefined;
+              return result;
+            } catch (error) {
+              ctx.log(`vmem: promotion snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`);
+              promoteErrorCursor ??= nextSnapshotCursor();
+              // The shell keeps that one cursor: a matching `after` suppresses the unchanged error view.
+              return args.after === promoteErrorCursor
+                ? { changed: false, cursor: promoteErrorCursor }
+                : { projects: [], unavailable: "Promotion candidates are unavailable; see System", cursor: promoteErrorCursor };
+            }
           }
           case "lint": {
             const vault = vaultOf(args);
