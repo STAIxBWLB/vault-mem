@@ -28,7 +28,7 @@ test("promotion pages fit 32 KiB UTF-8, preserve all candidates and answer uncha
   } while (page);
   expect(ids).toEqual(source.projects.flatMap(p => p.candidates.map(c => c.id)));
   expect(scans).toBe(1);
-  const old = await cache.snapshot({}); revision++;
+  const old = await cache.snapshot({}); source.projects[0]!.candidates[0]!.title = "Changed candidate"; revision++;
   const fresh = await cache.snapshot({ after: old.cursor, page: old.nextPage });
   expect(fresh.changed).toBeUndefined(); expect(fresh.reset).toBe(true); expect(scans).toBe(2);
   expect(await cache.snapshot({ page: old.nextPage, after: fresh.cursor })).toEqual({ changed: false, cursor: fresh.cursor });
@@ -65,4 +65,23 @@ test("log append, same-size rewrite, removal, config policy change and explicit 
       write(); const after = revision.current(); expect(after).not.toBe(before); expect(revision.current()).toBe(after); before = after;
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("identical log-triggered and timed rescans retain later-page tokens and cursors", async () => {
+  let revision = 1, time = 0, scans = 0;
+  const source = fixture(), cache = createPromoteSnapshot(() => revision, async () => { scans++; return structuredClone(source); }, () => time);
+  const first = await cache.snapshot({});
+  const second = await cache.snapshot({ page: first.nextPage });
+  expect(second.page).not.toBe(first.page);
+  revision++;
+  expect(await cache.snapshot({ page: second.page, after: second.cursor })).toEqual({ changed: false, cursor: second.cursor });
+  expect(scans).toBe(2);
+  time = 60_000;
+  expect(await cache.snapshot({ page: second.page, after: second.cursor })).toEqual({ changed: false, cursor: second.cursor });
+  expect(scans).toBe(3);
+  const full = await cache.snapshot({ page: second.page });
+  expect(full.page).toBe(second.page); expect(full.reset).toBeUndefined();
+  source.projects[0]!.candidates[0]!.title = "Actually changed"; time += 60_000;
+  const changed = await cache.snapshot({ page: second.page, after: second.cursor });
+  expect(changed.reset).toBe(true); expect(changed.cursor).not.toBe(second.cursor);
 });

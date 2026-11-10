@@ -193,3 +193,39 @@ test("inbox conditional polling is unchanged below 50 ms, and a confirmed vault 
     expect(changed.changed).toBeUndefined(); expect(changed.cursor).not.toBe(first.cursor);
   } finally { await p.close?.(); }
 });
+
+test("an unreadable revision source cannot block provider initialization or healthy panels and recovers on repair", async () => {
+  const broken = make("broken-revision"), log = join(broken, "log");
+  addVault(process.env.VMEM_HOME!, { id: "broken-revision", path: broken, kind: "personal", write: "mcp" });
+  // Deterministic even under a privileged test user: O_NOFOLLOW refuses this symlink.
+  const target = join(root, "synthetic-log-target"); writeFileSync(target, "Synthetic receipt\n"); symlinkSync(target, log);
+  const p = await plugin.open({ home: root, log() {} });
+  try {
+    const notes = await p.snapshot({ panel: "notes", vault: "mine", after: 0 });
+    expect(Array.isArray(notes.notes)).toBe(true); expect((notes.notes as unknown[]).length).toBeGreaterThan(0);
+    const first = await completeInbox(p);
+    expect(await p.snapshot({ panel: "inbox", after: first.cursor as number })).toEqual({ changed: false, cursor: first.cursor });
+    rmSync(log); writeFileSync(log, "Synthetic repaired receipt\n");
+    const repaired = await p.snapshot({ panel: "inbox", after: first.cursor as number });
+    expect(repaired.changed).toBeUndefined(); expect(repaired.cursor).not.toBe(first.cursor);
+  } finally { await p.close?.(); rmSync(log, { force: true }); }
+});
+
+test("promotion discovery errors reach System while an explicit project bypasses discovery", async () => {
+  const logs: string[] = [], config = join(process.env.VMEM_HOME!, "vmem.config.json");
+  const original = readFileSync(config);
+  const p = await plugin.open({ home: root, log: message => logs.push(message) });
+  try {
+    writeFileSync(config, "{Synthetic invalid registry");
+    const id = "a".repeat(32);
+    expect(await p.action({ action: "promote-from-amem", id })).toMatchObject({ ok: false, error: "Promotion candidates are unavailable; see System" });
+    expect(logs.some(message => message.includes("promotion candidates unavailable"))).toBe(true);
+    const logCount = logs.length;
+    const explicit = await p.action({ action: "promote-from-amem", id, project: "synthetic" });
+    expect(explicit).not.toMatchObject({ error: "Promotion candidates are unavailable; see System" });
+    expect(logs).toHaveLength(logCount);
+  } finally {
+    writeFileSync(config, original);
+    await p.close?.();
+  }
+});

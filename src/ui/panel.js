@@ -109,9 +109,9 @@ export default (host) => {
     },
   };
 
-  let last = "";
-  host.onSnapshot((snap) => {
-    if (snap.changed === false) return;
+  let last = "", savedView = "", savedSnapshot;
+  const viewKey = () => JSON.stringify([panel, params]);
+  const render = (snap) => {
     const sig = JSON.stringify([panel, snap]);
     if (sig === last) return; // unchanged poll: keep focus and scroll
     last = sig;
@@ -122,9 +122,21 @@ export default (host) => {
     root.replaceChildren(...(views[panel]?.(snap) ?? [ui.empty("Unknown panel")]).filter(Boolean));
     for (const el of root.querySelectorAll("input[name], select[name]")) if (values.has(el.name)) el[el.type === "checkbox" ? "checked" : "value"] = values.get(el.name);
     if (focused) root.querySelector(`[name="${focused}"]`)?.focus();
+  };
+  host.onSnapshot((snap) => {
+    if (snap.changed === false) {
+      if (last === "" && savedView === viewKey() && savedSnapshot) render(savedSnapshot);
+      return;
+    }
+    savedView = viewKey(); savedSnapshot = snap;
+    render(snap);
   });
   return {
-    show(id, p = {}) { panel = id; params = p; last = ""; root.replaceChildren(); },
+    show(id, p = {}) {
+      panel = id; params = p; last = ""; root.replaceChildren();
+      // Some shells suppress unchanged replies before invoking onSnapshot. Restore on show too.
+      if (savedView === viewKey() && savedSnapshot) render(savedSnapshot);
+    },
     hide() {},
     destroy() { root.remove(); },
   };

@@ -258,11 +258,15 @@ export const plugin: ConsolePlugin = {
           case "promote-from-amem": {
             const id = (str(args.id) ?? "").replace(/^mem:/, "");
             if (!/^[0-9a-f-]{32,36}$/i.test(id)) return { ok: false, error: "a memory id is required" };
-            if (!projectOf.has(id)) {
+            let project = str(args.project) ?? projectOf.get(id);
+            if (!project) {
               try { await candidates(); }
-              catch { return { ok: false, error: "Promotion candidates are unavailable; see System" }; }
+              catch (error) {
+                ctx.log(`vmem: promotion candidates unavailable: ${error instanceof Error ? error.message : String(error)}`);
+                return { ok: false, error: "Promotion candidates are unavailable; see System" };
+              }
+              project = projectOf.get(id);
             }
-            const project = str(args.project) ?? projectOf.get(id);
             return twoStep("vmem_promote_from_amem", forward("vmem_promote_from_amem", args, { id, ...(project ? { project } : {}) }), confirmed, fingerprint, p => {
               const dupes = Array.isArray(p.possibleDuplicates) ? p.possibleDuplicates as string[] : [];
               // Linking an existing note writes no vault file; it records the link in agent-mem only.

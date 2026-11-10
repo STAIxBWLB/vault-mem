@@ -28,7 +28,9 @@ function revisionStamp(file: string, budget: number): string {
     return `${metadata}:${createHash("sha256").update(bytes.subarray(0, count)).digest("hex")}`;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
-    throw new Error("vault revision is unreadable; check vault log and registry permissions", { cause: error });
+    // A broken source must not prevent healthy vaults or unrelated panels from opening.
+    // Recovery changes this stamp back to file evidence and invalidates the cache.
+    return `error:${(error as NodeJS.ErrnoException).code ?? "UNREADABLE"}`;
   } finally { if (fd !== undefined) closeSync(fd); }
 }
 
@@ -50,8 +52,8 @@ export function createSnapshotRevision(home: string, vaults: VaultSpec[]) {
 
 /** Retain only the brief candidate metadata, and prepare byte-bounded pages once per revision.
  * `cursor` identifies the page (including selection), `nextPage` is navigation, and `after` is conditional polling. */
-export function createPromoteSnapshot(revision: () => number, load: () => Promise<Candidates>) {
-  let cached: { revision: number; generation: number; at: number; pages: Candidate[][] } | undefined;
+export function createPromoteSnapshot(revision: () => number, load: () => Promise<Candidates>, now: () => number = Date.now) {
+  let cached: { revision: number; generation: number; digest: string; at: number; pages: Candidate[][] } | undefined;
   let flight: Promise<void> | undefined;
   const cursors = new Map<string, number>();
   function response(rows: Candidate[], selected: string | null, cursor: number, page: string, nextPage?: string) {
@@ -67,7 +69,7 @@ export function createPromoteSnapshot(revision: () => number, load: () => Promis
     async snapshot(args: Record<string, unknown>): Promise<Record<string, unknown>> {
       // A concurrent write may move the revision while the scan runs. Never label that scan as the new revision.
       let attempts = 0;
-      while (!cached || cached.revision !== revision() || Date.now() - cached.at >= 60_000) {
+      while (!cached || cached.revision !== revision() || now() - cached.at >= 60_000) {
         if (++attempts > 2) throw new Error("vault changed during promotion collection; retry the snapshot");
         if (!flight) {
           const started = revision();
@@ -85,7 +87,10 @@ export function createPromoteSnapshot(revision: () => number, load: () => Promis
               }
               pages.at(-1)!.push(candidate);
             }
-            cached = { revision: started, generation: nextSnapshotCursor(), at: Date.now(), pages }; cursors.clear();
+            const digest = createHash("sha256").update(JSON.stringify(pages)).digest("hex");
+            const identical = cached?.digest === digest;
+            cached = { revision: started, generation: identical ? cached!.generation : nextSnapshotCursor(), digest, at: now(), pages };
+            if (!identical) cursors.clear();
           })().finally(() => { flight = undefined; });
         }
         await flight;
