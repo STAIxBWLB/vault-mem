@@ -1,5 +1,6 @@
+import { capturePublicationPath, publishFile, cleanupOwnedFile, PublicationDrift } from "./write-files.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, fstatSync, fchmodSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, rmdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { SpecSourceSpec, VmemConfig } from "./config.ts";
@@ -157,21 +158,6 @@ function prepareMutationTarget(root: string, change: SpecMutation, denyPaths: st
 function checkExpectedSha(change: SpecMutation, expectedSha: string | undefined): void {
   if (expectedSha !== undefined && (change.before === null || !/^[a-f0-9]{64}$/.test(expectedSha) || hash(change.before) !== expectedSha)) refuse("EXPECTED_SHA", "expectedSha does not match the spec; reread vmem spec get and retry with its sha256", change.path);
 }
-/** A new target is published without replacement; an update replaces its checked original. */
-function publishSpec(temp: string, file: string, change: SpecMutation, result: SpecWriteResult): void {
-  if (change.after === null) throw new Error("deletion cannot publish a temporary file");
-  if (change.before === null) {
-    try { linkSync(temp, file); }
-    catch (error) {
-      const code = (error as NodeJS.ErrnoException | undefined)?.code;
-      if (code === "EEXIST") refuse("EEXIST", "create target appeared before publication; inspect the existing file and choose an absent path before retrying", change.path);
-      refuse("LINK", `create hard-link publication failed (${writeErrorCause(error)}); check filesystem hard-link support and permissions and free space, then choose a writable worktree on a filesystem supporting same-directory hard links; create never falls back to rename`, change.path);
-    }
-  }
-  else renameSync(temp, file);
-  result.changed = true; result.sha256 = hash(change.after);
-  if (change.before === null) unlinkSync(temp);
-}
 function createdDirectoryCleanupIssue(error: unknown, race: boolean, directory: string): SpecWriteIssue {
   if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOTEMPTY") return { code: "CLEANUP", severity: "warning", message: `created parent directory was kept (${directory}, ENOTEMPTY) because it now contains another file or directory; ${race ? "this is expected after a refused create race; " : ""}inspect the preserved contents and choose an absent target before retrying the create` };
   return { code: "CLEANUP", severity: "error", message: `owned parent directory cleanup failed for ${directory} (${writeErrorCause(error)}); inspect its ownership and access, preserve unrelated contents and repair the reported cause before retrying the create` };
@@ -276,7 +262,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
   const context = { ...options, operation };
   const result: SpecWriteResult = { ok: false, changed: false, actor: channel === "mcp" || AGENT_MARKERS.some(key => !!env[key]) ? "agent" : "person", id: request.id, issues: [] };
   const createdDirs = new Map<string, string>();
-  let lockFd: number | undefined, lockFile: string | undefined, lockIdentity: string | undefined, temp: string | undefined, tempIdentity: string | undefined;
+  let lockFd: number | undefined, lockFile: string | undefined, lockIdentity: string | undefined, temp: string | undefined, tempIdentity: string | undefined, tempFd: number | undefined;
   try {
     let initial!: SpecSnapshot, first!: SpecMutation, commonIdentity!: string;
     const startup = guardSpecWrite(home, request, context, undefined, guard => {
@@ -328,40 +314,63 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
       if (!sameMutationSnapshot(current, discoverSpecs(source, { worktree: root, env }), operation, change.path)) refuse("DRIFT", `spec tree changed while validating deletion; ${retrySpecOperation(operation)}`, change.path);
       const latest = readMutation(root, change, config.denyPaths ?? [], operation);
       if (latest.source !== change.before || latest.identity !== original.identity) refuse("DRIFT", `spec changed before deletion; ${retrySpecOperation(operation)}`, change.path);
-      const file = plainPath(root, change.path, config.denyPaths ?? [], operation);
+      const file = plainPath(root, change.path, config.denyPaths ?? [], operation), publication = capturePublicationPath(root, file);
       assertBinding();
-      unlinkSync(file); result.changed = true; syncDirectory(dirname(file)); result.ok = true; return result;
+      publishFile(publication, { kind: "unlink" }, () => { result.changed = true; });
+      syncDirectory(dirname(file)); result.ok = true; return result;
     }
     const file = prepareMutationTarget(root, change, config.denyPaths ?? [], createdDirs), parent = dirname(file), parentIdentity = identity(parent);
+    const publication = capturePublicationPath(root, file);
     const candidateTemp = join(parent, `.spec-${randomUUID()}.tmp`);
     const fd = openSync(candidateTemp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, original.mode);
-    temp = candidateTemp;
-    try { const stat = fstatSync(fd, { bigint: true }); tempIdentity = `${stat.dev}:${stat.ino}`; fchmodSync(fd, original.mode); writeFileSync(fd, change.after); fsyncSync(fd); } finally { closeSync(fd); }
+    temp = candidateTemp; tempFd = fd;
+    const stat = fstatSync(fd, { bigint: true }); tempIdentity = `${stat.dev}:${stat.ino}`;
+    fchmodSync(fd, original.mode); writeFileSync(fd, change.after); fsyncSync(fd);
     assertBinding();
     if (identity(parent) !== parentIdentity || !sameMutationSnapshot(current, discoverSpecs(source, { worktree: root, env }), operation, change.path)) refuse("DRIFT", `spec tree changed while validating the ${operation}; ${retrySpecOperation(operation)}`, change.path);
     guardCreateRepository(root, change, config.denyPaths ?? [], env);
     const latest = readMutation(root, change, config.denyPaths ?? [], operation), staged = readBounded(temp, change.path, operation);
     if (latest.source !== change.before || latest.identity !== original.identity || staged.source !== change.after || staged.identity !== tempIdentity) refuse("DRIFT", `spec ${operation} target or staged file changed before publication; ${retrySpecOperation(operation)}`, change.path);
     assertBinding();
-    publishSpec(temp, file, change, result); temp = undefined;
+    const afterSha = hash(change.after);
+    try {
+      publishFile(publication, { kind: change.before === null ? "link" : "rename", temp }, () => {
+        result.changed = true; result.sha256 = afterSha;
+        if (change.before !== null) temp = undefined;
+      });
+    } catch (error) {
+      if (change.before === null && !result.changed && error instanceof PublicationDrift && error.targetExists) {
+        refuse("EEXIST", "create target appeared before publication; inspect the existing target and choose an absent path before retrying", change.path);
+      }
+      if (change.before !== null || error instanceof PublicationDrift || result.changed) throw error;
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") refuse("EEXIST", "create target appeared before publication; inspect the existing file and choose an absent path before retrying", change.path);
+      refuse("LINK", `create hard-link publication failed (${writeErrorCause(error)}); check filesystem hard-link support and permissions and free space, then choose a writable worktree on a filesystem supporting same-directory hard links; create never falls back to rename`, change.path);
+    }
+    if (change.before === null) { cleanupOwnedFile(temp!, tempFd!); temp = undefined; }
     syncDirectory(parent); syncCreatedParents(createdDirs); result.ok = true;
   } catch (error) {
     const inspection = publishedSpecInspection(operation, result.changed);
-    result.issues = error instanceof Refusal ? error.issues : [{ code: "IO", severity: "error", message: `spec ${operation} failed (${writeErrorCause(error)}); ${inspection ? `${inspection}, check permissions and free space, and repair the reported cause` : `inspect the source tree and target directory, check permissions and free space for the target and VMEM_HOME lock directory, repair the reported cause, then ${retrySpecOperation(operation)}`}`, ...(result.path ? { path: result.path } : {}) }];
+    result.issues = error instanceof Refusal ? error.issues : error instanceof PublicationDrift ? [{ code: "DRIFT", severity: "error", message: error.message, ...(result.path ? { path: result.path } : {}) }] : [{ code: "IO", severity: "error", message: `spec ${operation} failed (${writeErrorCause(error)}); ${inspection ? `${inspection}, check permissions and free space, and repair the reported cause` : `inspect the source tree and target directory, check permissions and free space for the target and VMEM_HOME lock directory, repair the reported cause, then ${retrySpecOperation(operation)}`}`, ...(result.path ? { path: result.path } : {}) }];
     result.path ??= result.issues.find(issue => issue.path)?.path;
   } finally {
     if (temp) {
-      try { if (identity(temp) !== tempIdentity) throw new Error("temporary ownership changed"); unlinkSync(temp); }
+      try { cleanupOwnedFile(temp, tempFd!); }
       catch (error) {
         const inspection = publishedSpecInspection(operation, result.changed);
         result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `spec temporary cleanup could not prove owned-file removal (${writeErrorCause(error)}); ${inspection ? `${inspection}; inspect any .spec-*.tmp file in the target directory and preserve replacements` : "inspect the .spec-*.tmp file in the target directory before retrying (a replacement is preserved)"}`, ...(result.path ? { path: result.path } : {}) });
       }
     }
+    if (tempFd !== undefined) {
+      try { closeSync(tempFd); }
+      catch (error) { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `spec temporary descriptor close failed (${writeErrorCause(error)}); inspect the write receipt and temporary files before recovery` }); }
+    }
     if (lockFd !== undefined) {
-      try { closeSync(lockFd); }
-      catch (error) { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `spec lock descriptor close failed (${writeErrorCause(error)}); ${publishedSpecInspection(operation, result.changed) ?? "inspect the write receipt and lock state before retrying"}`, ...(result.path ? { path: result.path } : {}) }); }
-      try { if (lockFile && identity(lockFile) === lockIdentity) unlinkSync(lockFile); }
+      try { cleanupOwnedFile(lockFile!, lockFd); }
       catch (error) { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `spec lock cleanup failed (${writeErrorCause(error)}); ${publishedSpecInspection(operation, result.changed) ?? "inspect the owned lock under VMEM_HOME before retrying"}`, ...(result.path ? { path: result.path } : {}) }); }
+      finally {
+        try { closeSync(lockFd); }
+        catch (error) { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `spec lock descriptor close failed (${writeErrorCause(error)}); ${publishedSpecInspection(operation, result.changed) ?? "inspect the write receipt and lock state before retrying"}`, ...(result.path ? { path: result.path } : {}) }); }
+      }
     }
     cleanupCreatedDirs(createdDirs, result);
   }

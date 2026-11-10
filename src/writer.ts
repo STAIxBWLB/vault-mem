@@ -1,8 +1,9 @@
+import { capturePublicationPath, publishFile, cleanupOwnedFile, PublicationDrift, type PublicationPath } from "./write-files.ts";
 import { anchorIndex, normalizeTarget, noteKey, extractLinks } from "./links.ts";
 import { localDate } from "./local-date.ts";
 import { appendLog, checkLogEvent, matchesBinding } from "./vault-log.ts";
 import type { LogEvent } from "./log-types.ts";
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, rmdirSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { hostname } from "node:os";
@@ -145,11 +146,21 @@ function duplicateWarnings(request: WriteRequest, notes: Map<string, string>, ch
 /** Single mutation entry point. Preview/dry-run perform no writes, including locks and caches. */
 /** `options.binding` (internal callers composing several writes) refuses with VAULT_DRIFT unless the registry still matches it. */
 export function applyWrite(home: string, request: WriteRequest, options: { env?: NodeJS.ProcessEnv; piiSurface?: PiiSurface; binding?: LogBinding; now?: Date } = {}): WriteReceipt {
-  let lockFd: number | undefined, lockFile: string | undefined, lockIdentity: { ino: number; dev: number } | undefined;
+  let lockFd: number | undefined, lockFile: string | undefined;
   let index: VaultIndex | undefined;
-  const temps = new Set<string>(), createdDirs: string[] = [], committed: PlannedChange[] = [];
+  const temps = new Map<string, { fd: number; remove: boolean }>(), publicationPaths = new Map<string, PublicationPath>(), createdDirs: string[] = [], committed: PlannedChange[] = [];
   let changes: PlannedChange[] = [], issues: WriteIssue[] = [], fingerprint: string | undefined, root = "", applied = false, indexUpdated = false;
   let result: WriteReceipt | undefined;
+  let appliedPaths: Set<string> | undefined;
+  const backups = new Map<string, string>(), backupNames = new Set<string>(), retainedBackups = new Set<string>();
+  const retainBackup = (path: string) => {
+    const backup = backups.get(path);
+    if (backup && temps.get(backup)?.remove) {
+      temps.get(backup)!.remove = false; retainedBackups.add(backup.slice(root.length + 1));
+    }
+  };
+  const reportedChanges = () => receipts(changes).map(change => appliedPaths
+    ? { ...change, applied: appliedPaths.has(change.path) } : change);
   const dateWarnings: WriteIssue[] = [];
   let mergePreview: MergePreview | undefined, mergeCopiedBody = "";
   const recordError = (code: string, message: string, path?: string) => issues.push({ code, severity: "error", message, ...(path ? { path } : {}) });
@@ -178,7 +189,6 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       lockFile = join(root, MUTATION_LOCK);
       try { lockFd = openSync(lockFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
       catch { lockFile = undefined; refuse("LOCKED", "vault mutation lock unavailable; existing lock is preserved"); }
-      const stat = fstatSync(lockFd); lockIdentity = { ino: Number(stat.ino), dev: Number(stat.dev) };
       writeFileSync(lockFd, JSON.stringify({ pid: process.pid, host: hostname(), token: randomUUID(), created: new Date().toISOString() }) + "\n");
       fsyncSync(lockFd);
     }
@@ -229,7 +239,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     if (preview) return result = { ok: true, applied: false, preview: true, ...(request.operation.op === "link" && !changes.length ? {unchanged:true} : {}), issues, changes: receipts(changes), fingerprint, indexUpdated: false };
     if (!changes.length) return result = { ok: true, applied: false, ...(request.operation.op === "link" ? {unchanged:true} : {}), issues, changes: [], fingerprint, indexUpdated: false };
     index = new VaultIndex(home, vault, config.vaults.map(value => value.path));
-    const backups = new Map<string, string>(), staged = new Map<string, string>();
+    const staged = new Map<string, string>();
     const ensureDir = (dir: string) => {
       if (dir === root) return;
       try { if (!lstatSync(dir).isDirectory() || lstatSync(dir).isSymbolicLink()) refuse("V04", "unsafe output directory"); }
@@ -238,16 +248,19 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
         ensureDir(dirname(dir)); mkdirSync(dir, { mode: 0o700 }); createdDirs.push(dir);
       }
     };
+    // ponytail: staging holds up to two descriptors per changed note until cleanup; the process fd ceiling
+    // may refuse a large batch with EMFILE before publication. Split such a batch before retrying.
     const stage = (file: string, text: string) => {
       const temp = join(dirname(file), `.vmem-${randomUUID()}.tmp`);
       const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-      temps.add(temp);
-      try { writeFileSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); }
+      temps.set(temp, { fd, remove: true });
+      writeFileSync(fd, text); fsyncSync(fd);
       return temp;
     };
     for (const change of changes) {
       const file = safePath(root, change.path); ensureDir(dirname(file));
-      if (change.before !== null) backups.set(change.path, stage(file, change.before));
+      publicationPaths.set(change.path, capturePublicationPath(root, file));
+      if (change.before !== null) { const backup = stage(file, change.before); backups.set(change.path, backup); backupNames.add(backup); }
       if (change.after !== null) staged.set(change.path, stage(file, change.after));
     }
     try {
@@ -260,28 +273,52 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       for (const change of changes) {
         const file = safePath(root, change.path);
         if (readPlain(root, change.path, request.operation.op === "report" ? MAX_REPORT_BYTES : MAX_NOTE_BYTES) !== change.before) refuse("V09", "file changed while staging", change.path);
-        if (change.after === null) unlinkSync(file);
-        else { const temp = staged.get(change.path)!; renameSync(temp, file); temps.delete(temp); }
-        committed.push(change);
+        const temp = staged.get(change.path);
+        publishFile(publicationPaths.get(change.path)!, change.after === null ? { kind: "unlink" } : { kind: "rename", temp: temp! }, () => {
+          committed.push(change);
+          if (temp) temps.get(temp)!.remove = false;
+        });
       }
       for (const dir of new Set(changes.map(change => dirname(join(root, change.path))))) syncDirectory(dir);
       const refreshed = index.scan(false, { skipInvalidFrontmatter: true });
       for (const path of refreshed.skipped ?? []) issues.push({ code: "V01", severity: "warning", path: `notes/${path}`, message: "legacy invalid frontmatter omitted from derived index; note unchanged" });
       indexUpdated = true; applied = true;
     } catch (error) {
+      if (error instanceof PublicationDrift) {
+        // Namespace ownership is no longer proved. Do not roll back, flush or rescan through that path.
+        applied = committed.length > 0;
+        appliedPaths = new Set(committed.map(change => change.path));
+        for (const change of committed) retainBackup(change.path);
+        throw error;
+      }
+      const outstanding = new Set(committed.map(change => change.path));
+      let rollbackDrift: PublicationDrift | undefined;
       for (const change of [...committed].reverse()) {
+        let restored = false;
         try {
           const file = safePath(root, change.path);
           if (readPlain(root, change.path, request.operation.op === "report" ? MAX_REPORT_BYTES : MAX_NOTE_BYTES) !== change.after) throw new Error("external write detected before rollback");
-          if (change.before === null) unlinkSync(file);
-          else { const backup = backups.get(change.path)!; renameSync(backup, file); temps.delete(backup); }
-        } catch {
-          applied = true;
           const backup = backups.get(change.path);
-          if (backup) temps.delete(backup); // Recovery copy must survive failed rollback or external drift.
+          publishFile(publicationPaths.get(change.path)!, change.before === null ? { kind: "unlink" } : { kind: "rename", temp: backup! }, () => {
+            restored = true; outstanding.delete(change.path);
+            if (backup) temps.get(backup)!.remove = false;
+          });
+        } catch (rollbackError) {
+          if (!restored) retainBackup(change.path);
+          const backup = backups.get(change.path);
+          if (rollbackError instanceof PublicationDrift) {
+            rollbackDrift = rollbackError;
+            recordError("ROLLBACK", `${restored
+              ? "rollback restored the original target; its backup name was consumed by publication"
+              : "rollback was not published; inspect the listed retained backup"}; ${rollbackError.message}`, change.path);
+            for (const path of outstanding) retainBackup(path);
+            break;
+          }
           recordError("ROLLBACK", "rollback refused or failed; external edits preserved and original backup retained when available", backup ? backup.slice(root.length + 1) : change.path);
         }
       }
+      applied = outstanding.size > 0;
+      if (rollbackDrift) { appliedPaths = outstanding; throw rollbackDrift; }
       for (const dir of new Set(committed.map(change => dirname(join(root, change.path))))) {
         try { syncDirectory(dir); } catch { recordError("ROLLBACK", "rollback directory flush failed"); }
       }
@@ -302,24 +339,32 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
   } catch (error) {
     if (error instanceof WriteRefusal) issues.push(...error.issues.map(issue => request?.operation?.op === "merge" && !issue.message.includes(";")
       ? { ...issue, message: `${issue.message}; repair the indicated merge input or note, then request a fresh preview` } : issue));
+    else if (error instanceof PublicationDrift) recordError("V09", error.message, error.file.slice(root.length + 1));
     else recordError("IO", "write operation failed; inspect filesystem permissions and retry");
-    result = { ok: false, applied, issues, changes: receipts(changes), ...(fingerprint ? { fingerprint } : {}), indexUpdated };
+    result = { ok: false, applied, issues, changes: reportedChanges(), ...(fingerprint ? { fingerprint } : {}), indexUpdated };
   } finally {
     try { index?.close(); } catch { recordError("INDEX", "derived index close failed"); }
-    for (const temp of temps) {
-      try { unlinkSync(temp); } catch { recordError("CLEANUP", "owned temporary cleanup failed; inspect .vmem temporary files"); }
+    for (const [temp, owned] of temps) {
+      try { if (owned.remove) cleanupOwnedFile(temp, owned.fd); }
+      catch (error) {
+        // A swapped parent can make the original name unreachable while the owned backup still has a link.
+        // Report its original name for inspection, but never claim an unlinked/replaced inode was retained.
+        if (backupNames.has(temp)) {
+          try { if (fstatSync(owned.fd).nlink > 0) retainedBackups.add(temp.slice(root.length + 1)); } catch { /* The cleanup issue below remains authoritative. */ }
+        }
+        recordError("CLEANUP", `owned temporary cleanup failed; inspect .vmem temporary files and preserve replacements: ${error instanceof Error ? error.message : String(error)}`, temp.slice(root.length + 1));
+      }
+      finally { try { closeSync(owned.fd); } catch { recordError("CLEANUP", "temporary descriptor close failed; inspect retained .vmem files"); } }
     }
     // Only empty directories created by this invocation are eligible for removal on failure.
     if (!applied) for (const dir of createdDirs.reverse()) { try { rmdirSync(dir); } catch { recordError("CLEANUP", "owned empty directory cleanup failed"); } }
     if (lockFd !== undefined) {
-      try { closeSync(lockFd); } catch { recordError("CLEANUP", "mutation lock descriptor close failed"); }
-      try {
-        const stat = lstatSync(lockFile!);
-        if (Number(stat.ino) !== lockIdentity?.ino || Number(stat.dev) !== lockIdentity?.dev || stat.isSymbolicLink()) recordError("CLEANUP", "mutation lock ownership changed; retained lock");
-        else unlinkSync(lockFile!);
-      } catch { recordError("CLEANUP", "mutation lock retained; inspect ownership before manual recovery"); }
+      try { cleanupOwnedFile(lockFile!, lockFd); }
+      catch (error) { recordError("CLEANUP", `mutation lock retained; inspect ownership before manual recovery: ${error instanceof Error ? error.message : String(error)}`); }
+      finally { try { closeSync(lockFd); } catch { recordError("CLEANUP", "mutation lock descriptor close failed"); } }
     }
     if (result) {
+      if (retainedBackups.size) result.retainedBackups = [...retainedBackups];
       const possibleDuplicates = issues.filter(issue => issue.code === "V08" && issue.severity === "warning" && issue.path).map(issue => issue.path!);
       if (possibleDuplicates.length) result.possibleDuplicates = possibleDuplicates;
       if (issues.some(issue => issue.severity === "error")) result.ok = false;
