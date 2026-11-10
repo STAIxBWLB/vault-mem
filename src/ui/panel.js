@@ -85,8 +85,11 @@ export default (host) => {
           host.action({ action: "promote-from-amem", id: picked.id, project: picked.project, ...meta, ...vaultParam() });
         })) : null;
       return [s.unavailable ? ui.notice(s.unavailable, "err") : null, form,
-        ui.rows(all, (c) => ui.row({ title: c.title || c.kind, sub: `${c.kind} · ${c.project} · ${new Date(c.at).toLocaleString()}`, onOpen: () => go("promote", { id: c.id, project: c.project }),
-          ...(s.selected === c.id ? { chip: { text: "selected", tone: "neutral" } } : { verbs: [ui.button("Select", () => go("promote", { id: c.id, project: c.project }))] }) }))
+        s.nextPage || params.page ? h("div", { class: "vmem-bar" },
+          ...(params.page ? [ui.button("First page", () => go("promote"))] : []),
+          ...(s.nextPage ? [ui.button("Next page", () => go("promote", { page: s.nextPage }))] : [])) : null,
+        ui.rows(all, (c) => ui.row({ title: c.title || c.kind, sub: `${c.kind} · ${c.project} · ${new Date(c.at).toLocaleString()}`, onOpen: () => go("promote", { id: c.id, project: c.project, page: s.page }),
+          ...(s.selected === c.id ? { chip: { text: "selected", tone: "neutral" } } : { verbs: [ui.button("Select", () => go("promote", { id: c.id, project: c.project, page: s.page }))] }) }))
           ?? ui.empty("No promotion candidates", "Durable agent memories appear here when agent-mem marks them for the vault.")];
     },
     lint(s) {
@@ -106,8 +109,9 @@ export default (host) => {
     },
   };
 
-  let last = "";
-  host.onSnapshot((snap) => {
+  let last = "", savedView = "", savedSnapshot;
+  const viewKey = () => JSON.stringify([panel, params]);
+  const render = (snap) => {
     const sig = JSON.stringify([panel, snap]);
     if (sig === last) return; // unchanged poll: keep focus and scroll
     last = sig;
@@ -118,9 +122,21 @@ export default (host) => {
     root.replaceChildren(...(views[panel]?.(snap) ?? [ui.empty("Unknown panel")]).filter(Boolean));
     for (const el of root.querySelectorAll("input[name], select[name]")) if (values.has(el.name)) el[el.type === "checkbox" ? "checked" : "value"] = values.get(el.name);
     if (focused) root.querySelector(`[name="${focused}"]`)?.focus();
+  };
+  host.onSnapshot((snap) => {
+    if (snap.changed === false) {
+      if (last === "" && savedView === viewKey() && savedSnapshot) render(savedSnapshot);
+      return;
+    }
+    savedView = viewKey(); savedSnapshot = snap;
+    render(snap);
   });
   return {
-    show(id, p = {}) { panel = id; params = p; last = ""; root.replaceChildren(); },
+    show(id, p = {}) {
+      panel = id; params = p; last = ""; root.replaceChildren();
+      // Some shells suppress unchanged replies before invoking onSnapshot. Restore on show too.
+      if (savedView === viewKey() && savedSnapshot) render(savedSnapshot);
+    },
     hide() {},
     destroy() { root.remove(); },
   };

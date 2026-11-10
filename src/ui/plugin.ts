@@ -10,6 +10,7 @@ import { createVaultMcp } from "../mcp-vault.ts";
 import { validArguments } from "../mcp.ts";
 import { listPromotionCandidates } from "../promote.ts";
 import { loadRegistry } from "../registry.ts";
+import { createSnapshotRevision, createPromoteSnapshot, nextSnapshotCursor } from "./snapshot-cache.ts";
 import { createInboxSnapshot } from "./inbox.ts";
 import { lintVault } from "../vault-lint.ts";
 import { readLogSince } from "../vault-log.ts";
@@ -133,16 +134,16 @@ export const plugin: ConsolePlugin = {
       return report;
     };
     const projectOf = new Map<string, string>();
+    const revision = createSnapshotRevision(home, mcp.vaults);
     const candidates = async () => {
-      try {
-        const { projects } = await listPromotionCandidates({ allProjects: true, limit: 50, piiPatterns: loadRegistry(home).piiPatterns });
-        for (const p of projects) for (const c of p.candidates) projectOf.set(c.id, c.project);
-        return { projects };
-      }
-      catch (error) { ctx.log(`vmem: promotion candidates unavailable: ${error instanceof Error ? error.message : String(error)}`); return { projects: [], unavailable: "agent-mem candidates are unavailable; see System" }; }
+      const { projects } = await listPromotionCandidates({ allProjects: true, limit: 50, piiPatterns: loadRegistry(home).piiPatterns });
+      projectOf.clear();
+      for (const p of projects) for (const c of p.candidates) projectOf.set(c.id, c.project);
+      return { projects };
     };
 
-    const inbox = createInboxSnapshot(home, mcp.vaults, ctx.log);
+    const promote = createPromoteSnapshot(revision.current, candidates);
+    const inbox = createInboxSnapshot(home, mcp.vaults, ctx.log, undefined, revision.current);
 
     /** One two-step operation: preview, and with the console's confirmation recompute and write only on the same fingerprint. */
     async function twoStep(tool: string, args: Args | string, confirmed: boolean, fingerprint: string | undefined, describe: (preview: Args) => { verb: string; preview: string[]; changes: Change[]; warnings: string[] }): Promise<ActionResult> {
@@ -154,7 +155,7 @@ export const plugin: ConsolePlugin = {
         return { ok: false, needsConfirm: true, fingerprint: preview.fingerprint, verb: d.verb, preview: d.preview, changes: d.changes, ...(d.warnings.length ? { warnings: d.warnings } : {}) };
       }
       const done = await call(tool, { ...args, confirm: true, fingerprint });
-      if (done.applied === true) { lintCache.clear(); inbox.invalidate(); }
+      if (done.applied === true) { lintCache.clear(); revision.invalidate(); inbox.invalidate(); }
       return confirmedOutcome(done, describe(preview).verb);
     }
 
@@ -164,7 +165,10 @@ export const plugin: ConsolePlugin = {
       async snapshot(input) {
         const args = input as Args;
         switch (input.panel) {
-          case "inbox": return inbox.snapshot();
+          case "inbox": {
+            const result = await inbox.snapshot();
+            return args.after === result.cursor ? { changed: false, cursor: result.cursor } : result;
+          }
           case "search": {
             const q = str(args.q);
             if (!q) return { hits: [], total: 0 };
@@ -197,7 +201,10 @@ export const plugin: ConsolePlugin = {
             const promotable = vaultOf(args)?.id === mcp.defaultVault && vaultOf(args)?.kind === "personal";
             return { note, links, orgVaults: promotable ? mcp.vaults.filter(v => v.kind === "org").map(v => v.id) : [] };
           }
-          case "promote": return { ...(await candidates()), selected: str(args.id) ?? null };
+          case "promote": {
+            try { return await promote.snapshot(args); }
+            catch (error) { ctx.log(`vmem: promotion snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`); return { projects: [], unavailable: "Promotion candidates are unavailable; see System", cursor: nextSnapshotCursor() }; }
+          }
           case "lint": {
             const vault = vaultOf(args);
             if (!vault) return { findings: [] };
@@ -251,8 +258,15 @@ export const plugin: ConsolePlugin = {
           case "promote-from-amem": {
             const id = (str(args.id) ?? "").replace(/^mem:/, "");
             if (!/^[0-9a-f-]{32,36}$/i.test(id)) return { ok: false, error: "a memory id is required" };
-            if (!projectOf.has(id)) await candidates();
-            const project = str(args.project) ?? projectOf.get(id);
+            let project = str(args.project) ?? projectOf.get(id);
+            if (!project) {
+              try { await candidates(); }
+              catch (error) {
+                ctx.log(`vmem: promotion candidates unavailable: ${error instanceof Error ? error.message : String(error)}`);
+                return { ok: false, error: "Promotion candidates are unavailable; see System" };
+              }
+              project = projectOf.get(id);
+            }
             return twoStep("vmem_promote_from_amem", forward("vmem_promote_from_amem", args, { id, ...(project ? { project } : {}) }), confirmed, fingerprint, p => {
               const dupes = Array.isArray(p.possibleDuplicates) ? p.possibleDuplicates as string[] : [];
               // Linking an existing note writes no vault file; it records the link in agent-mem only.

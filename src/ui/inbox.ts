@@ -1,3 +1,4 @@
+import { nextSnapshotCursor } from "./snapshot-cache.ts";
 import { Worker } from "node:worker_threads";
 import type { InboxItem } from "@staix/agent-console/contract";
 import type { VaultSpec } from "../config.ts";
@@ -71,12 +72,13 @@ export function runInboxSource(home: string, source: InboxSource): { result: Pro
 }
 
 type Runner = typeof runInboxSource;
-export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (message: string) => void, run: Runner = runInboxSource) {
+export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (message: string) => void, run: Runner = runInboxSource, getRevision?: () => number) {
   const sources: InboxSource[] = [...vaults.filter(v => v.kind === "org").map(vault => ({ kind: "sync" as const, vault })),
     ...vaults.filter(v => v.kind === "personal").map(vault => ({ kind: "lint" as const, vault })), { kind: "candidates" }];
   const rows = new Map<number, InboxRows>(), firstSeen = new Map<string, string>();
   let cached: InboxRows | undefined, flight: Promise<void> | undefined, at = -Infinity, revision = 0, closed = false;
   let cancel: (() => void) | undefined;
+  let sourceRevision = getRevision?.(), cursor = nextSnapshotCursor(), waited = false;
   const statusAt = new Date().toISOString();
   const status = (unavailable: boolean): InboxRows => ({ items: [{
     id: unavailable ? "inbox:unavailable" : "inbox:refresh", group: "alert", kind: "status",
@@ -86,6 +88,7 @@ export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (mes
   }], more: 0 });
   function refresh() {
     if (closed || flight || Date.now() - at < CACHE_MS) return;
+    cursor = nextSnapshotCursor();
     const started = revision;
     flight = (async () => {
       // One worker at a time, including failed sources. A source's deadline covers its entire expensive step.
@@ -116,19 +119,22 @@ export function createInboxSnapshot(home: string, vaults: VaultSpec[], log: (mes
         try { log(`vmem: inbox refresh failed: ${error instanceof Error ? error.message : String(error)}; inspect System and retry`); }
         catch { /* A failed log sink must not create another unhandled rejection. */ }
       }
-    }).finally(() => { flight = undefined; });
+    }).finally(() => { flight = undefined; cursor = nextSnapshotCursor(); });
   }
   return {
-    async snapshot(): Promise<InboxRows & { refreshing?: boolean }> {
+    async snapshot(): Promise<InboxRows & { cursor: number; refreshing?: boolean }> {
+      const current = getRevision?.();
+      if (current !== sourceRevision) { sourceRevision = current; revision++; at = -Infinity; }
       refresh();
-      if (!cached && flight) {
+      if (!cached && flight && !waited) {
+        waited = true;
         let timer: ReturnType<typeof setTimeout> | undefined;
         await Promise.race([flight, new Promise<void>(resolve => { timer = setTimeout(resolve, FIRST_WAIT_MS); })]);
         clearTimeout(timer);
       }
-      return { ...(cached ?? status(false)), ...(flight ? { refreshing: true } : {}) };
+      return { ...(cached ?? status(false)), cursor, ...(flight ? { refreshing: true } : {}) };
     },
-    invalidate() { revision++; at = -Infinity; },
+    invalidate() { revision++; at = -Infinity; cursor = nextSnapshotCursor(); },
     async close() { closed = true; cancel?.(); await flight; },
   };
 }

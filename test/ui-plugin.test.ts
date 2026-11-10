@@ -175,3 +175,75 @@ test("setup writes, keeps and removes the acon manifest", () => {
   expect(consoleManifest("undo", linked)).toMatchObject({ change: "refused" });
   expect(existsSync(join(root, "real-plugins", "vmem.json"))).toBe(true);
 });
+
+test("inbox conditional polling is unchanged below 50 ms, and a confirmed vault write recomputes", async () => {
+  const p = await plugin.open({ home: root, log() {} });
+  try {
+    const first = await completeInbox(p);
+    const start = performance.now();
+    expect(await p.snapshot({ panel: "inbox", after: first.cursor as number })).toEqual({ changed: false, cursor: first.cursor });
+    expect(performance.now() - start).toBeLessThan(50);
+    const file = join(mine, "snapshot-cache-fixture.md");
+    writeFileSync(file, note("Snapshot Cache Fixture", "Synthetic revision evidence."));
+    const preview = await p.action({ action: "delete", path: "snapshot-cache-fixture", vault: "mine" });
+    expect(preview).toMatchObject({ needsConfirm: true });
+    if (!("fingerprint" in preview) || typeof preview.fingerprint !== "string") throw new Error("missing preview fingerprint");
+    expect(await p.action({ action: "delete", path: "snapshot-cache-fixture", vault: "mine", confirmed: true, fingerprint: preview.fingerprint })).toMatchObject({ ok: true });
+    const changed = await p.snapshot({ panel: "inbox", after: first.cursor as number });
+    expect(changed.changed).toBeUndefined(); expect(changed.cursor).not.toBe(first.cursor);
+  } finally { await p.close?.(); }
+});
+
+test("an unreadable revision source cannot block provider initialization or healthy panels and recovers on repair", async () => {
+  const broken = make("broken-revision"), log = join(broken, "log");
+  addVault(process.env.VMEM_HOME!, { id: "broken-revision", path: broken, kind: "personal", write: "mcp" });
+  // Deterministic even under a privileged test user: O_NOFOLLOW refuses this symlink.
+  const target = join(root, "synthetic-log-target"); writeFileSync(target, "Synthetic receipt\n"); symlinkSync(target, log);
+  const p = await plugin.open({ home: root, log() {} });
+  try {
+    const notes = await p.snapshot({ panel: "notes", vault: "mine", after: 0 });
+    expect(Array.isArray(notes.notes)).toBe(true); expect((notes.notes as unknown[]).length).toBeGreaterThan(0);
+    const first = await completeInbox(p);
+    expect(await p.snapshot({ panel: "inbox", after: first.cursor as number })).toEqual({ changed: false, cursor: first.cursor });
+    rmSync(log); writeFileSync(log, "Synthetic repaired receipt\n");
+    const repaired = await p.snapshot({ panel: "inbox", after: first.cursor as number });
+    expect(repaired.changed).toBeUndefined(); expect(repaired.cursor).not.toBe(first.cursor);
+  } finally { await p.close?.(); rmSync(log, { force: true }); }
+});
+
+test("promotion discovery errors reach System while an explicit project bypasses discovery", async () => {
+  const logs: string[] = [], config = join(process.env.VMEM_HOME!, "vmem.config.json");
+  const original = readFileSync(config);
+  const p = await plugin.open({ home: root, log: message => logs.push(message) });
+  try {
+    writeFileSync(config, "{Synthetic invalid registry");
+    const id = "a".repeat(32);
+    expect(await p.action({ action: "promote-from-amem", id })).toMatchObject({ ok: false, error: "Promotion candidates are unavailable; see System" });
+    expect(logs.some(message => message.includes("promotion candidates unavailable"))).toBe(true);
+    const logCount = logs.length;
+    const explicit = await p.action({ action: "promote-from-amem", id, project: "synthetic" });
+    expect(explicit).not.toMatchObject({ error: "Promotion candidates are unavailable; see System" });
+    expect(logs).toHaveLength(logCount);
+  } finally {
+    writeFileSync(config, original);
+    await p.close?.();
+  }
+});
+
+test("Promote error replies advance the shell cursor and identical recovery sends a full snapshot", async () => {
+  const config = join(process.env.VMEM_HOME!, "vmem.config.json"), original = readFileSync(config);
+  const p = await plugin.open({ home: root, log() {} });
+  try {
+    const first = await p.snapshot({ panel: "promote", after: 0 });
+    expect(first.unavailable).toBeUndefined(); expect(typeof first.cursor).toBe("number");
+    writeFileSync(config, "{Synthetic invalid registry");
+    const failed = await p.snapshot({ panel: "promote", after: first.cursor as number });
+    expect(typeof failed.unavailable).toBe("string"); expect(typeof failed.cursor).toBe("number");
+    expect(failed.cursor).not.toBe(first.cursor);
+    writeFileSync(config, original);
+    const recovered = await p.snapshot({ panel: "promote", after: failed.cursor as number });
+    expect(recovered.unavailable).toBeUndefined(); expect(recovered.changed).toBeUndefined();
+    expect(recovered.projects).toEqual(first.projects); expect(recovered.cursor).not.toBe(failed.cursor);
+    expect(await p.snapshot({ panel: "promote", after: recovered.cursor as number })).toEqual({ changed: false, cursor: recovered.cursor });
+  } finally { writeFileSync(config, original); await p.close?.(); }
+});
