@@ -85,3 +85,51 @@ test("identical log-triggered and timed rescans retain later-page tokens and cur
   const changed = await cache.snapshot({ page: second.page, after: second.cursor });
   expect(changed.reset).toBe(true); expect(changed.cursor).not.toBe(second.cursor);
 });
+
+test("a failed warm scan clears conditional cursors so identical recovery sends full rows", async () => {
+  let time = 0, fail = false;
+  const source = fixture(), cache = createPromoteSnapshot(() => 1, async () => {
+    if (fail) throw new Error("synthetic unavailable"); return structuredClone(source);
+  }, () => time);
+  const first = await cache.snapshot({});
+  fail = true; time = 60_000;
+  await expect(cache.snapshot({ after: first.cursor })).rejects.toThrow("synthetic unavailable");
+  fail = false;
+  const recovered = await cache.snapshot({ after: first.cursor });
+  expect(recovered.changed).toBeUndefined(); expect(recovered.projects).toEqual(first.projects);
+  expect(recovered.cursor).not.toBe(first.cursor); expect(recovered.page).toBe(first.page);
+  expect(await cache.snapshot({ after: recovered.cursor })).toEqual({ changed: false, cursor: recovered.cursor });
+});
+
+test("sustained revision churn serves completed rows after two scans and retries freshness next time", async () => {
+  let revision = 1, busy = false, scans = 0;
+  const source = fixture(), cache = createPromoteSnapshot(() => revision, async () => {
+    scans++; if (busy) revision++; return structuredClone(source);
+  });
+  const first = await cache.snapshot({});
+  busy = true; revision++;
+  const fallback = await cache.snapshot({ page: first.nextPage });
+  expect(scans).toBe(3); expect(fallback.projects).toBeDefined(); expect(fallback.reset).toBeUndefined();
+  busy = false;
+  const fresh = await cache.snapshot({ page: fallback.page });
+  expect(scans).toBe(4); expect(fresh.projects).toEqual(fallback.projects); expect(fresh.page).toBe(fallback.page);
+});
+
+test("all promotion pages fit 32 KiB with worst-case escaped selection ids", async () => {
+  const source = fixture(), cache = createPromoteSnapshot(() => 1, async () => source);
+  const id = String.fromCharCode(1).repeat(64);
+  let page: unknown;
+  do {
+    const result = await cache.snapshot({ id, ...(page ? { page } : {}) });
+    expect(result.selected).toBe(id);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(32 * 1024);
+    page = result.nextPage;
+  } while (page);
+});
+
+test("oversize metadata identifies the candidate and gives a corrective step", async () => {
+  const candidate = { id: "a".repeat(32), project: "Synthetic".repeat(5000), kind: "decision", title: "Synthetic candidate", at: "2026-11-10T00:00:00Z" };
+  const cache = createPromoteSnapshot(() => 1, async () => ({ projects: [{ project: candidate.project, candidates: [candidate] }] }));
+  await expect(cache.snapshot({})).rejects.toThrow(`candidate ${candidate.id}`);
+  await expect(cache.snapshot({})).rejects.toThrow("inspect and shorten");
+});

@@ -10,7 +10,7 @@ import { createVaultMcp } from "../mcp-vault.ts";
 import { validArguments } from "../mcp.ts";
 import { listPromotionCandidates } from "../promote.ts";
 import { loadRegistry } from "../registry.ts";
-import { createSnapshotRevision, createPromoteSnapshot } from "./snapshot-cache.ts";
+import { createSnapshotRevision, createPromoteSnapshot, nextSnapshotCursor } from "./snapshot-cache.ts";
 import { createInboxSnapshot } from "./inbox.ts";
 import { lintVault } from "../vault-lint.ts";
 import { readLogSince } from "../vault-log.ts";
@@ -203,7 +203,7 @@ export const plugin: ConsolePlugin = {
           }
           case "promote": {
             try { return await promote.snapshot(args); }
-            catch (error) { ctx.log(`vmem: promotion snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`); return { projects: [], unavailable: "Promotion candidates are unavailable; see System" }; }
+            catch (error) { ctx.log(`vmem: promotion snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`); return { projects: [], unavailable: "Promotion candidates are unavailable; see System", cursor: nextSnapshotCursor() }; }
           }
           case "lint": {
             const vault = vaultOf(args);

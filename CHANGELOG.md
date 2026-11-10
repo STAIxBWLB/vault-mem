@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Cache console Inbox and Promote snapshots by bounded vault-log and registry revisions, return unchanged cursors, and page Promote responses within 32 KiB. Retain page tokens across identical rescans, restore unchanged views on navigation, and isolate unreadable revision sources (#197).
+- Cache console Inbox and Promote snapshots by bounded vault-log and registry revisions, return unchanged cursors, and page Promote responses within 32 KiB. Retain page tokens across identical rescans, restore unchanged views on navigation and after failed-scan recovery, and isolate unreadable revision sources. Repeated revision churn retains usable completed pages, and page budgets include worst-case selection escaping (#197).
 
 - Add two-step `vmem merge` / `vmem_merge`: full deterministic body/source/topic/inbound preview, locked fingerprint confirmation, shared link repointing and supersession, rollback and one log event. Authored endpoints get updated dates while inbound rewrites retain freshness; source/body limits and referenced fragment collisions, including copied fragment-only self-links, refuse before mutation. Heading edits decide title removal before Topics extraction, preserving later H1s, and remove only a leading title H1 and demote ATX outside code/raw HTML; Setext stays byte-unchanged, and fragment collisions use the reader anchor index. Both older-keeper supersession directions refuse with swap guidance (#166).
 

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { createPromoteSnapshot, nextSnapshotCursor } from "../src/ui/snapshot-cache.ts";
 
 // Exercise the shipped JavaScript module with a minimal panel-kit host. No browser or real home is used.
 class Element {
@@ -21,7 +22,7 @@ test("the panel restores a full unchanged view on repeated routes, even when the
   const host = { tool: "vmem", mount, onSnapshot(fn: typeof receive) { receive = fn; },
     ui: { h, rows: (rows: unknown[], render: (row: unknown) => Element) => rows.length ? h("rows", {}, ...rows.map(render)) : null,
       row: (props: Record<string, unknown>) => h("row", props), button: (label: string) => h("button", { label }),
-      empty: (title: string) => h("empty", { title }), form: () => h("form", {}) },
+      notice: (text: string) => h("notice", { text }), empty: (title: string) => h("empty", { title }), form: () => h("form", {}) },
   };
   const saved = Object.getOwnPropertyDescriptor(globalThis, "document");
   Object.defineProperty(globalThis, "document", { value: { activeElement: null }, configurable: true });
@@ -39,6 +40,30 @@ test("the panel restores a full unchanged view on repeated routes, even when the
       expect(root.children).toBe(restored); // older shells may still forward changed:false
       expect(JSON.stringify(root.children)).toContain("Synthetic candidate");
     }
+    // Model a shell that retains numeric error cursors and suppresses unchanged replies.
+    let time = 0, fail = false;
+    const cache = createPromoteSnapshot(() => 1, async () => {
+      if (fail) throw new Error("Synthetic unavailable"); return { projects: snapshot.projects };
+    }, () => time);
+    const poll = async (after: unknown) => {
+      let reply;
+      try { reply = await cache.snapshot({ after }); }
+      catch { reply = { projects: [], unavailable: "Synthetic unavailable", cursor: nextSnapshotCursor() }; }
+      if (reply.changed !== false) receive(reply);
+      return reply;
+    };
+    panel.show("promote");
+    const good = await poll(0);
+    fail = true; time = 60_000;
+    const unavailable = await poll(good.cursor);
+    expect(JSON.stringify(root.children)).toContain("Synthetic unavailable");
+    fail = false;
+    const recovered = await poll(unavailable.cursor);
+    expect(recovered.changed).toBeUndefined();
+    expect(JSON.stringify(root.children)).toContain("Synthetic candidate");
+    expect(JSON.stringify(root.children)).not.toContain("Synthetic unavailable");
+    await poll(recovered.cursor);
+    expect(JSON.stringify(root.children)).toContain("Synthetic candidate");
     panel.show("notes", { q: "another-view" });
     receive({ changed: false, cursor: 1 });
     expect(root.children).toHaveLength(0); // never reuse a snapshot belonging to different params

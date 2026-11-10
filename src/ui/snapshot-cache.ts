@@ -8,6 +8,8 @@ import type { listPromotionCandidates } from "../promote.ts";
 type Candidates = Awaited<ReturnType<typeof listPromotionCandidates>>;
 type Candidate = Candidates["projects"][number]["candidates"][number];
 const PAGE_BYTES = 32 * 1024;
+// Each of the 64 accepted selection characters can occupy six bytes after JSON escaping.
+const SELECTED_BYTES = 64 * 6 + 2;
 let sequence = Date.now();
 export const nextSnapshotCursor = () => ++sequence;
 
@@ -70,7 +72,8 @@ export function createPromoteSnapshot(revision: () => number, load: () => Promis
       // A concurrent write may move the revision while the scan runs. Never label that scan as the new revision.
       let attempts = 0;
       while (!cached || cached.revision !== revision() || now() - cached.at >= 60_000) {
-        if (++attempts > 2) throw new Error("vault changed during promotion collection; retry the snapshot");
+        // Bound retries under sustained writes, retaining the last completed pages at their old revision.
+        if (++attempts > 2 && cached) break;
         if (!flight) {
           const started = revision();
           flight = (async () => {
@@ -80,10 +83,10 @@ export function createPromoteSnapshot(revision: () => number, load: () => Promis
               const candidate = { ...item, title: item.title === null ? null : [...item.title].slice(0, 160).join("") };
               const rows = pages.at(-1)!;
               // Reserve enough envelope space for cursors, page tokens, and selection/reset metadata.
-              if (Buffer.byteLength(JSON.stringify(response([...rows, candidate], candidate.id, Number.MAX_SAFE_INTEGER, "x".repeat(80), "x".repeat(80)))) > PAGE_BYTES - 256) {
-                if (rows.length === 0) throw new Error("promotion candidate exceeds the 32 KiB page budget");
+              if (Buffer.byteLength(JSON.stringify(response([...rows, candidate], null, Number.MAX_SAFE_INTEGER, "x".repeat(80), "x".repeat(80)))) + SELECTED_BYTES > PAGE_BYTES - 256) {
+                if (rows.length === 0) throw new Error(`promotion candidate ${candidate.id.slice(0, 64)} in project ${candidate.project.slice(0, 160)} exceeds the 32 KiB page budget; inspect and shorten its agent-mem project or candidate metadata, then retry`);
                 pages.push([]);
-                if (Buffer.byteLength(JSON.stringify(response([candidate], candidate.id, Number.MAX_SAFE_INTEGER, "x".repeat(80), "x".repeat(80)))) > PAGE_BYTES - 256) throw new Error("promotion candidate exceeds the 32 KiB page budget");
+                if (Buffer.byteLength(JSON.stringify(response([candidate], null, Number.MAX_SAFE_INTEGER, "x".repeat(80), "x".repeat(80)))) + SELECTED_BYTES > PAGE_BYTES - 256) throw new Error(`promotion candidate ${candidate.id.slice(0, 64)} in project ${candidate.project.slice(0, 160)} exceeds the 32 KiB page budget; inspect and shorten its agent-mem project or candidate metadata, then retry`);
               }
               pages.at(-1)!.push(candidate);
             }
@@ -91,7 +94,11 @@ export function createPromoteSnapshot(revision: () => number, load: () => Promis
             const identical = cached?.digest === digest;
             cached = { revision: started, generation: identical ? cached!.generation : nextSnapshotCursor(), digest, at: now(), pages };
             if (!identical) cursors.clear();
-          })().finally(() => { flight = undefined; });
+          })().catch(error => {
+            // An error view replaces the last good view. Recovery must send full rows even when identical.
+            cursors.clear();
+            throw error;
+          }).finally(() => { flight = undefined; });
         }
         await flight;
       }

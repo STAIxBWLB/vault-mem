@@ -229,3 +229,21 @@ test("promotion discovery errors reach System while an explicit project bypasses
     await p.close?.();
   }
 });
+
+test("Promote error replies advance the shell cursor and identical recovery sends a full snapshot", async () => {
+  const config = join(process.env.VMEM_HOME!, "vmem.config.json"), original = readFileSync(config);
+  const p = await plugin.open({ home: root, log() {} });
+  try {
+    const first = await p.snapshot({ panel: "promote", after: 0 });
+    expect(first.unavailable).toBeUndefined(); expect(typeof first.cursor).toBe("number");
+    writeFileSync(config, "{Synthetic invalid registry");
+    const failed = await p.snapshot({ panel: "promote", after: first.cursor as number });
+    expect(typeof failed.unavailable).toBe("string"); expect(typeof failed.cursor).toBe("number");
+    expect(failed.cursor).not.toBe(first.cursor);
+    writeFileSync(config, original);
+    const recovered = await p.snapshot({ panel: "promote", after: failed.cursor as number });
+    expect(recovered.unavailable).toBeUndefined(); expect(recovered.changed).toBeUndefined();
+    expect(recovered.projects).toEqual(first.projects); expect(recovered.cursor).not.toBe(failed.cursor);
+    expect(await p.snapshot({ panel: "promote", after: recovered.cursor as number })).toEqual({ changed: false, cursor: recovered.cursor });
+  } finally { writeFileSync(config, original); await p.close?.(); }
+});
