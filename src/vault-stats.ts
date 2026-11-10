@@ -32,6 +32,11 @@ export interface VaultRatio {
   skipped: number;
   skippedNonFile: number;
   /**
+   * Notes left out because their readable sources total zero bytes. Such a note has no ratio, and counting it here
+   * keeps `skipped` a count of source references: its sources were read and are already in `sources`.
+   */
+  emptySourceNotes: number;
+  /**
    * Sourced notes the index kept out of the pass (`MAX_RATIO_NOTES`), counted rather than dropped silently. The
    * index stops collecting at the cap, so the median, p90 and the rest describe the notes it returned, not all of them.
    */
@@ -72,12 +77,14 @@ const percentile = (sorted: readonly number[], p: number) => sorted[Math.min(sor
  * for the bytes the budget has left, the reader refuses a larger file from its fstat size without reading it, and once
  * the budget is spent no further file is opened. Every read attempt, successful or not, counts against the file cap, so
  * a run of failures or over-budget files cannot outrun it. A memory id, a URL, a denied, missing or oversized path and
- * anything the caps leave out is skipped and counted, which keeps the pass read-only and bounded. The per-note
- * truncation count belongs to the index, so `vaultStats` adds it to this pass's result.
+ * anything the caps leave out is a skipped source reference, which keeps the pass read-only and bounded; a note whose
+ * readable sources total zero bytes has no ratio and is counted in `emptySourceNotes` instead, so `skipped` stays a
+ * count of references and never repeats a file that was read. The per-note truncation count belongs to the index, so
+ * `vaultStats` adds it to this pass's result.
  */
 export function noteSourceRatio(rows: readonly SourcedNote[], root: string | undefined, denyPaths: string[], limits: RatioLimits = RATIO_LIMITS, readFile: SourceFileRead = analysisReadWithSize): Omit<VaultRatio, "truncatedNotes"> {
   const ratios: { path: string; ratio: number }[] = [];
-  let sources = 0, skipped = 0, skippedNonFile = 0, bytesRead = 0, attempts = 0;
+  let sources = 0, skipped = 0, skippedNonFile = 0, emptySourceNotes = 0, bytesRead = 0, attempts = 0;
   for (const row of rows) {
     let refs: SourceReference[];
     try { refs = sourceReferences(row.source); } catch { skipped++; continue; }
@@ -97,15 +104,15 @@ export function noteSourceRatio(rows: readonly SourcedNote[], root: string | und
       if (read === null || read.bytes > remaining) { skipped++; continue; }
       size += read.bytes; bytesRead += read.bytes; sources++; used++;
     }
-    // A note whose sources are all empty has no ratio; count the note itself as skipped rather than dividing by zero.
+    // A note whose sources are all empty has no ratio: count the note, not a reference, so `skipped` stays reference-only.
     if (!used) continue;
-    if (size === 0) { skipped++; continue; }
+    if (size === 0) { emptySourceNotes++; continue; }
     ratios.push({ path: row.path, ratio: row.bytes / size });
   }
   const values = ratios.map(entry => entry.ratio).sort((a, b) => a - b);
   const largest = [...ratios].sort((a, b) => b.ratio - a.ratio || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)).slice(0, RATIO_LARGEST_SHOWN);
   return {
-    notes: ratios.length, sources, skipped, skippedNonFile,
+    notes: ratios.length, sources, skipped, skippedNonFile, emptySourceNotes,
     median: values.length ? round3(middle(values)) : null, p90: values.length ? round3(percentile(values, 90)) : null,
     overOne: ratios.filter(entry => entry.ratio > RATIO_OVER_ONE).length,
     largest: largest.map(entry => ({ path: entry.path, ratio: round3(entry.ratio) })),
