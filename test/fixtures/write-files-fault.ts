@@ -1,14 +1,17 @@
 import { mock } from "bun:test";
 import * as fs from "node:fs";
 import { basename, dirname, join } from "node:path";
+import type { WriteReceipt } from "../../src/write-types.ts";
 const [home, kind, fault] = process.argv.slice(2);
 if (!home || !kind || !fault) throw new Error("synthetic publication fault needs home, kind and fault");
 const original = { ...fs }, config = JSON.parse(original.readFileSync(join(home, "vmem.config.json"), "utf8"));
 const root: string = kind.startsWith("note") ? config.vaults[0].path : config.specs[0].path;
 const target = join(root, kind.startsWith("note") ? "notes/alpha.md" : "nested/SPEC.md"), parent = dirname(target);
+const secondTarget = join(root, "notes/beta.md"), secondHeld = join(dirname(root), "held-beta.md");
 const outside = join(dirname(root), "outside"), held = join(dirname(root), "held-parent");
 original.mkdirSync(outside); original.writeFileSync(join(outside, "sentinel"), "foreign sentinel\n");
-const descriptors = new Map<number, string>();
+const descriptors = new Map<number, string>(), readonlyTargets = new Map<number, string>(), readonlyTemps = new Set<number>();
+let stagedTemps = 0, stagedTargetReads = 0, directoryFailed = false, rollbackPublished = false;
 let injected = false, published = false, stagingFailed = false, descriptorOpen = false, replacement: string | undefined;
 function swap(temp?: string) {
   if (fault !== "parent-swap" || injected) return;
@@ -23,7 +26,14 @@ mock.module("node:fs", () => ({ ...original,
   openSync: (...args: Parameters<typeof fs.openSync>) => {
     const fd = original.openSync(...args), file = String(args[0]);
     const owned = file.includes("/.vmem-") || file.includes("/.spec-") || file === join(root, "mutation.lock") || file.includes("/spec-mutations/");
-    if ((Number(args[1]) & original.constants.O_WRONLY) && owned) descriptors.set(fd, file);
+    if ((Number(args[1]) & original.constants.O_WRONLY) && owned) {
+      descriptors.set(fd, file);
+      if (file.endsWith(".tmp")) stagedTemps++;
+    }
+    if ((Number(args[1]) & (original.constants.O_WRONLY | original.constants.O_RDWR)) === 0) {
+      if (file === target || file === secondTarget) readonlyTargets.set(fd, file);
+      if (file.includes("/.spec-") && file.endsWith(".tmp")) readonlyTemps.add(fd);
+    }
     return fd;
   },
   writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
@@ -41,8 +51,35 @@ mock.module("node:fs", () => ({ ...original,
     return stat;
   },
   renameSync: (...args: Parameters<typeof fs.renameSync>) => {
-    if (String(args[1]) === target) { swap(String(args[0])); original.renameSync(...args); published = true; }
-    else original.renameSync(...args);
+    if (String(args[1]) === target) {
+      if (fault === "rollback-parent-swap" && published && directoryFailed && !injected) {
+        original.renameSync(...args); rollbackPublished = true; injected = true;
+        original.writeFileSync(join(outside, basename(target)), "foreign rollback target\n");
+        original.renameSync(parent, held); original.symlinkSync(outside, parent);
+      } else { swap(String(args[0])); original.renameSync(...args); published = true; }
+    } else original.renameSync(...args);
+  },
+  fsyncSync: (fd: number) => {
+    if (fault === "rollback-parent-swap" && published && !directoryFailed && original.fstatSync(fd).isDirectory()) {
+      directoryFailed = true; throw new Error("synthetic directory flush failure before rollback");
+    }
+    return original.fsyncSync(fd);
+  },
+  closeSync: (fd: number) => {
+    const readTarget = readonlyTargets.get(fd); readonlyTargets.delete(fd);
+    const readTemp = readonlyTemps.delete(fd);
+    original.closeSync(fd);
+    if (!injected && fault === "partial-prepublish" && published && readTarget === secondTarget) {
+      injected = true; original.renameSync(secondTarget, secondHeld); original.symlinkSync(join(outside, "sentinel"), secondTarget);
+    }
+    if (!injected && fault === "prepublish-no-commits" && stagedTemps >= 2 && readTarget === target && ++stagedTargetReads === 2) {
+      injected = true; original.renameSync(target, secondHeld); original.symlinkSync(join(outside, "sentinel"), target);
+    }
+    if (!injected && readTemp && (fault === "create-symlink-appears" || fault === "create-directory-appears")) {
+      injected = true;
+      if (fault === "create-symlink-appears") original.symlinkSync(join(outside, "sentinel"), target);
+      else { original.mkdirSync(target); original.writeFileSync(join(target, "foreign-child"), "foreign directory contents\n"); }
+    }
   },
   linkSync: (...args: Parameters<typeof fs.linkSync>) => {
     if (String(args[1]) === target) { swap(String(args[0])); original.linkSync(...args); published = true; }
@@ -57,7 +94,8 @@ let result: Record<string, unknown>;
 if (kind.startsWith("note")) {
   const { createVaultMcp } = await import("../../src/mcp-vault.ts");
   const mcp = createVaultMcp(home, process.env);
-  if (kind.endsWith("delete")) {
+  if (kind === "note-multi") result = await mcp.handlers.vmem_link!({ from: "alpha", to: "beta", relation: "supports" }) as Record<string, unknown>;
+  else if (kind.endsWith("delete")) {
     const preview = await mcp.handlers.vmem_delete!({ path: "alpha" }) as Record<string, unknown>;
     result = await mcp.handlers.vmem_delete!({ path: "alpha", confirm: true, fingerprint: preview.fingerprint }) as Record<string, unknown>;
   } else result = await mcp.handlers.vmem_set_frontmatter!({ path: "alpha", set: { title: "Changed synthetic note" } }) as Record<string, unknown>;
@@ -70,4 +108,9 @@ if (kind.startsWith("note")) {
     result = await mcp.handlers.vmem_spec_delete!({ id: "child", confirm: true, fingerprint: preview.fingerprint }) as Record<string, unknown>;
   } else result = await mcp.handlers.vmem_spec_update!({ id: "child", set: { title: "Changed synthetic spec" } }) as Record<string, unknown>;
 }
-console.log(JSON.stringify({ result, injected, descriptorOpen, published, replacement, held, outside }));
+let text: string | undefined;
+if (kind === "note-multi") {
+  const { renderWriteReceipt } = await import("../../src/write-output.ts"), { PLAIN } = await import("../../src/text-output.ts");
+  text = renderWriteReceipt(result as unknown as WriteReceipt, PLAIN, { argv: ["link"], positional: ["link", "alpha", "beta"] });
+}
+console.log(JSON.stringify({ result, text, injected, descriptorOpen, published, rollbackPublished, replacement, held, outside, secondTarget, secondHeld }));

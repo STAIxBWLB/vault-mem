@@ -339,6 +339,9 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
         if (change.before !== null) temp = undefined;
       });
     } catch (error) {
+      if (change.before === null && !result.changed && error instanceof PublicationDrift && error.targetExists) {
+        refuse("EEXIST", "create target appeared before publication; inspect the existing target and choose an absent path before retrying", change.path);
+      }
       if (change.before !== null || error instanceof PublicationDrift || result.changed) throw error;
       if ((error as NodeJS.ErrnoException).code === "EEXIST") refuse("EEXIST", "create target appeared before publication; inspect the existing file and choose an absent path before retrying", change.path);
       refuse("LINK", `create hard-link publication failed (${writeErrorCause(error)}); check filesystem hard-link support and permissions and free space, then choose a writable worktree on a filesystem supporting same-directory hard links; create never falls back to rename`, change.path);

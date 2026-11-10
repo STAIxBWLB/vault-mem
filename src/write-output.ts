@@ -66,14 +66,16 @@ export function renderWriteReceipt(r: WriteReceipt, o: TextOptions, ctx: WriteCo
     return blocks(issues, line(verdict, o, r.ok ? "ok" : "fail"));
   }
   const twoStep = command === "merge" || command === "move" || command === "delete";
+  const hasState = r.changes.some(change => change.applied !== undefined);
+  const appliedSummary = hasState ? r.changes.filter(change => change.applied).map(change => change.path).join(", ") : what(command, r.changes, targets, true);
   let head: string, t: Tone;
-  if (!r.ok) [head, t] = r.applied ? [`failed after writing: ${what(command, r.changes, targets, true)}; see the issues`, "fail"] : ["refused: nothing written", "fail"];
+  if (!r.ok) [head, t] = r.applied ? [`failed after writing: ${appliedSummary}; see the issues`, "fail"] : ["refused: nothing written", "fail"];
   else if (r.preview) [head, t] = [`dry run: would ${what(command, r.changes, targets, false)}`, "info"];
   else if (r.unchanged) [head, t] = ["unchanged: links already present", "muted"];
   else if (!r.applied) [head, t] = ["unchanged: nothing to write", "muted"];
   else [head, t] = [what(command, r.changes, targets, true), "ok"];
   const one = r.changes.length === 1 && r.ok && !r.preview && r.changes[0]!.sha256 ? fields([["sha256", r.changes[0]!.sha256]], o) : undefined;
-  const changes = r.changes.length > 1 ? table(["PATH", "ACTION", "BYTES", "SHA"], r.changes.map(c => [c.path, action(c), c.sha256 === null ? "-" : c.bytes, short(c.sha256)]), o) : undefined;
+  const changes = r.changes.length > 1 || hasState ? table(["PATH", "ACTION", "BYTES", "SHA", ...(hasState ? ["STATE"] : [])], r.changes.map(c => [c.path, action(c), c.sha256 === null ? "-" : c.bytes, short(c.sha256), ...(hasState ? [c.applied ? "applied" : "not applied"] : [])]), o) : undefined;
   const log = r.log ? logLine(r.log, o) : r.ok && r.preview ? line(twoStep ? "log: written on confirm" : "log: none (dry run)", o, "muted") : undefined;
   const confirm = twoStep && r.ok && r.preview && r.fingerprint ? nextCommand("confirm", confirmCommand(ctx.argv, r.fingerprint), o) : undefined;
   const merge = r.merge && r.preview ? blocks(
@@ -82,7 +84,7 @@ export function renderWriteReceipt(r: WriteReceipt, o: TextOptions, ctx: WriteCo
     list("merged source", r.merge.source), list("merged topics", r.merge.topics),
     r.merge.inboundLinks.length ? heading("INBOUND LINKS", o) + "\n" + table(["PATH", "FIELD", "TARGET", "REPLACEMENT", "LINE"], r.merge.inboundLinks.map(link => [link.path, link.field, link.target + (link.block ? `#^${link.block}` : link.heading ? `#${link.heading}` : ""), link.replacement + (link.block ? `#^${link.block}` : link.heading ? `#${link.heading}` : ""), link.line ?? "-"]), o) : line("inbound links: none", o, "muted"),
   ) : undefined;
-  return blocks([line(head, o, t), one].filter(Boolean).join("\n"), changes, merge, issues, list("possible duplicates", r.possibleDuplicates), log, confirm);
+  return blocks([line(head, o, t), one].filter(Boolean).join("\n"), changes, merge, issues, list("possible duplicates", r.possibleDuplicates), list("retained backups", r.retainedBackups), log, confirm);
 }
 
 /** `tidy`: counts per rule and the notes touched, then the confirm command. */

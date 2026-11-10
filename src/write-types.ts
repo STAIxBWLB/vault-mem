@@ -42,7 +42,7 @@ export interface ValidationContext {
   /** PII surface for content screening; `notes` unless an internal caller (org promotion) sets it. */
   piiSurface?: PiiSurface;
 }
-export interface ChangeReceipt { path: string; beforeSha: string | null; sha256: string | null; bytes: number }
+export interface ChangeReceipt { applied?: boolean; path: string; beforeSha: string | null; sha256: string | null; bytes: number }
 export interface WriteReceipt {
   ok: boolean;
   applied: boolean;
@@ -55,6 +55,8 @@ export interface WriteReceipt {
   possibleDuplicates?: string[];
   merge?: MergePreview;
   indexUpdated: boolean;
+  /** Original relative names of backups retained for recovery after drift/failed rollback. */
+  retainedBackups?: string[];
   logged?: boolean;
   log?: LogReceipt;
 }
