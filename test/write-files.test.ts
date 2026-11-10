@@ -12,7 +12,7 @@ function fixture(kind: string) {
   mkdirSync(parent, { recursive: true });
   const env = { HOME: base, PATH: process.env.PATH, VMEM_HOME: home, AMEM_HOME: join(base, "memory"), AGENTHUB_HOME: join(base, "family") };
   const target = join(parent, note ? "alpha.md" : "SPEC.md");
-  const original = note ? "---\ntitle: Synthetic note\ntype: insight\ndescription: Synthetic write safety evidence.\ndomain: research\ntopics: ["[[research]]"]\n---\n# Synthetic note\n\n## Topics\n\n- [[research]]\n" : "---\nid: child\ntype: module\ntitle: Synthetic spec\nparent: root\n---\n# Synthetic spec\n";
+  const original = note ? "---\ntitle: Synthetic note\ntype: insight\ndescription: Synthetic write safety evidence.\ndomain: research\ntopics: ['[[research]]']\n---\n# Synthetic note\n\n## Topics\n\n- [[research]]\n" : "---\nid: child\ntype: module\ntitle: Synthetic spec\nparent: root\n---\n# Synthetic spec\n";
   if (!kind.endsWith("create")) writeFileSync(target, original);
   if (note) {
     writeFileSync(join(parent, "research.md"), "---\ntype: moc\ndescription: Synthetic directory.\n---\n# Research\n");
