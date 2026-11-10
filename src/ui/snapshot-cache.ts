@@ -1,4 +1,5 @@
-import { statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { VaultSpec } from "../config.ts";
 import { CONFIG_FILE } from "../config.ts";
@@ -10,22 +11,36 @@ const PAGE_BYTES = 32 * 1024;
 let sequence = Date.now();
 export const nextSnapshotCursor = () => ++sequence;
 
-/** A vmem write appends a receipt to its vault log. Stat the receipts, never scan notes or open Git/SQLite.
+/** Receipt metadata can share a timestamp across writes on coarse filesystems. Include a bounded
+ * log tail (or the entire size-limited registry) so same-size rewrites still invalidate. */
+function revisionStamp(file: string, budget: number): string {
+  let fd: number | undefined;
+  try {
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const s = fstatSync(fd, { bigint: true });
+    const metadata = `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;
+    if (!s.isFile()) return metadata;
+    const size = Number(s.size);
+    if (!Number.isSafeInteger(size)) throw new Error("revision source is too large");
+    if (budget > 256 && size > budget) throw new Error("registry exceeds its revision read budget");
+    const bytes = Buffer.alloc(Math.min(budget, size));
+    const count = readSync(fd, bytes, 0, bytes.length, Math.max(0, size - bytes.length));
+    return `${metadata}:${createHash("sha256").update(bytes.subarray(0, count)).digest("hex")}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw new Error("vault revision is unreadable; check vault log and registry permissions", { cause: error });
+  } finally { if (fd !== undefined) closeSync(fd); }
+}
+
+/** A vmem write appends a receipt to its vault log. Check bounded receipt evidence, never scan notes or open Git/SQLite.
  * Configuration changes also invalidate policy-screened candidates. An explicit invalidation covers an
  * applied console write whose follow-up log failed, including link-only agent-mem promotions. */
 export function createSnapshotRevision(home: string, vaults: VaultSpec[]) {
-  const files = [join(home, CONFIG_FILE), ...vaults.map(vault => join(vault.path, "log"))];
+  const files = [{ file: join(home, CONFIG_FILE), budget: 64 * 1024 }, ...vaults.map(vault => ({ file: join(vault.path, "log"), budget: 256 }))];
   let previous = "", cursor = nextSnapshotCursor();
   return {
     current(): number {
-      const stamp = files.map(file => {
-        try { const s = statSync(file, { bigint: true }); return `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`; }
-        catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
-          // Unreadable revision evidence must not turn into a permanent cache hit.
-          throw new Error("vault revision is unreadable; check vault log permissions", { cause: error });
-        }
-      }).join("|");
+      const stamp = files.map(({ file, budget }) => revisionStamp(file, budget)).join("|");
       if (stamp !== previous) { previous = stamp; cursor = nextSnapshotCursor(); }
       return cursor;
     },
