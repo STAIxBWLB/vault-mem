@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-11
+
+- N-1: 0.5.1 runs beside 0.6.0 with separate note/spec index files (`links2-schema3` versus `links2-schema4`); its format-3 reader preserves format-4 `canonTables` without using their promotion hints. The prior CLI/MCP surface remains available in 0.5.1; note merge and spec create/update/delete commands and MCP tools require 0.6.0. Note files remain shared, including automatic date stamps written by 0.6.0.
+
 - Cache console Inbox and Promote snapshots by bounded vault-log and registry revisions, return unchanged cursors, and page Promote responses within 32 KiB. Retain page tokens across identical rescans, restore unchanged views on navigation and after failed-scan recovery, and isolate unreadable revision sources. Repeated revision churn retains usable completed pages, and page budgets include worst-case selection escaping (#197).
 
 - Throttle console Inbox refreshes to at most one revision-triggered collection per 10 seconds while an applied console write still refreshes on the next poll; keep one Promote error cursor until a scan succeeds instead of rebuilding the error view each poll; hide `First page` on page 0; and unregister the broken revision vault the UI plugin test adds, so later tests open the same registry (#199).
