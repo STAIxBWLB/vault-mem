@@ -22,7 +22,8 @@ function swap(temp?: string) {
 mock.module("node:fs", () => ({ ...original,
   openSync: (...args: Parameters<typeof fs.openSync>) => {
     const fd = original.openSync(...args), file = String(args[0]);
-    if ((Number(args[1]) & original.constants.O_WRONLY) && (file.endsWith(".tmp") || file.endsWith(".lock"))) descriptors.set(fd, file);
+    const owned = file.includes("/.vmem-") || file.includes("/.spec-") || file === join(root, "mutation.lock") || file.includes("/spec-mutations/");
+    if ((Number(args[1]) & original.constants.O_WRONLY) && owned) descriptors.set(fd, file);
     return fd;
   },
   writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
