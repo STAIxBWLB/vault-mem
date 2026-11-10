@@ -1,11 +1,11 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setSystemTime, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, symlinkSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ConsolePlugin, ConsoleProvider } from "@staix/agent-console/contract";
 import { registerConsoleConformance } from "@staix/agent-console/conformance";
-import { addVault } from "../src/registry.ts";
+import { addVault, removeVault } from "../src/registry.ts";
 import { consoleManifest } from "../src/setup.ts";
 import { confirmedOutcome, followUpProblems, parseLogLine, plugin, typedFindings } from "../src/ui/plugin.ts";
 
@@ -206,9 +206,18 @@ test("an unreadable revision source cannot block provider initialization or heal
     const first = await completeInbox(p);
     expect(await p.snapshot({ panel: "inbox", after: first.cursor as number })).toEqual({ changed: false, cursor: first.cursor });
     rmSync(log); writeFileSync(log, "Synthetic repaired receipt\n");
-    const repaired = await p.snapshot({ panel: "inbox", after: first.cursor as number });
-    expect(repaired.changed).toBeUndefined(); expect(repaired.cursor).not.toBe(first.cursor);
-  } finally { await p.close?.(); rmSync(log, { force: true }); }
+    // The repair is a revision change like any other, so it waits for the inbox gap; jump the clock past it.
+    setSystemTime(new Date(Date.now() + 11_000));
+    try {
+      const repaired = await p.snapshot({ panel: "inbox", after: first.cursor as number });
+      expect(repaired.changed).toBeUndefined(); expect(repaired.cursor).not.toBe(first.cursor);
+    } finally { setSystemTime(); }
+  } finally {
+    await p.close?.();
+    // Leave the shared home exactly as this test found it: a later provider must not open an extra vault.
+    removeVault(process.env.VMEM_HOME!, "broken-revision", true);
+    rmSync(log, { force: true }); rmSync(target, { force: true });
+  }
 });
 
 test("promotion discovery errors reach System while an explicit project bypasses discovery", async () => {
@@ -230,7 +239,7 @@ test("promotion discovery errors reach System while an explicit project bypasses
   }
 });
 
-test("Promote error replies advance the shell cursor and identical recovery sends a full snapshot", async () => {
+test("Promote keeps one error cursor until a scan succeeds, and recovery sends a full snapshot", async () => {
   const config = join(process.env.VMEM_HOME!, "vmem.config.json"), original = readFileSync(config);
   const p = await plugin.open({ home: root, log() {} });
   try {
@@ -240,6 +249,11 @@ test("Promote error replies advance the shell cursor and identical recovery send
     const failed = await p.snapshot({ panel: "promote", after: first.cursor as number });
     expect(typeof failed.unavailable).toBe("string"); expect(typeof failed.cursor).toBe("number");
     expect(failed.cursor).not.toBe(first.cursor);
+    // While the failure lasts every scan shares that cursor, so a matching `after` keeps the rendered view.
+    const repeated = await p.snapshot({ panel: "promote", after: first.cursor as number });
+    expect(repeated.unavailable).toBe("Promotion candidates are unavailable; see System");
+    expect(repeated.cursor).toBe(failed.cursor);
+    expect(await p.snapshot({ panel: "promote", after: failed.cursor as number })).toEqual({ changed: false, cursor: failed.cursor });
     writeFileSync(config, original);
     const recovered = await p.snapshot({ panel: "promote", after: failed.cursor as number });
     expect(recovered.unavailable).toBeUndefined(); expect(recovered.changed).toBeUndefined();

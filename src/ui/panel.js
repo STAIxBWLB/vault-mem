@@ -84,9 +84,14 @@ export default (host) => {
           const meta = Object.fromEntries(Object.entries(values).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
           host.action({ action: "promote-from-amem", id: picked.id, project: picked.project, ...meta, ...vaultParam() });
         })) : null;
+      // `reset` only says the page token was stale: the reply can land on the page holding the selected candidate.
+      // The returned page index decides whether an earlier page exists; an unavailable reply has none, so there a
+      // stale page param can still be cleared.
+      const pageIndex = Number(String(s.page ?? "").split(":")[1]);
+      const showFirst = Number.isSafeInteger(pageIndex) ? pageIndex > 0 : Boolean(params.page);
       return [s.unavailable ? ui.notice(s.unavailable, "err") : null, form,
-        s.nextPage || params.page ? h("div", { class: "vmem-bar" },
-          ...(params.page ? [ui.button("First page", () => go("promote"))] : []),
+        s.nextPage || showFirst ? h("div", { class: "vmem-bar" },
+          ...(showFirst ? [ui.button("First page", () => go("promote"))] : []),
           ...(s.nextPage ? [ui.button("Next page", () => go("promote", { page: s.nextPage }))] : [])) : null,
         ui.rows(all, (c) => ui.row({ title: c.title || c.kind, sub: `${c.kind} · ${c.project} · ${new Date(c.at).toLocaleString()}`, onOpen: () => go("promote", { id: c.id, project: c.project, page: s.page }),
           ...(s.selected === c.id ? { chip: { text: "selected", tone: "neutral" } } : { verbs: [ui.button("Select", () => go("promote", { id: c.id, project: c.project, page: s.page }))] }) }))
