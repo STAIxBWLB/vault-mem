@@ -102,7 +102,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
   const write = (args: Record<string, unknown>, operation: WriteOp, extra: Partial<WriteRequest> = {}): WriteReceipt | ReturnType<typeof refusal> & Partial<WriteReceipt> => {
     const request: WriteRequest = { vault: pick(args).id, operation, channel: "mcp", ...extra, ...(args.log ? { log: args.log as LogEvent } : {}) };
     const receipt = applyWrite(home, request, { env });
-    return receipt.ok ? receipt : { ...receipt, refused: true };
+    return receipt.ok || receipt.applied ? receipt : { ...receipt, refused: true };
   };
   const twoStep = (args: Record<string, unknown>) => ({ confirm: args.confirm === true, ...(str(args.fingerprint) ? { fingerprint: str(args.fingerprint) } : {}) });
   const document = (result: ReturnType<VaultIndex["show"]>) => {
