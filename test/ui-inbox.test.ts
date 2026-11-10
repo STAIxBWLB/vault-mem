@@ -226,3 +226,31 @@ test("the final refresh catch retains warm rows even if source error logging thr
   expect((await cache.snapshot()).items).toEqual(first.items); expect(logs).toBe(2);
   await cache.close();
 });
+
+test("revision changes refresh inbox immediately and warm unchanged snapshots stay below 50 ms", async () => {
+  let revision = 1, runs = 0;
+  const cache = createInboxSnapshot("fixture", [], () => {}, () => ({
+    result: Promise.resolve(boundInbox([row(++runs)])), cancel() {},
+  }), () => revision);
+  try {
+    const first = await cache.snapshot();
+    for (let n = 0; n < 20; n++) {
+      const start = performance.now(), warm = await cache.snapshot();
+      expect(warm.cursor).toBe(first.cursor); expect(warm.items).toEqual(first.items);
+      expect(performance.now() - start).toBeLessThan(50);
+    }
+    expect(runs).toBe(1); revision++;
+    await cache.snapshot(); await Bun.sleep(0);
+    const fresh = await cache.snapshot();
+    expect(runs).toBe(2); expect(fresh.cursor).not.toBe(first.cursor); expect(fresh.items[0]!.id).toBe("mem:2");
+  } finally { await cache.close(); }
+});
+
+test("loading polls after the initial cold wait do not wait another 700 ms", async () => {
+  const job = deferred(), cache = createInboxSnapshot("fixture", [], () => {}, () => job, () => 1);
+  try {
+    const first = await cache.snapshot(); expect(first.refreshing).toBe(true);
+    const start = performance.now(), repeated = await cache.snapshot();
+    expect(performance.now() - start).toBeLessThan(50); expect(repeated.cursor).toBe(first.cursor);
+  } finally { job.resolve({ items: [], more: 0 }); await cache.close(); }
+});

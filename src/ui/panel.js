@@ -85,8 +85,11 @@ export default (host) => {
           host.action({ action: "promote-from-amem", id: picked.id, project: picked.project, ...meta, ...vaultParam() });
         })) : null;
       return [s.unavailable ? ui.notice(s.unavailable, "err") : null, form,
-        ui.rows(all, (c) => ui.row({ title: c.title || c.kind, sub: `${c.kind} · ${c.project} · ${new Date(c.at).toLocaleString()}`, onOpen: () => go("promote", { id: c.id, project: c.project }),
-          ...(s.selected === c.id ? { chip: { text: "selected", tone: "neutral" } } : { verbs: [ui.button("Select", () => go("promote", { id: c.id, project: c.project }))] }) }))
+        s.nextPage || params.page ? h("div", { class: "vmem-bar" },
+          ...(params.page ? [ui.button("First page", () => go("promote"))] : []),
+          ...(s.nextPage ? [ui.button("Next page", () => go("promote", { page: s.nextPage }))] : [])) : null,
+        ui.rows(all, (c) => ui.row({ title: c.title || c.kind, sub: `${c.kind} · ${c.project} · ${new Date(c.at).toLocaleString()}`, onOpen: () => go("promote", { id: c.id, project: c.project, page: s.page }),
+          ...(s.selected === c.id ? { chip: { text: "selected", tone: "neutral" } } : { verbs: [ui.button("Select", () => go("promote", { id: c.id, project: c.project, page: s.page }))] }) }))
           ?? ui.empty("No promotion candidates", "Durable agent memories appear here when agent-mem marks them for the vault.")];
     },
     lint(s) {
@@ -108,6 +111,7 @@ export default (host) => {
 
   let last = "";
   host.onSnapshot((snap) => {
+    if (snap.changed === false) return;
     const sig = JSON.stringify([panel, snap]);
     if (sig === last) return; // unchanged poll: keep focus and scroll
     last = sig;

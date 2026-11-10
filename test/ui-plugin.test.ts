@@ -175,3 +175,21 @@ test("setup writes, keeps and removes the acon manifest", () => {
   expect(consoleManifest("undo", linked)).toMatchObject({ change: "refused" });
   expect(existsSync(join(root, "real-plugins", "vmem.json"))).toBe(true);
 });
+
+test("inbox conditional polling is unchanged below 50 ms, and a confirmed vault write recomputes", async () => {
+  const p = await plugin.open({ home: root, log() {} });
+  try {
+    const first = await completeInbox(p);
+    const start = performance.now();
+    expect(await p.snapshot({ panel: "inbox", after: first.cursor as number })).toEqual({ changed: false, cursor: first.cursor });
+    expect(performance.now() - start).toBeLessThan(50);
+    const file = join(mine, "snapshot-cache-fixture.md");
+    writeFileSync(file, note("Snapshot Cache Fixture", "Synthetic revision evidence."));
+    const preview = await p.action({ action: "delete", path: "snapshot-cache-fixture", vault: "mine" });
+    expect(preview).toMatchObject({ needsConfirm: true });
+    if (!("fingerprint" in preview) || typeof preview.fingerprint !== "string") throw new Error("missing preview fingerprint");
+    expect(await p.action({ action: "delete", path: "snapshot-cache-fixture", vault: "mine", confirmed: true, fingerprint: preview.fingerprint })).toMatchObject({ ok: true });
+    const changed = await p.snapshot({ panel: "inbox", after: first.cursor as number });
+    expect(changed.changed).toBeUndefined(); expect(changed.cursor).not.toBe(first.cursor);
+  } finally { await p.close?.(); }
+});
