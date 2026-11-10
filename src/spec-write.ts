@@ -42,6 +42,11 @@ function retrySpecOperation(operation: SpecWriteOperation): string {
   return operation === "create" ? "reread the source tree and retry the create" : "reread vmem spec get and retry the update with its sha256 (--expected-sha)";
 }
 const deletedSpecInspection = "inspect the deleted file's parent directory, and inspect the lock state under VMEM_HOME";
+const createdSpecInspection = "inspect the created file and its parent directories, and inspect the lock state under VMEM_HOME";
+function publishedSpecInspection(operation: SpecWriteOperation, changed: boolean): string | undefined {
+  if (!changed) return undefined;
+  return operation === "create" ? createdSpecInspection : operation === "delete" ? deletedSpecInspection : undefined;
+}
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 class Refusal extends Error {
@@ -252,6 +257,12 @@ function guardSpecWrite(home: string, request: Pick<SpecUpdateRequest, "source" 
   return guard;
 }
 
+/** Spec state always participates in drift checks; only create depends on discovery occupancy. */
+function sameMutationSnapshot(before: SpecSnapshot, after: SpecSnapshot, operation: SpecWriteOperation, target: string): boolean {
+  const { markdownPaths: beforePaths, ...beforeTree } = before, { markdownPaths: afterPaths, ...afterTree } = after;
+  return isDeepStrictEqual(beforeTree, afterTree) && (operation !== "create" ||
+    (beforePaths?.length === afterPaths?.length && beforePaths?.includes(target) === afterPaths?.includes(target)));
+}
 /** Count every Git-listed input, not only admitted spec candidates. */
 function guardCreateDiscoveryBudget(snapshot: SpecSnapshot, change: SpecMutation): void {
   if (change.before !== null) return;
@@ -314,7 +325,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     if (introduced.length) throw new Refusal(attributeSpecErrors(introduced, change.path, operation));
     if (change.after === null) {
       assertBinding();
-      if (!isDeepStrictEqual(discoverSpecs(source, { worktree: root, env }), current)) refuse("DRIFT", `spec tree changed while validating deletion; ${retrySpecOperation(operation)}`, change.path);
+      if (!sameMutationSnapshot(current, discoverSpecs(source, { worktree: root, env }), operation, change.path)) refuse("DRIFT", `spec tree changed while validating deletion; ${retrySpecOperation(operation)}`, change.path);
       const latest = readMutation(root, change, config.denyPaths ?? [], operation);
       if (latest.source !== change.before || latest.identity !== original.identity) refuse("DRIFT", `spec changed before deletion; ${retrySpecOperation(operation)}`, change.path);
       const file = plainPath(root, change.path, config.denyPaths ?? [], operation);
@@ -327,7 +338,7 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     temp = candidateTemp;
     try { const stat = fstatSync(fd, { bigint: true }); tempIdentity = `${stat.dev}:${stat.ino}`; fchmodSync(fd, original.mode); writeFileSync(fd, change.after); fsyncSync(fd); } finally { closeSync(fd); }
     assertBinding();
-    if (identity(parent) !== parentIdentity || !isDeepStrictEqual(discoverSpecs(source, { worktree: root, env }), current)) refuse("DRIFT", `spec tree changed while validating the ${operation}; ${retrySpecOperation(operation)}`, change.path);
+    if (identity(parent) !== parentIdentity || !sameMutationSnapshot(current, discoverSpecs(source, { worktree: root, env }), operation, change.path)) refuse("DRIFT", `spec tree changed while validating the ${operation}; ${retrySpecOperation(operation)}`, change.path);
     guardCreateRepository(root, change, config.denyPaths ?? [], env);
     const latest = readMutation(root, change, config.denyPaths ?? [], operation), staged = readBounded(temp, change.path, operation);
     if (latest.source !== change.before || latest.identity !== original.identity || staged.source !== change.after || staged.identity !== tempIdentity) refuse("DRIFT", `spec ${operation} target or staged file changed before publication; ${retrySpecOperation(operation)}`, change.path);
@@ -335,18 +346,22 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
     publishSpec(temp, file, change, result); temp = undefined;
     syncDirectory(parent); syncCreatedParents(createdDirs); result.ok = true;
   } catch (error) {
-    result.issues = error instanceof Refusal ? error.issues : [{ code: "IO", severity: "error", message: `spec ${operation} failed (${writeErrorCause(error)}); ${operation === "delete" && result.changed ? `${deletedSpecInspection}, check permissions and free space, and repair the reported cause` : `inspect the source tree and target directory, check permissions and free space for the target and VMEM_HOME lock directory, repair the reported cause, then ${retrySpecOperation(operation)}`}`, ...(result.path ? { path: result.path } : {}) }];
+    const inspection = publishedSpecInspection(operation, result.changed);
+    result.issues = error instanceof Refusal ? error.issues : [{ code: "IO", severity: "error", message: `spec ${operation} failed (${writeErrorCause(error)}); ${inspection ? `${inspection}, check permissions and free space, and repair the reported cause` : `inspect the source tree and target directory, check permissions and free space for the target and VMEM_HOME lock directory, repair the reported cause, then ${retrySpecOperation(operation)}`}`, ...(result.path ? { path: result.path } : {}) }];
     result.path ??= result.issues.find(issue => issue.path)?.path;
   } finally {
     if (temp) {
       try { if (identity(temp) !== tempIdentity) throw new Error("temporary ownership changed"); unlinkSync(temp); }
-      catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "spec temporary cleanup could not prove owned-file removal; inspect the .spec-*.tmp file in the target directory before retrying (a replacement is preserved)", ...(result.path ? { path: result.path } : {}) }); }
+      catch (error) {
+        const inspection = publishedSpecInspection(operation, result.changed);
+        result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `spec temporary cleanup could not prove owned-file removal (${writeErrorCause(error)}); ${inspection ? `${inspection}; inspect any .spec-*.tmp file in the target directory and preserve replacements` : "inspect the .spec-*.tmp file in the target directory before retrying (a replacement is preserved)"}`, ...(result.path ? { path: result.path } : {}) });
+      }
     }
     if (lockFd !== undefined) {
       try { closeSync(lockFd); }
-      catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `spec lock descriptor close failed; ${operation === "delete" && result.changed ? deletedSpecInspection : "inspect the write receipt and lock state before retrying"}`, ...(result.path ? { path: result.path } : {}) }); }
+      catch (error) { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `spec lock descriptor close failed (${writeErrorCause(error)}); ${publishedSpecInspection(operation, result.changed) ?? "inspect the write receipt and lock state before retrying"}`, ...(result.path ? { path: result.path } : {}) }); }
       try { if (lockFile && identity(lockFile) === lockIdentity) unlinkSync(lockFile); }
-      catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `spec lock cleanup failed; ${operation === "delete" && result.changed ? deletedSpecInspection : "inspect the owned lock under VMEM_HOME before retrying"}`, ...(result.path ? { path: result.path } : {}) }); }
+      catch (error) { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `spec lock cleanup failed (${writeErrorCause(error)}); ${publishedSpecInspection(operation, result.changed) ?? "inspect the owned lock under VMEM_HOME before retrying"}`, ...(result.path ? { path: result.path } : {}) }); }
     }
     cleanupCreatedDirs(createdDirs, result);
   }

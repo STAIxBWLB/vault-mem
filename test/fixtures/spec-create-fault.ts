@@ -8,8 +8,9 @@ const original = { ...fs }, configFile = join(home, "vmem.config.json"), config 
 const root = config.specs[0].path, target = join(root, "new/deep/SPEC.md"), temps = new Set<number>(), modes = new Set<number>(), synced = new Set<number>(), tempReads = new Set<number>();
 const fault = mode.replace(/^mcp-/, "");
 if (fault === "umask-027") process.umask(0o027);
-const expectedFileMode = 0o666 & ~process.umask(), descriptorPaths = new Map<number, string>(), syncPaths: string[] = [];
+const expectedFileMode = 0o666 & ~process.umask(), descriptorPaths = new Map<number, string>(), syncPaths: string[] = [], unlinkFailures: string[] = [];
 let injected = false, published = false, updating = false, lockDescriptor: number | undefined;
+let publishedTemp: string | undefined, ownedLock: string | undefined;
 let registerContainer: (() => void) | undefined;
 mock.module("node:fs", () => ({ ...original,
   openSync: (...args: Parameters<typeof fs.openSync>) => {
@@ -23,6 +24,7 @@ mock.module("node:fs", () => ({ ...original,
     }
     if (file.endsWith(".lock") && file.includes("/spec-mutations/")) {
       lockDescriptor = fd;
+      ownedLock = file;
       if (mode === "policy-drift") { config.specs[0].write = "none"; original.writeFileSync(configFile, JSON.stringify(config)); }
       if (mode === "target-appears") { original.mkdirSync(join(root, "new/deep"), { recursive: true }); original.writeFileSync(target, "foreign file\n"); }
     }
@@ -47,7 +49,17 @@ mock.module("node:fs", () => ({ ...original,
     if (mode.startsWith("link-")) throw Object.assign(new Error("synthetic unsupported link"), { code: mode.slice(5) });
     if (mode === "publish") throw new Error("synthetic create publication fault");
     if (mode === "publish-race") original.writeFileSync(target, "foreign file\n");
-    original.linkSync(...args); published = true;
+    original.linkSync(...args); published = true; publishedTemp = String(args[0]);
+  },
+  unlinkSync: (...args: Parameters<typeof fs.unlinkSync>) => {
+    const file = String(args[0]);
+    // Refuse only this mutation's published hard-link temp or its captured owned
+    // lock. Every other path keeps the native ownership/cleanup behavior.
+    if (published && (fault === "temp-unlink" && file === publishedTemp || fault === "lock-unlink" && file === ownedLock)) {
+      unlinkFailures.push(file);
+      throw Object.assign(new Error(`synthetic create ${fault} failure`), { code: "EACCES" });
+    }
+    return original.unlinkSync(...args);
   },
   closeSync: (fd: number) => {
     if (tempReads.delete(fd)) {
@@ -84,8 +96,8 @@ if (fault === "umask-027" && result.ok) {
   const { updateSpec } = await import("../../src/spec-write.ts");
   const update = updateSpec(home, { id: "child", set: { title: "Updated mode fixture" } }, { env: process.env });
   console.log(JSON.stringify({ result, fileMode, directoryModes, update, updateMode: original.statSync(target).mode & 0o777 }));
-} else if (fault === "dir-fsync" || fault === "ancestor-sync" || fault === "lock-close") {
+} else if (["dir-fsync", "ancestor-sync", "lock-close", "temp-unlink", "lock-unlink"].includes(fault)) {
   const { renderSpecUpdate } = await import("../../src/spec-output.ts"), { PLAIN } = await import("../../src/text-output.ts");
-  console.log(JSON.stringify({ result, text: renderSpecUpdate(result, PLAIN, "create"), syncPaths }));
+  console.log(JSON.stringify({ result, text: renderSpecUpdate(result, PLAIN, "create"), syncPaths, unlinkFailures }));
 } else if (fault === "sync-order") console.log(JSON.stringify({ result, syncPaths }));
 else console.log(JSON.stringify(result));

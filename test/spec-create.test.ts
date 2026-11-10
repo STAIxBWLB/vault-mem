@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILE, type SpecSourceSpec } from "../src/config.ts";
@@ -341,18 +341,43 @@ for (const mode of ["policy-drift", "final-policy", "final-home-spec", "final-ho
   expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
 }, 30_000);
 
-for (const mode of ["dir-fsync", "ancestor-sync", "lock-close", "mcp-dir-fsync", "mcp-ancestor-sync", "mcp-lock-close"]) test(`post-link ${mode} retains created bytes, SHA and applied-with-errors receipt`, () => {
+for (const mode of ["dir-fsync", "ancestor-sync", "lock-close", "temp-unlink", "lock-unlink", "mcp-dir-fsync", "mcp-ancestor-sync", "mcp-lock-close", "mcp-temp-unlink", "mcp-lock-unlink"]) test(`post-link ${mode} retains created bytes, SHA and applied-with-errors receipt`, () => {
   const f = fixture();
   const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/spec-create-fault.ts"), f.home, mode], { env: { ...process.env, ...f.env }, stdout: "pipe", stderr: "pipe", timeout: 20000 });
   expect(child.exitCode, child.stderr.toString()).toBe(0);
-  const output = JSON.parse(child.stdout.toString()) as { result: SpecWriteResult; text: string; syncPaths: string[] };
+  const output = JSON.parse(child.stdout.toString()) as { result: SpecWriteResult; text: string; syncPaths: string[]; unlinkFailures: string[] };
   expect(output.result).toMatchObject({ ok: false, changed: true, path: "new/deep/SPEC.md" });
   expect(output.text).toContain("created with errors"); expect(output.text).not.toContain(": refused");
+  expect(output.result.issues.length).toBeGreaterThan(0);
+  for (const issue of output.result.issues) {
+    expect(issue.message).toMatch(/inspect.*created file/i);
+    expect(issue.message).toMatch(/parent director/i);
+    expect(issue.message).toContain("VMEM_HOME");
+    expect(issue.message).toMatch(/lock/i);
+    expect(issue.message).not.toMatch(/retry|repeat|rerun|fresh preview/i);
+  }
   const bytes = readFileSync(join(f.repo, "new/deep/SPEC.md"));
   expect(parseFrontmatter(bytes.toString()).data.title).toBe("Attempted create");
   expect(output.result.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
-  expect(readdirSync(join(f.repo, "new/deep"))).toEqual(["SPEC.md"]);
-  expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
+  const directory = join(f.repo, "new/deep"), lockDirectory = join(f.home, "spec-mutations");
+  if (mode.endsWith("temp-unlink")) {
+    const files = readdirSync(directory), temps = files.filter(file => /^\.spec-.*\.tmp$/.test(file));
+    expect(temps).toHaveLength(1); expect(files).toHaveLength(2);
+    const temp = join(directory, temps[0]!);
+    expect(readFileSync(temp)).toEqual(bytes);
+    const retained = lstatSync(temp), target = lstatSync(join(directory, "SPEC.md"));
+    expect([retained.dev, retained.ino]).toEqual([target.dev, target.ino]);
+    expect(output.unlinkFailures).toEqual([temp, temp]);
+    expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "IO", message: expect.stringContaining("EACCES") }));
+    expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "CLEANUP" }));
+  } else expect(readdirSync(directory)).toEqual(["SPEC.md"]);
+  if (mode.endsWith("lock-unlink")) {
+    const name = createHash("sha256").update(f.repo).digest("hex") + ".lock", lock = join(lockDirectory, name);
+    expect(readdirSync(lockDirectory)).toEqual([name]);
+    expect(JSON.parse(readFileSync(lock, "utf8"))).toMatchObject({ pid: expect.any(Number), token: expect.any(String) });
+    expect(output.unlinkFailures).toEqual([lock]);
+    expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "CLEANUP" }));
+  } else expect(readdirSync(lockDirectory)).toEqual([]);
   if (mode.endsWith("ancestor-sync")) {
     expect(output.syncPaths).toEqual([join(f.repo, "new/deep"), join(f.repo, "new")]);
     expect(output.result.issues).toContainEqual(expect.objectContaining({ code: "IO", message: expect.stringContaining("created ancestor sync failure") }));
