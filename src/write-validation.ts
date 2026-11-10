@@ -74,11 +74,12 @@ function strings(value: unknown): string[] {
 }
 function fold(value: string): string { return value.normalize("NFKC").toLowerCase().replace(/[-_\s]+/g, " ").trim(); }
 /** Notes whose path and text match `reuse` keep that parsed object, so link analysis is shared too. */
-function parseNotes(notes: Map<string, string>, reuse?: Map<string, ParsedNote>): Map<string, ParsedNote> {
+function parseNotes(notes: Map<string, string>, reuse?: Map<string, ParsedNote>, baseline?: Map<string, ParsedNote>): Map<string, ParsedNote> {
   const parsed = new Map<string, ParsedNote>();
   for (const [path, text] of notes) {
-    const previous = reuse?.get(path);
-    if (previous?.text === text) { parsed.set(path, previous); continue; }
+    const previous = reuse?.get(path), original = baseline?.get(path);
+    const cached = previous?.text === text ? previous : original?.text === text ? original : undefined;
+    if (cached) { parsed.set(path, cached); continue; }
     try {
       const { data, body } = parseFrontmatter(text);
       const h1 = proseLines(body).map(line => /^ {0,3}#(?:[ \t]+(.*)|[ \t]*)$/.exec(line)).find(match => match)?.[1]?.replace(/[ \t]+#+[ \t]*$/, "").trim() ?? "";
@@ -222,8 +223,8 @@ function topicPlacement(note: ParsedNote, old: ParsedNote | undefined, context: 
   return [issue("V05", "Topics must be the final H2 and list exactly the frontmatter topics", retained ? "warning" : "error", note.path)];
 }
 
-/** Validate a complete mutation plan against the final overlaid snapshot, without filesystem writes. */
-export function validateWrite(changes: PlannedChange[], context: ValidationContext): WriteIssue[] {
+/** Run every validation rule over one candidate, reusing only source-identical parsed notes. */
+function validateChanges(changes: PlannedChange[], context: ValidationContext, oldNotes: Map<string, ParsedNote>, oldNames: Map<string, Set<ParsedNote>>, reuse?: Map<string, ParsedNote>): { issues: WriteIssue[]; notes: Map<string, ParsedNote> } {
   const issues: WriteIssue[] = [], final = new Map(context.notes), touched = new Set(changes.map(change => change.path));
   const report = context.operation.op === "report";
   for (const change of changes) {
@@ -238,7 +239,7 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
     try{issues.push(...screenMetadata(parseFrontmatter(change.after).data,context,change.path));}catch{ /* Invalid note YAML is reported separately; reports remain schema-exempt. */ }
   }
   const sourceRoot=sourceWorkspaceRoot(context.vault);
-  const oldNotes = parseNotes(context.notes), newNotes = parseNotes(final, oldNotes), oldNames = names(oldNotes), newNames = names(newNotes);
+  const newNotes = parseNotes(final, reuse ?? oldNotes, oldNotes), newNames = names(newNotes);
   const citekeys = new Map<string, ParsedNote[]>();
   for (const note of newNotes.values()) if (typeof note.data.citekey === "string") {
     const peers = citekeys.get(note.data.citekey.toLowerCase()) ?? [];
@@ -292,5 +293,32 @@ export function validateWrite(changes: PlannedChange[], context: ValidationConte
     }
     issues.push(...changedBrokenLinks(oldNotes, newNotes, context));
   }
-  return issues;
+  return { issues, notes: newNotes };
+}
+
+function sameSources(notes: Map<string, string>, previous: Map<string, string> | undefined): boolean {
+  if (!previous || notes.size !== previous.size) return false;
+  const entries = previous.entries();
+  for (const [path, source] of notes) {
+    const before = entries.next().value;
+    if (!before || before[0] !== path || before[1] !== source) return false;
+  }
+  return true;
+}
+/** A write-local raw/stamped validation session. Policy, screens and graph rules run on every call. */
+export function createWriteValidator(context: ValidationContext): (changes: PlannedChange[]) => WriteIssue[] {
+  let sources: Map<string, string> | undefined, baseline = new Map<string, ParsedNote>(), baselineNames = names(baseline), prospective: Map<string, ParsedNote> | undefined;
+  return changes => {
+    if (!sameSources(context.notes, sources)) {
+      baseline = parseNotes(context.notes, baseline); baselineNames = names(baseline);
+      sources = new Map(context.notes); prospective = undefined;
+    }
+    const result = validateChanges(changes, context, baseline, baselineNames, prospective);
+    prospective = result.notes;
+    return result.issues;
+  };
+}
+/** Compatible one-shot validation; callers with raw/stamped passes can share a write-local session. */
+export function validateWrite(changes: PlannedChange[], context: ValidationContext): WriteIssue[] {
+  return createWriteValidator(context)(changes);
 }

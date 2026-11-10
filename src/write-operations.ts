@@ -131,8 +131,8 @@ export function stampNoteContent(source: string, today: string, create: boolean,
   const doc = parseFrontmatter(source);
   const dates = { updated: today, ...(create && !Object.hasOwn(doc.data, "created") ? { created: today } : {}) };
   const references = frontmatterReferences(doc);
-  const skipStamp = (cause: string) => {
-    const repair = "open this note in a text editor and rewrite the header as a block mapping with plain literal values" + (references.length ? ", replacing any aliases with their literal values and removing anchors" : "");
+  const skipStamp = (cause: string, nextStep?: string) => {
+    const repair = nextStep ?? "open this note in a text editor and rewrite the header as a block mapping with plain literal values" + (references.length ? ", replacing any aliases with their literal values and removing anchors" : "");
     warning?.(`automatic dates were not set: ${cause}; ${repair}; later authored writes stamp updated automatically${create && !Object.hasOwn(doc.data, "created") ? "; set created explicitly in the repaired header if it was also skipped" : ""}`);
     return source;
   };
@@ -140,16 +140,12 @@ export function stampNoteContent(source: string, today: string, create: boolean,
   try { candidate = emitFrontmatter(doc, dates); }
   catch (error) {
     if (!(error instanceof Error) || error.message !== "frontmatter: editing requires a block mapping") throw error;
-    // Canonicalizing a flow or merge-key header would erase its reference graph.
-    if (references.length) return skipStamp("rewriting this header would change YAML anchor/alias relationships");
-    const newline = /\r?\n/.exec(doc.frontmatter ?? "")?.[0] ?? "\n";
-    try {
-      const header = emitFrontmatter(parseFrontmatter(""), { ...doc.data, ...dates }).replaceAll("\n", newline);
-      candidate = source.slice(0, source.indexOf("---")) + header + doc.body;
-    } catch (cause) {
-      if (!(cause instanceof Error) || cause.message !== "frontmatter: changed values must be JSON-compatible") throw cause;
-      return skipStamp("the header contains values that cannot round-trip through JSON (such as .inf, .nan or -0)");
-    }
+    return skipStamp(references.length
+      ? "the header cannot be edited in place without rewriting comments, formatting or YAML anchor/alias relationships"
+      : "the header cannot be edited in place without rewriting comments or formatting");
+  }
+  if (Buffer.byteLength(candidate) > MAX_WRITE_BYTES && Buffer.byteLength(source) <= MAX_WRITE_BYTES) {
+    return skipStamp("adding automatic dates would exceed the 256 KiB note limit", "shorten this note to leave room below 256 KiB for automatic dates");
   }
   try {
     const stamped = parseFrontmatter(candidate);

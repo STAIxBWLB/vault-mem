@@ -12,6 +12,8 @@
 
 - Authored note writes (including link and explicit DOI assignment) stamp `updated` with the local calendar date through one shared writer transform; move backlink rewrites, tidy and sanitize preserve freshness dates; create fills absent `created` while preserving caller values and existing validation. Promotion previews show the same stamped content as confirm, and read-only/no-op operations remain unchanged. Non-JSON flow-header values and date emission that would alter YAML anchor/alias relationships preserve the authored write and return a cause-specific automatic-date warning with a working manual text-editor header repair step. Applied warnings confirm content was saved and never suggest repeating it (#165, part 1).
 
+- Automatic note dates never canonicalize an uneditable header or refuse an otherwise valid near-limit authored write: preserve the candidate and return a V01 warning. Document explicit `updated` precedence and reuse validation snapshots across raw/stamped passes (#185).
+
 - Spec create refuses a new Markdown input past the discovery cap, and create/update titles reject controls and line separators. Cleanup errors preserve their directory and cause. Delete acknowledgement budgets are preview-invariant, blocked path refusals request a fresh preview, and applied-delete errors direct inspection of the parent directory and lock state instead of re-confirmation (#175, #176).
 
 - Spec update/delete ignore ordinary Markdown path-list churn while preserving spec drift checks; create compares only discovery count and target membership. Post-publication create IO/cleanup guidance inspects the created file, parents and lock state without suggesting a retry (#180).
