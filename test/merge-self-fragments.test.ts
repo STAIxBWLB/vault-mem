@@ -108,3 +108,45 @@ for (const reference of ["external", "self"] as const) test(`merge uses the read
   expect(preview).not.toHaveProperty("merge");
   expect(disk(f.root)).toEqual(before);
 });
+
+for (const kind of ["heading", "block"] as const) {
+  const fragment = kind === "heading" ? "#Evidence" : "#^result";
+  const keepBody = kind === "heading" ? "## Evidence\n\nDifferent kept evidence." : "## Kept Context\n\nDifferent kept evidence. ^result";
+  const absorbBody = "## Evidence\n\nAbsorbed evidence belongs here. ^result";
+
+  test(`#190 a fragment-only ${kind} link in the removed leading title does not block merge`, () => {
+    const f = fixture(keepBody, absorbBody), file = join(f.notes, "absorb.md");
+    const original = readFileSync(file, "utf8").replace("# Absorbed Finding", `# Removed title [[${fragment}]]`);
+    writeFileSync(file, original);
+    const before = disk(f.root), preview = f.merge();
+    expect(preview).toMatchObject({ ok: true, applied: false, preview: true });
+    expect(disk(f.root)).toEqual(before);
+    expect(preview.merge!.body).not.toContain("Removed title");
+    expect(preview.merge!.body).not.toContain(`[[${fragment}]]`);
+    expect(preview.merge!.body).toContain("### Evidence\n\nAbsorbed evidence belongs here. ^result");
+    const mergeKeys = ["absorb", "body", "inboundLinks", "keep", "source", "topics"];
+    expect(Object.keys(preview.merge!).sort()).toEqual(mergeKeys);
+    expect(preview).not.toHaveProperty("copiedBody");
+    const done = f.merge(preview.fingerprint!);
+    expect(done).toMatchObject({ ok: true, applied: true });
+    expect(Object.keys(done.merge!).sort()).toEqual(mergeKeys);
+    expect(done).not.toHaveProperty("copiedBody");
+    const keep = parseFrontmatter(readFileSync(join(f.notes, "keep.md"), "utf8")), absorb = parseFrontmatter(readFileSync(file, "utf8"));
+    expect(keep.body).toBe(preview.merge!.body);
+    expect(absorb.body).toBe(parseFrontmatter(original).body);
+    expect(absorb.body).toContain(`# Removed title [[${fragment}]]`);
+    expect(absorb.data).toMatchObject({ title: "Absorbed Finding", status: "superseded", superseded_by: "[[keep]]" });
+    expect(existsSync(file)).toBe(true);
+  });
+
+  for (const location of ["later H1", "prose"] as const) test(`#190 a copied ${kind} fragment in ${location} still refuses even when the removed title had the same link`, () => {
+    const copied = location === "later H1" ? `# Later title [[${fragment}]]` : `Follow [[${fragment}]] in copied prose.`;
+    const f = fixture(keepBody, `${absorbBody}\n\n${copied}`), file = join(f.notes, "absorb.md");
+    writeFileSync(file, readFileSync(file, "utf8").replace("# Absorbed Finding", `# Removed title [[${fragment}]]`));
+    const before = disk(f.root), result = f.merge();
+    expect(result).toMatchObject({ ok: false, applied: false });
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: "V03", severity: "error", message: expect.stringContaining("collid") }));
+    expect(result).not.toHaveProperty("merge");
+    expect(disk(f.root)).toEqual(before);
+  });
+}

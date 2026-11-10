@@ -256,7 +256,7 @@ function mergeGap(body: string, newline: string): string {
   return body + (body.endsWith("\n") ? newline : newline + newline);
 }
 /** Pure all-note merge plan, composed after rewriting existing references so its new provenance link is retained. */
-export function planMerge(operation: Extract<WriteOp, { op: "merge" }>, notes: Map<string, string>): { changes: PlannedChange[]; preview: MergePreview } {
+export function planMerge(operation: Extract<WriteOp, { op: "merge" }>, notes: Map<string, string>): { changes: PlannedChange[]; preview: MergePreview; copiedBody: string } {
   const keep = notePath(operation.keep), absorb = notePath(operation.absorb);
   if (keep === absorb) refuse("V10", "merge endpoints must differ; choose separate keep and absorb notes", keep);
   const kept = document(needed(notes, keep), keep), absorbed = document(needed(notes, absorb), absorb);
@@ -294,7 +294,7 @@ export function planMerge(operation: Extract<WriteOp, { op: "merge" }>, notes: M
   const changes = [...rewritten].filter(([path, after]) => after !== notes.get(path)).map(([path, after]) => ({ path, before: notes.get(path)!, after })).sort((a, b) => a.path.localeCompare(b.path));
   const oversized = changes.find(change => Buffer.byteLength(change.after) > MAX_WRITE_BYTES);
   if (oversized) refuse("V09", "merged file or inbound rewrite exceeds 256 KiB; shorten the affected note before retrying the merge", oversized.path);
-  return { changes, preview: { keep, absorb, body, source: sources, topics, inboundLinks } };
+  return { changes, preview: { keep, absorb, body, source: sources, topics, inboundLinks }, copiedBody: second };
 }
 
 /** Plan transformations in memory. This function never touches files. */

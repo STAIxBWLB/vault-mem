@@ -97,16 +97,16 @@ function checkExpected(request: WriteRequest, notes: Map<string, string>): void 
   }
 }
 /** Preserve referenced content identity and the existing no-self-supersession invariant. */
-function checkMergeReferences(preview: MergePreview, notes: Map<string, string>): void {
+function checkMergeReferences(preview: MergePreview, notes: Map<string, string>, copiedBody: string): void {
   const anchors = anchorIndex(parseFrontmatter(notes.get(preview.keep)!).body);
   const absorbed = parseFrontmatter(notes.get(preview.absorb)!);
   const supersedes = typeof absorbed.data.supersedes === "string" ? [absorbed.data.supersedes] : Array.isArray(absorbed.data.supersedes) ? absorbed.data.supersedes : [];
   if (supersedes.some(value => typeof value === "string" && extractLinks(value).some(link => noteKey(link.target) === noteKey(preview.keep)))) {
     refuse("V10", `${preview.absorb} supersedes ${preview.keep}, so keep is the older note; swap keep and absorb, then request a fresh merge preview`, preview.absorb);
   }
-  // Copied fragment-only links change their containing note from absorb to keep,
-  // even though no target text is rewritten or listed among inbound replacements.
-  const selfFragments = extractLinks(absorbed.body)
+  // Only surviving copied self-fragments change their containing note to keep.
+  // Removed title/Topics content is excluded; these links need no target rewrite.
+  const selfFragments = extractLinks(copiedBody)
     .filter(link => link.target === "" && (link.heading !== null || link.block !== null))
     .map(link => ({ path: preview.absorb, field: "body", heading: link.heading ?? undefined, block: link.block ?? undefined }));
   for (const link of [...preview.inboundLinks, ...selfFragments]) {
@@ -151,7 +151,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
   let changes: PlannedChange[] = [], issues: WriteIssue[] = [], fingerprint: string | undefined, root = "", applied = false, indexUpdated = false;
   let result: WriteReceipt | undefined;
   const dateWarnings: WriteIssue[] = [];
-  let mergePreview: MergePreview | undefined;
+  let mergePreview: MergePreview | undefined, mergeCopiedBody = "";
   const recordError = (code: string, message: string, path?: string) => issues.push({ code, severity: "error", message, ...(path ? { path } : {}) });
   try {
     if (!request || typeof request !== "object" || !request.operation || typeof request.operation !== "object" || typeof request.vault !== "string") refuse("V01", "invalid write request");
@@ -192,7 +192,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       reportBefore = readPlain(root, request.operation.path, MAX_REPORT_BYTES);
     }
     if (request.operation.op === "merge") {
-      const plan = planMerge(request.operation, notes); changes = plan.changes; mergePreview = plan.preview;
+      const plan = planMerge(request.operation, notes); changes = plan.changes; mergePreview = plan.preview; mergeCopiedBody = plan.copiedBody;
     } else changes = planOperation(request.operation, notes, reportBefore);
     for (const change of changes) if (isDenied(join(root, change.path), config.denyPaths)) refuse("V06", "planned mutation path is denied", change.path);
     const validation = { vault, config, notes, operation: request.operation, ...(options.piiSurface ? { piiSurface: options.piiSurface } : {}) };
@@ -203,7 +203,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     issues = validate(changes);
     if (!issues.some(issue => issue.severity === "error")) {
       // Check only screened candidates: diagnostics must not echo an unsafe fragment.
-      if (mergePreview) checkMergeReferences(mergePreview, notes);
+      if (mergePreview) checkMergeReferences(mergePreview, notes, mergeCopiedBody);
       const stamped = stampContentChanges(request.operation, changes, localDate(options.now), dateWarnings);
       if (stamped.some((change, index) => change.after !== changes[index]?.after) || stamped.length !== changes.length) {
         changes = stamped;
