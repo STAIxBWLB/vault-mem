@@ -31,6 +31,7 @@ test("promotion pages fit 32 KiB UTF-8, preserve all candidates and answer uncha
   const old = await cache.snapshot({}); revision++;
   const fresh = await cache.snapshot({ after: old.cursor, page: old.nextPage });
   expect(fresh.changed).toBeUndefined(); expect(fresh.reset).toBe(true); expect(scans).toBe(2);
+  expect(await cache.snapshot({ page: old.nextPage, after: fresh.cursor })).toEqual({ changed: false, cursor: fresh.cursor });
 });
 
 test("concurrent promotion calls coalesce, failed loads retry, selection opens its own page", async () => {

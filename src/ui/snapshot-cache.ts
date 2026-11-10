@@ -89,7 +89,7 @@ export function createPromoteSnapshot(revision: () => number, load: () => Promis
         if (cursors.size >= 256) cursors.delete(cursors.keys().next().value!);
         cursor = nextSnapshotCursor(); cursors.set(key, cursor);
       }
-      if (!reset && args.after === cursor) return { changed: false, cursor };
+      if (args.after === cursor) return { changed: false, cursor };
       return { ...response(pages[index]!, selected, cursor, `${rev}:${index}`, index + 1 < pages.length ? `${rev}:${index + 1}` : undefined), ...(reset ? { reset: true } : {}) };
     },
   };
