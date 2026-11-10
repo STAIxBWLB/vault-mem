@@ -42,7 +42,8 @@ function cells(line: string): string[] | undefined {
   if (line.trimEnd().endsWith("|") && result.at(-1) === "") result.pop();
   return result.length ? result : undefined;
 }
-const separator = (row: string[]) => row.every(cell => /^:?-{3,}:?$/.test(cell.trim()));
+// One or more hyphens per cell with optional alignment colons, the GFM delimiter row; `|-|-|` is a valid table.
+const separator = (row: string[]) => row.every(cell => /^:?-+:?$/.test(cell.trim()));
 function aliases(cell: string): string[] {
   if (cell.length > 2048) return [];
   const plain = cell.replace(/\[\[([^\]]+)\]\]/g, (_, address: string) => {
@@ -61,20 +62,21 @@ function aliases(cell: string): string[] {
   }
   return [...found];
 }
-function tableRows(path: string, source: string, keyColumn: number, maximum: number): IndexedRow[] {
+function tableRows(path: string, source: string, keyColumn: number, maximum: number): { rows: IndexedRow[]; tables: number } {
   const document = parseFrontmatter(source), lines = proseLines(document.body);
   const offset = document.frontmatter?.split("\n").length ?? 1;
-  const result: IndexedRow[] = []; let columns = 0;
+  const result: IndexedRow[] = []; let columns = 0, tables = 0;
   for (let i = 0; i < lines.length && result.length < maximum; i++) {
     const row = cells(lines[i]!);
     if (!row) { columns = 0; continue; }
     const next = cells(lines[i + 1] ?? "");
-    if (next && next.length === row.length && separator(next)) { columns = row.length; i++; continue; }
+    // A header row with a delimiter row under it is one recognizable table, whether or not it yields keyed rows.
+    if (next && next.length === row.length && separator(next)) { columns = row.length; tables++; i++; continue; }
     if (!columns || separator(row) || keyColumn > columns || keyColumn > row.length) continue;
     const keys = aliases(row[keyColumn - 1]!);
     if (keys.length) result.push({ path, line: offset + i, row: [...lines[i]!.trim()].slice(0, 200).join(""), keys });
   }
-  return result;
+  return { rows: result, tables };
 }
 function automaton(rows: readonly IndexedRow[], folded: boolean): Automaton {
   const states = [state()], patterns: Pattern[] = [], byKey = new Map<string, number>();
@@ -124,7 +126,9 @@ export function indexCanonRows(tables: readonly CanonTableSpec[], read: (path: s
     const bytes = Buffer.byteLength(source); remaining -= Math.min(bytes, maximum);
     if (bytes > maximum || !Number.isInteger(table.keyColumn ?? 1) || (table.keyColumn ?? 1) < 1) { warn(table.path, "note exceeds read budget or keyColumn is invalid"); continue; }
     try {
-      const capacity = ROWS - rows.length, parsed = tableRows(table.path, source, table.keyColumn ?? 1, capacity);
+      const capacity = ROWS - rows.length, { rows: parsed, tables } = tableRows(table.path, source, table.keyColumn ?? 1, capacity);
+      // An empty result is explained rather than silent: the note was readable but holds no table GFM would accept.
+      if (!tables) warnings.add(`canonTables: ${table.path} has no recognizable Markdown table; it contributes no rows, and a table needs a header row and a separator row of one or more hyphens per cell; check the note and the configured keyColumn, then retry preview`);
       let limited = parsed.length === capacity;
       for (const row of parsed) {
         const kept: string[] = [];
