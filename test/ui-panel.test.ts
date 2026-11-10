@@ -69,6 +69,11 @@ test("the panel restores a full unchanged view on repeated routes, even when the
     receive({ ...snapshot, cursor: 5, page: "1:0", nextPage: "1:1", reset: true });
     expect(JSON.stringify(root.children)).not.toContain("First page");
     expect(JSON.stringify(root.children)).toContain("Next page");
+    // A reset can land on the selected candidate's page instead, where earlier pages still exist.
+    panel.show("promote", { id: "fixture", page: "9:0" });
+    receive({ ...snapshot, selected: "fixture", cursor: 7, page: "1:2", reset: true });
+    expect(JSON.stringify(root.children)).toContain("First page");
+    expect(JSON.stringify(root.children)).not.toContain("Next page");
     // A live page token keeps the way back to the first page.
     panel.show("promote", { page: "1:1" });
     receive({ ...snapshot, cursor: 6, page: "1:1", nextPage: "1:2" });

@@ -84,8 +84,11 @@ export default (host) => {
           const meta = Object.fromEntries(Object.entries(values).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
           host.action({ action: "promote-from-amem", id: picked.id, project: picked.project, ...meta, ...vaultParam() });
         })) : null;
-      // `reset` means the page token sent was stale and this reply is page 0, so there is no earlier page to go back to.
-      const showFirst = Boolean(params.page) && !s.reset;
+      // `reset` only says the page token was stale: the reply can land on the page holding the selected candidate.
+      // The returned page index decides whether an earlier page exists; an unavailable reply has none, so there a
+      // stale page param can still be cleared.
+      const pageIndex = Number(String(s.page ?? "").split(":")[1]);
+      const showFirst = Number.isSafeInteger(pageIndex) ? pageIndex > 0 : Boolean(params.page);
       return [s.unavailable ? ui.notice(s.unavailable, "err") : null, form,
         s.nextPage || showFirst ? h("div", { class: "vmem-bar" },
           ...(showFirst ? [ui.button("First page", () => go("promote"))] : []),
