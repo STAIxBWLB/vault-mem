@@ -118,7 +118,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
       if (!source) return refusal("POLICY", "no personal vault registered");
       const result = promoteToOrg(home, { from: source.id, note: str(args.path)!, to: str(args.to)!, channel: "mcp", again: args.again === true, confirm: args.confirm === true,
         ...(Array.isArray(args.topics) ? { topics: args.topics as string[] } : {}), ...(str(args.fingerprint) ? { fingerprint: str(args.fingerprint) } : {}) }, { env });
-      return result.ok ? result : { ...result, refused: true };
+      return result.ok || result.applied ? result : { ...result, refused: true };
     },
     vmem_promote_from_amem: async args => {
       const { promoteFromAmem } = await import("./promote.ts");
@@ -126,7 +126,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
       const result = await promoteFromAmem(home, { vault: pick(args).id, id, channel: "mcp", confirm: args.confirm === true,
         ...Object.fromEntries(["stem", "type", "domain", "description", "title", "body", "linkTo", "fingerprint"].filter(key => str(args[key]) !== undefined).map(key => [key, str(args[key])])),
         ...(Array.isArray(args.topics) ? { topics: args.topics as string[] } : {}) }, { env, ...(str(args.project) ? { project: str(args.project) } : {}) });
-      return result.ok ? result : { ...result, refused: true };
+      return result.ok || result.applied ? result : { ...result, refused: true };
     },
     vmem_skills_mine: async args => {
       const { mineSkills } = await import("./skills-mine.ts");

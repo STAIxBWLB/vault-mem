@@ -31,7 +31,7 @@ function checkPublicationPath(path: PublicationPath, deleted: boolean, published
   try {
     for (const parent of path.parents) {
       const stat = lstatSync(parent.path, { bigint: true });
-      if (!stat.isDirectory() || stat.isSymbolicLink() || identity(stat) !== parent.identity || !within(path.root, realpathSync(parent.path))) throw new Error("parent drift");
+      if (!stat.isDirectory() || stat.isSymbolicLink() || identity(stat) !== parent.identity || !within(path.root, realpathSync(parent.path))) throw new PublicationDrift(path.file, published);
     }
     try {
       const stat = lstatSync(path.file);
@@ -39,7 +39,9 @@ function checkPublicationPath(path: PublicationPath, deleted: boolean, published
     } catch (error) { if (!deleted || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   } catch (error) {
     if (error instanceof PublicationDrift) throw error;
-    throw new PublicationDrift(path.file, published);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new PublicationDrift(path.file, published);
+    // A permissions, storage or descriptor failure is not proof that the namespace changed.
+    throw error;
   }
 }
 export function publishFile(path: PublicationPath, operation: PublicationOperation, published: () => void): void {

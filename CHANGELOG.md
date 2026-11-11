@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Make partial rollback receipts report outstanding paths, keep the original forward cause with one final-state rollback drift diagnostic, and distinguish create rollback from backup restoration. Publication checks preserve I/O failures instead of misclassifying them as drift; applied-with-errors MCP promotion receipts omit the refusal marker (#202).
+
 ## [0.6.0] - 2026-11-11
 
 - N-1: 0.5.1 runs beside 0.6.0 with separate note/spec index files (`links2-schema3` versus `links2-schema4`); its format-3 reader preserves format-4 `canonTables` without using their promotion hints. The prior CLI/MCP surface remains available in 0.5.1; note merge and spec create/update/delete commands and MCP tools require 0.6.0. Note files remain shared, including automatic date stamps written by 0.6.0.
