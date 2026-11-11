@@ -324,3 +324,19 @@ test("#206 ranking overflow refuses with the actual filtered search command as i
     expect(() => index.briefMatches(["overflowneedle"])).toThrow("vmem search with --type/--domain filters");
   } finally { db.close(); index.close(); }
 });
+
+
+test("#206 anchored custom PII patterns screen each direct and neighbor metadata field before joining", () => {
+  const f = fixture({ custom: "deny" });
+  f.configure(config => { config.piiPatterns = ["^PRIVATE-[0-9]+$"]; });
+  f.note("visible", "Patternneedle public", "Safe pointer.", "[[private-neighbor]]");
+  f.note("private-title", "PRIVATE-12345", "Safe description.", "patternneedle");
+  f.note("private-description", "Safe title", "PRIVATE-23456", "patternneedle");
+  f.note("private-type", "Safe type title", "Safe description.", "patternneedle", "PRIVATE-34567");
+  f.note("private-neighbor", "PRIVATE-45678", "Only a one-hop neighbor.");
+  const result = vaultBrief(f.home, { vault: "mine", intent: "patternneedle", bytes: 4096 });
+  expect(paths(result)).toEqual(["notes/visible.md"]);
+  expect(result.omitted).toBe(4);
+  expect(JSON.stringify(result)).not.toContain("PRIVATE-");
+  checkBounds(result, 4096);
+});

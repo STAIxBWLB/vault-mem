@@ -4,7 +4,7 @@ import { unenforceablePii, type VaultSpec } from "./config.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry } from "./registry.ts";
 import { VaultIndex, type BriefPointer } from "./vault-index.ts";
-import { screenContent } from "./write-validation.ts";
+import { screenContent, screenMetadata } from "./write-validation.ts";
 
 export interface VaultBrief { vault: string; lines: string[]; omitted: number; bytes: number }
 export interface BriefRequest { vault: string; intent: string; paths?: string[]; bytes?: number }
@@ -49,7 +49,7 @@ export function vaultBrief(home: string, request: BriefRequest, expectedVault?: 
       if (pointer) {
         remaining -= pointer.bytes;
         const text = [pointer.path, pointer.title, pointer.type, pointer.description].join("\n");
-        if (/[\p{Cc}\p{Zl}\p{Zp}|]/u.test(pointer.path) || screenContent(text, vault, config).length || screenContent(flat(text), vault, config).length) pointer = undefined;
+        if (/[\p{Cc}\p{Zl}\p{Zp}|]/u.test(pointer.path) || screenMetadata({ title: pointer.title, type: pointer.type, description: pointer.description }, { vault, config }, pointer.path).length || screenContent(text, vault, config).length || screenContent(flat(text), vault, config).length) pointer = undefined;
       }
       cache.set(path, pointer); return pointer;
     };
