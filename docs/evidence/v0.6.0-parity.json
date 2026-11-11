@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "measuredAt": "2026-11-10T23:29:37.394Z",
+  "runtimeDigest": "28c5475c14f841293896dd525a555ed6cdb0fc3abf2a9e78c2f0d406a7e559db",
+  "fixtureDigest": "c018376b88b57d84ebba5484dd285b80acfc4c0f60ac7728dcd124ea54edc83c",
+  "frontmatter": {
+    "files": 4,
+    "roundTrip": "byte-identical"
+  },
+  "incrementalIndex": {
+    "matchesCleanRebuild": [
+      "baseline",
+      "create",
+      "edit",
+      "rename",
+      "delete"
+    ]
+  },
+  "references": {
+    "lint": "external Python",
+    "graph": "external Python",
+    "retired": false
+  },
+  "rounds": [
+    {
+      "run": 1,
+      "lint": "zero-diff",
+      "graph": "zero-diff"
+    },
+    {
+      "run": 2,
+      "lint": "zero-diff",
+      "graph": "zero-diff"
+    }
+  ],
+  "obsidian": {
+    "syntaxAndLinks": "pass",
+    "nativeApplication": "unverified",
+    "reason": "Provider fixture checks do not prove native badges/rendering"
+  },
+  "consumer": {
+    "schema": "nodes/edges fixture tested",
+    "nativeConsumer": "unverified in this run"
+  },
+  "privateCorpus": "unverified",
+  "referenceEnvironment": {
+    "python": "3.13.5",
+    "networkx": "3.4.2",
+    "pyyaml": "6.0.2",
+    "networkxWheelSha256": "df5d4365b724cf81b8c6a7312509d0c22386097011ad1abe274afd5e9d3bbc5f"
+  }
+}

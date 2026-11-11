@@ -15,8 +15,8 @@
   - Require two consecutive lint/graph finding/node/edge zero-diff comparisons against the unchanged reference tools; retain source hashes and snapshot hash.
   - Repeat on the authorized private corpus and store only private evidence in its approved location. Public evidence must contain no real note bodies.
   - Keep every reference implementation until the separate retirement gate is accepted. Fixture-only results do not retire a tool.
-- Run `bun run bench:release --output <evidence.json>` serially on dgx02.
-  - Require 5000 synthetic notes, MCP idle RSS <100 MB, MCP peak RSS <200 MB and search p95 <50 ms.
+- Run `remote_dev.py run --cgroup <worktree> -- 'bun run bench:release --output <evidence.json>'` serially on dgx02; writable `REMOTE_DEV_CGROUP` memory delegation is required.
+  - Require 5000 synthetic notes, MCP idle RSS <100 MB and search p95 <50 ms. Both MCP cgroup `memory.peak` and sampled VmRSS/VmHWM maximum must be <200 MB; cgroup charged memory is not an upper bound of RSS.
   - Preserve environment, CPU/memory quotas, raw samples, warmup policy and nearest-rank method. Failed or missing telemetry cannot pass.
   - Measure the authorized representative-vault write p95 separately and require <150 ms. The synthetic write diagnostic is not this acceptance result.
 - Inspect an isolated Obsidian fixture without editing application settings, templates or self notes.
