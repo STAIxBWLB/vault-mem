@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { VaultIndex } from "../src/vault-index.ts";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -266,4 +266,61 @@ test("#206 a new denied file remains unindexed until an unrestricted reader refr
     expect(index.search("sharedcache").map(row => row.path)).toContain("new-denied.md");
     expect(index.scan()).toMatchObject({ changed: 0, removed: 0 });
   } finally { index.close(); }
+});
+
+
+test("#206 refused intents and hints name their actual cause and correction", async () => {
+  const f = fixture();
+  expect(() => vaultBrief(f.home, { vault: "mine", intent: "!!!" })).toThrow("provide words containing letters or digits");
+  expect(() => run(["brief", "mine", "--for", "!!!"], f.env)).toThrow("no searchable letters or digits");
+  expect(() => vaultBrief(f.home, { vault: "mine", intent: "query", paths: ["src/bad\nname.ts"] })).toThrow("remove control characters");
+  expect(await createVaultMcp(f.home, f.env).handlers.vmem_brief!({ intent: "query", paths: ["src/bad\nname.ts"] })).toMatchObject({ refused: true, issues: [{ message: expect.stringContaining("control characters") }] });
+});
+
+test("#206 denied cached metadata is never fetched or charged against the allowed pointer budget", () => {
+  const f = fixture();
+  for (let n = 0; n < 513; n++) f.note(`a-denied-${String(n).padStart(3, "0")}`, "Budgetneedle", "Same metadata.");
+  f.note("z-visible", "Budgetneedle", "Same metadata.");
+  const index = new VaultIndex(f.home, f.spec);
+  try { index.scan(); } finally { index.close(); }
+  f.configure(config => { config.denyPaths = [join(f.notes, "a-denied-*")]; });
+  const real = VaultIndex.prototype.briefPointer, seen: string[] = [];
+  const spy = spyOn(VaultIndex.prototype, "briefPointer").mockImplementation(function(this: VaultIndex, path: string, maximum: number) {
+    seen.push(path);
+    if (path.startsWith("a-denied-")) throw new Error("denied metadata crossed into JavaScript");
+    return real.call(this, path, maximum);
+  });
+  try {
+    const brief = vaultBrief(f.home, { vault: "mine", intent: "budgetneedle", bytes: 4096 });
+    expect(paths(brief)).toEqual(["notes/z-visible.md"]);
+    expect(seen).toEqual(["z-visible.md"]);
+  } finally { spy.mockRestore(); }
+});
+
+test("#206 a restricted rebuild refuses before clearing FTS or changing shared link rows", () => {
+  const f = fixture(); f.note("visible", "Rebuildneedle", "Visible.", "[[denied]]"); f.note("denied", "Rebuildneedle", "Denied.");
+  const index = new VaultIndex(f.home, f.spec);
+  const state = () => {
+    const db = new Database(index.file, { readonly: true });
+    try { return { notes: db.query("SELECT * FROM notes ORDER BY path").all(), fts: db.query("SELECT * FROM fts ORDER BY path").all(), grams: db.query("SELECT * FROM grams ORDER BY path").all(), links: db.query("SELECT * FROM links ORDER BY source,ordinal").all() }; }
+    finally { db.close(); }
+  };
+  try {
+    index.scan(); const before = state();
+    expect(() => index.scan(true, { denyPaths: [join(f.notes, "denied.md")] })).toThrow("rebuild cannot use denyPaths");
+    expect(state()).toEqual(before);
+    expect(index.scan()).toMatchObject({ changed: 0, removed: 0 });
+    expect(index.search("rebuildneedle").map(row => row.path).sort()).toEqual(["denied.md", "visible.md"]);
+    expect(index.links("visible").some(link => link.resolved === "denied.md")).toBe(true);
+  } finally { index.close(); }
+});
+
+test("#206 ranking overflow refuses with the actual filtered search command as its recovery step", () => {
+  const f = fixture(), index = new VaultIndex(f.home, f.spec);
+  const db = new Database(index.file);
+  try {
+    const insert = db.query("INSERT INTO fts(path,title,description,body) VALUES (?,?,?,?)");
+    db.transaction(() => { for (let n = 0; n < 10001; n++) insert.run(`overflow-${n}.md`, "Overflowneedle", "", ""); })();
+    expect(() => index.briefMatches(["overflowneedle"])).toThrow("vmem search with --type/--domain filters");
+  } finally { db.close(); index.close(); }
 });

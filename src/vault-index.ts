@@ -284,6 +284,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
   }
   /** Scan metadata each call; hash only new or metadata-changed files. Atomic cache update. */
   scan(rebuild = false, options: { skipInvalidFrontmatter?: boolean; captureInvalidFrontmatter?: boolean; denyPaths?: string[] } = {}): { notes: number; changed: number; removed: number; skipped?: string[] } {
+    if (rebuild && options.denyPaths?.length) throw new Error("index: rebuild cannot use denyPaths restrictions; use scan(false, { denyPaths }) for a restricted refresh or vmem rebuild <vault> for an unrestricted rebuild");
     // Discovery/binding Git calls must never hold a SQLite writer lock.
     let preparedPaths: string[] | undefined;
     if (this.adapter) { this.adapter.validate(); preparedPaths = this.adapter.paths(); }
@@ -466,7 +467,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     }
     const rows = this.db.query<{ path: string; score: number }, string[]>(`WITH hits AS MATERIALIZED (${parts.join(" UNION ALL ")})
       SELECT path,min(score) AS score,max(strong) AS strength FROM hits GROUP BY path ORDER BY strength DESC,score,path LIMIT 10001`).all(...params);
-    if (rows.length > 10000) throw new Error("brief: more than 10000 matched notes; narrow the intent or use search filters");
+    if (rows.length > 10000) throw new Error("brief: more than 10000 matched notes; narrow the intent or use vmem search with --type/--domain filters");
     return rows;
   }
   /** Enforce the remaining metadata read budget inside SQL, before values cross into JavaScript. */

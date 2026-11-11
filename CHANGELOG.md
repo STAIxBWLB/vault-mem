@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Add `vmem brief` and read-only `vmem_brief`: intent/path-basename FTS/BM25 pointers with CJK matching, marked one-hop neighbors, deny/metadata PII screening and whole-line output within a 256..4096-byte cap (default 1024). Restricted refreshes preserve already-indexed denied rows and links for other readers while skipping new denied files. Omission counts and bounded metadata reads keep body content out of brief responses; host injection remains separate (#206).
+- Add `vmem brief` and read-only `vmem_brief`: intent/path-basename FTS/BM25 pointers with CJK matching, marked one-hop neighbors, deny/metadata PII screening and whole-line output within a 256..4096-byte cap (default 1024). Restricted refreshes preserve already-indexed denied rows and links for other readers while skipping new denied files; denied metadata consumes no pointer-read budget, and restricted rebuilds refuse before modifying the index. Omission counts and bounded metadata reads keep body content out of brief responses; host injection remains separate (#206).
 
 - Make partial rollback receipts report outstanding paths, keep the original forward cause with one final-state rollback drift diagnostic, and distinguish create rollback from backup restoration. Publication checks preserve I/O failures instead of misclassifying them as drift; amem promotion propagates the note's applied state and both MCP promotion receipts omit the refusal marker after applied errors. Spec-create path-check I/O remains IO; LINK is reserved for the native hard-link operation (#202).
 

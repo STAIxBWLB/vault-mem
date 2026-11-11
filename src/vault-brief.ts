@@ -24,9 +24,10 @@ export function vaultBrief(home: string, request: BriefRequest, expectedVault?: 
   const { vault: id, intent, paths = [], bytes = 1024 } = request;
   if (typeof intent !== "string" || !intent.trim() || Buffer.byteLength(intent) > 1024) throw new Error("brief: intent must contain 1..1024 UTF-8 bytes; use --for with a shorter task description");
   if (!Number.isSafeInteger(bytes) || bytes < 256 || bytes > 4096) throw new Error("brief: bytes must be an integer 256..4096; choose a supported byte cap");
-  if (!Array.isArray(paths) || paths.length > 16 || paths.some(p => typeof p !== "string" || !p.trim() || Buffer.byteLength(p) > 1024 || /\p{Cc}/u.test(p))) throw new Error("brief: paths must be at most 16 nonempty hints of at most 1024 bytes; shorten or remove path hints");
+  if (!Array.isArray(paths) || paths.length > 16 || paths.some(p => typeof p !== "string" || !p.trim() || Buffer.byteLength(p) > 1024 || /\p{Cc}/u.test(p))) throw new Error("brief: paths must be at most 16 nonempty hints of at most 1024 bytes without control characters; remove control characters, shorten or remove path hints");
   const words = [...new Set([intent, ...paths.map(p => p.split(/[\\/]/).at(-1)!.replace(/\.[^.]+$/, ""))].flatMap(value => value.normalize("NFC").match(/[\p{L}\p{N}]+/gu) ?? []))];
-  if (!words.length || words.length > 32 || Buffer.byteLength(words.join(" ")) > 4096) throw new Error("brief: expected 1..32 searchable words within 4096 bytes; shorten the intent or path basenames");
+  if (!words.length) throw new Error("brief: intent and path basenames contain no searchable letters or digits; provide words containing letters or digits");
+  if (words.length > 32 || Buffer.byteLength(words.join(" ")) > 4096) throw new Error("brief: expected 1..32 searchable words within 4096 bytes; shorten the intent or path basenames");
   const config = loadRegistry(home), vault = config.vaults.find(v => v.id === id);
   if (!vault) throw new Error("brief: unknown vault id; choose a registered id from vmem vaults list");
   if (expectedVault && !isDeepStrictEqual(vault, expectedVault)) throw new Error("brief: vault binding changed since MCP startup; restart the MCP server before reading");
@@ -41,14 +42,14 @@ export function vaultBrief(home: string, request: BriefRequest, expectedVault?: 
     const cache = new Map<string, BriefPointer | undefined>(); let remaining = 256 * 1024, attempts = 0;
     const load = (path: string) => {
       if (cache.has(path)) return cache.get(path);
+      if (denied(join(vault.path, "notes", path))) { cache.set(path, undefined); return undefined; }
       if (attempts >= 512 || remaining <= 0) return undefined;
       attempts++;
       let pointer = index.briefPointer(path, Math.min(4096, remaining));
       if (pointer) {
         remaining -= pointer.bytes;
-        const file = join(vault.path, "notes", pointer.path);
         const text = [pointer.path, pointer.title, pointer.type, pointer.description].join("\n");
-        if (denied(file) || /[\p{Cc}\p{Zl}\p{Zp}|]/u.test(pointer.path) || screenContent(text, vault, config).length || screenContent(flat(text), vault, config).length) pointer = undefined;
+        if (/[\p{Cc}\p{Zl}\p{Zp}|]/u.test(pointer.path) || screenContent(text, vault, config).length || screenContent(flat(text), vault, config).length) pointer = undefined;
       }
       cache.set(path, pointer); return pointer;
     };
