@@ -283,7 +283,7 @@ test("#206 denied cached metadata is never fetched or charged against the allowe
   f.note("z-visible", "Budgetneedle", "Same metadata.");
   const index = new VaultIndex(f.home, f.spec);
   try { index.scan(); } finally { index.close(); }
-  f.configure(config => { config.denyPaths = [join(f.notes, "a-denied-*")]; });
+  f.configure(config => { config.denyPaths = [join(f.notes, "a-denied-")]; });
   const real = VaultIndex.prototype.briefPointer, seen: string[] = [];
   const spy = spyOn(VaultIndex.prototype, "briefPointer").mockImplementation(function(this: VaultIndex, path: string, maximum: number) {
     seen.push(path);
