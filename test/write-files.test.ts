@@ -32,7 +32,7 @@ function fixture(kind: string) {
 function run(f: ReturnType<typeof fixture>, kind: string, fault: string) {
   const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/write-files-fault.ts"), f.home, kind, fault], { env: f.env, stdout: "pipe", stderr: "pipe", timeout: 20000 });
   expect(child.exitCode, child.stderr.toString()).toBe(0);
-  return JSON.parse(child.stdout.toString()) as { result: { ok: boolean; applied?: boolean; changed?: boolean; refused?: boolean; issues: { code: string; message: string; path?: string }[]; changes?: { path: string; applied?: boolean }[]; retainedBackups?: string[] }; injected: boolean; descriptorOpen: boolean; published: boolean; rollbackPublished: boolean; forwardPublications: number; renamedTarget: string; text?: string; replacement?: string; held: string; outside: string; secondTarget: string; secondHeld: string };
+  return JSON.parse(child.stdout.toString()) as { result: { ok: boolean; applied?: boolean; changed?: boolean; refused?: boolean; issues: { code: string; message: string; path?: string }[]; changes?: { path: string; applied?: boolean }[]; retainedBackups?: string[] }; injected: boolean; descriptorOpen: boolean; published: boolean; rollbackPublished: boolean; forwardPublications: number; linkAttempts: number; renamedTarget: string; text?: string; replacement?: string; held: string; outside: string; secondTarget: string; secondHeld: string };
 }
 for (const kind of ["note-update", "note-delete", "spec-update", "spec-create", "spec-delete"]) test(`${kind}: a last-moment parent symlink swap is reported after publication`, () => {
   const f = fixture(kind), output = run(f, kind, "parent-swap");
@@ -185,4 +185,20 @@ for (const code of ["EACCES", "EIO"]) test(`a publication post-check ${code} sta
   expect(receipt.issues.some(issue => issue.code === "ROLLBACK")).toBe(false);
   expect(receipt.retainedBackups ?? []).toEqual([]);
   expect(readdirSync(f.parent).filter(name => name.endsWith(".tmp"))).toEqual([]);
+}, 30_000);
+
+
+for (const code of ["EACCES", "EIO"]) test(`spec-create: pre-publication parent-check ${code} remains IO rather than a hard-link failure`, () => {
+  const f = fixture("spec-create"), output = run(f, "spec-create", `precheck-io-${code}`), receipt = output.result;
+  expect(output.injected, JSON.stringify(receipt)).toBe(true); expect(output.published).toBe(false);
+  expect(output.linkAttempts).toBe(0);
+  expect(receipt).toMatchObject({ ok: false, changed: false, refused: true });
+  expect(receipt.issues).toContainEqual(expect.objectContaining({ code: "IO", path: "nested/SPEC.md", message: expect.stringContaining(code) }));
+  expect(receipt.issues).toContainEqual(expect.objectContaining({ code: "IO", message: expect.stringContaining(`synthetic pre-publication ${code} parent probe unavailable`) }));
+  expect(receipt.issues.some(issue => issue.code === "LINK" || issue.code === "EEXIST" || issue.code === "DRIFT")).toBe(false);
+  expect(receipt.issues.some(issue => issue.message.includes("hard-link publication failed"))).toBe(false);
+  expect(existsSync(f.target)).toBe(false);
+  expect(readdirSync(f.parent)).toEqual([]); // staging was necessary for the fault, but its owned temp is removed
+  expect(readdirSync(join(f.home, "spec-mutations"))).toEqual([]);
+  expect(readFileSync(join(output.outside, "sentinel"), "utf8")).toBe("foreign sentinel\n");
 }, 30_000);

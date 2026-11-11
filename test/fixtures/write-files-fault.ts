@@ -11,7 +11,7 @@ const secondTarget = join(root, "notes/beta.md"), secondHeld = join(dirname(root
 const outside = join(dirname(root), "outside"), held = join(dirname(root), "held-parent");
 original.mkdirSync(outside); original.writeFileSync(join(outside, "sentinel"), "foreign sentinel\n");
 const descriptors = new Map<number, string>(), readonlyTargets = new Map<number, string>(), readonlyTemps = new Set<number>();
-let stagedTemps = 0, stagedTargetReads = 0, directoryFailed = false, rollbackPublished = false, forwardPublications = 0;
+let stagedTemps = 0, stagedTargetReads = 0, directoryFailed = false, rollbackPublished = false, forwardPublications = 0, linkAttempts = 0, precheckArmed = false;
 let injected = false, published = false, stagingFailed = false, descriptorOpen = false, replacement: string | undefined;
 function swap(temp?: string) {
   if (fault !== "parent-swap" || injected) return;
@@ -37,6 +37,11 @@ mock.module("node:fs", () => ({ ...original,
     return fd;
   },
   lstatSync: (...args: Parameters<typeof fs.lstatSync>) => {
+    if (fault.startsWith("precheck-io-") && precheckArmed && !injected && String(args[0]) === parent) {
+      injected = true;
+      const code = fault.slice("precheck-io-".length);
+      throw Object.assign(new Error(`synthetic pre-publication ${code} parent probe unavailable`), { code });
+    }
     if (fault.startsWith("postcheck-io-") && published && !injected && String(args[0]) === parent) {
       injected = true;
       const code = fault.slice("postcheck-io-".length);
@@ -95,6 +100,9 @@ mock.module("node:fs", () => ({ ...original,
     const readTarget = readonlyTargets.get(fd); readonlyTargets.delete(fd);
     const readTemp = readonlyTemps.delete(fd);
     original.closeSync(fd);
+    // The staged file's final readonly verification has finished; the next parent lstat is the
+    // shared helper's pre-publication check, rather than staging or native hard-link publication.
+    if (readTemp && fault.startsWith("precheck-io-")) precheckArmed = true;
     if (!injected && fault === "partial-prepublish" && published && readTarget === secondTarget) {
       injected = true; original.renameSync(secondTarget, secondHeld); original.symlinkSync(join(outside, "sentinel"), secondTarget);
     }
@@ -108,7 +116,7 @@ mock.module("node:fs", () => ({ ...original,
     }
   },
   linkSync: (...args: Parameters<typeof fs.linkSync>) => {
-    if (String(args[1]) === target) { swap(String(args[0])); original.linkSync(...args); published = true; }
+    if (String(args[1]) === target) { linkAttempts++; swap(String(args[0])); original.linkSync(...args); published = true; }
     else original.linkSync(...args);
   },
   unlinkSync: (...args: Parameters<typeof fs.unlinkSync>) => {
@@ -152,4 +160,4 @@ if (kind === "note-multi" || kind === "note-move") {
   const command = kind === "note-move" ? "move" : "link", to = kind === "note-move" ? "apricot" : "beta";
   text = renderWriteReceipt(result as unknown as WriteReceipt, PLAIN, { argv: [command], positional: [command, "alpha", to] });
 }
-console.log(JSON.stringify({ result, text, injected, descriptorOpen, published, rollbackPublished, forwardPublications, replacement, held, outside, secondTarget, secondHeld, renamedTarget }));
+console.log(JSON.stringify({ result, text, injected, descriptorOpen, published, rollbackPublished, forwardPublications, linkAttempts, replacement, held, outside, secondTarget, secondHeld, renamedTarget }));

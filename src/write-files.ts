@@ -10,6 +10,10 @@ export class PublicationDrift extends Error {
       : "this step was not published; stop concurrent writers, inspect the registered root and target, restore the original plain parent directories, and review any earlier applied changes before another mutation"}`);
   }
 }
+/** Only failures of the native hard-link operation, rather than either path check. */
+export class PublicationLinkFailure extends Error {
+  constructor(cause: unknown) { super("hard-link publication failed", { cause }); }
+}
 export interface PublicationPath { root: string; file: string; parents: { path: string; identity: string }[] }
 export type PublicationOperation = { kind: "rename" | "link"; temp: string } | { kind: "unlink" };
 const identity = (s: { dev: bigint; ino: bigint }) => `${s.dev}:${s.ino}`;
@@ -48,7 +52,10 @@ export function publishFile(path: PublicationPath, operation: PublicationOperati
   // The target may be absent for create; existing-content guards remain the writer's responsibility.
   checkPublicationPath(path, true);
   if (operation.kind === "rename") renameSync(operation.temp, path.file);
-  else if (operation.kind === "link") linkSync(operation.temp, path.file);
+  else if (operation.kind === "link") {
+    try { linkSync(operation.temp, path.file); }
+    catch (cause) { throw new PublicationLinkFailure(cause); }
+  }
   else unlinkSync(path.file);
   // Record persisted state before the post-publication guard can fail.
   published();

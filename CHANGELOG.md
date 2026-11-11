@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Make partial rollback receipts report outstanding paths, keep the original forward cause with one final-state rollback drift diagnostic, and distinguish create rollback from backup restoration. Publication checks preserve I/O failures instead of misclassifying them as drift; applied-with-errors MCP promotion receipts omit the refusal marker (#202).
+- Make partial rollback receipts report outstanding paths, keep the original forward cause with one final-state rollback drift diagnostic, and distinguish create rollback from backup restoration. Publication checks preserve I/O failures instead of misclassifying them as drift; amem promotion propagates the note's applied state and both MCP promotion receipts omit the refusal marker after applied errors. Spec-create path-check I/O remains IO; LINK is reserved for the native hard-link operation (#202).
 
 ## [0.6.0] - 2026-11-11
 

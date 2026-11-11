@@ -155,7 +155,7 @@ export async function promoteFromAmem(home: string, request: PromoteRequest, opt
     if (request.fingerprint !== fingerprint) return { ...result, ok: false, issues: [issue("V09", "stale or missing preview fingerprint")] };
     const note = applyWrite(home, { vault: spec.id, operation, channel: request.channel ?? "cli",
       log: { type: "LEARN", project: logProjectFor(seam.project, request.logProject), source: `mem:${request.id}`, dest: path, note: `promoted: ${entry.kind}` } }, { env: options.env, now });
-    if (!note.ok || !note.applied) return { ...result, ok: false, note, issues: note.issues };
+    if (!note.ok || !note.applied) return { ...result, ok: false, applied: note.applied, note, issues: note.issues };
     try {
       await seam.recordLink(request.id, path);
       return { ...result, ok: note.log?.ok !== false, applied: true, note, linked: path, issues: note.log?.ok === false ? note.log.issues : [] };
