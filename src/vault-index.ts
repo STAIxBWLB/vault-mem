@@ -302,7 +302,13 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
       for (const path of paths) {
         this.adapter?.validatePath(path);
         const file = join(this.adapter ? this.root : notesDir, path);
-        if (options.denyPaths && (isDenied(file, options.denyPaths) || isDenied(canonicalPath(file), options.denyPaths))) continue;
+        if (options.denyPaths && (isDenied(file, options.denyPaths) || isDenied(canonicalPath(file), options.denyPaths))) {
+          // A restricted reader must not delete another reader's cached rows or invalidate link resolution.
+          // Preserve known rows without inspecting their metadata/source; a new denied file stays unindexed.
+          present.add(path);
+          if (previous.has(path)) live.add(path);
+          continue;
+        }
         const before = this.adapter ? specFileIO(path, "inspect", () => lstatSync(file)) : lstatSync(file);
         if (!before.isFile() || before.isSymbolicLink()) throw new Error(this.adapter ? `spec discovery ${path}: selected path changed; restore a plain file and retry` : `vault ${this.vault.id}: note path changed`);
         if (!this.adapter && before.size > MAX_NOTE_BYTES) throw new Error(`vault ${this.vault.id}, ${path}: note exceeds ${MAX_NOTE_BYTES} bytes`);

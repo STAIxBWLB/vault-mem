@@ -1,3 +1,5 @@
+import { Database } from "bun:sqlite";
+import { VaultIndex } from "../src/vault-index.ts";
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -224,4 +226,44 @@ test("#206 brief leaves vault content and registry bytes unchanged while only de
   run(["brief", "mine", "--for", "lantern", "--json"], f.env);
   await createVaultMcp(f.home, f.env).handlers.vmem_brief!({ intent: "lantern" });
   expect(contentFiles(f.vault)).toEqual(before); expect(readFileSync(f.configFile)).toEqual(config);
+});
+
+
+test("#206 restricted refresh preserves shared notes and links without a brief/search reindex cycle", () => {
+  const f = fixture();
+  f.note("visible", "Sharedcache visible", "Allowed pointer.", "[[denied]]");
+  f.note("denied", "Sharedcache denied", "Denied cached pointer.", "[[visible]]");
+  const index = new VaultIndex(f.home, f.spec);
+  const snapshot = () => {
+    const db = new Database(index.file, { readonly: true });
+    try { return { notes: db.query("SELECT path,hash,metadata,title,description FROM notes ORDER BY path").all(), links: db.query("SELECT source,ordinal,data FROM links ORDER BY source,ordinal").all(), analysis: db.query("SELECT path,hash,metadata FROM analysis_notes ORDER BY path").all() }; }
+    finally { db.close(); }
+  };
+  try {
+    index.scan(); const before = snapshot();
+    f.configure(config => { config.denyPaths = [join(f.notes, "denied.md")]; });
+    const brief = vaultBrief(f.home, { vault: "mine", intent: "sharedcache", bytes: 4096 });
+    expect(JSON.stringify(brief)).not.toContain("notes/denied.md");
+    expect(snapshot()).toEqual(before);
+    expect(index.scan()).toMatchObject({ changed: 0, removed: 0 });
+    expect(snapshot()).toEqual(before);
+    expect(index.links("visible").some(link => link.resolved === "denied.md")).toBe(true);
+    expect(index.scan(false, { denyPaths: [join(f.notes, "denied.md")] })).toMatchObject({ changed: 0, removed: 0 });
+    expect(snapshot()).toEqual(before);
+  } finally { index.close(); }
+});
+
+test("#206 a new denied file remains unindexed until an unrestricted reader refreshes it", () => {
+  const f = fixture(); f.note("visible", "Sharedcache visible");
+  const index = new VaultIndex(f.home, f.spec);
+  try {
+    index.scan(); f.note("new-denied", "Sharedcache denied newcomer");
+    f.configure(config => { config.denyPaths = [join(f.notes, "new-denied.md")]; });
+    const brief = vaultBrief(f.home, { vault: "mine", intent: "sharedcache", bytes: 4096 });
+    expect(JSON.stringify(brief)).not.toContain("new-denied");
+    expect(index.search("sharedcache").map(row => row.path)).toEqual(["visible.md"]);
+    expect(index.scan()).toMatchObject({ changed: 1, removed: 0 });
+    expect(index.search("sharedcache").map(row => row.path)).toContain("new-denied.md");
+    expect(index.scan()).toMatchObject({ changed: 0, removed: 0 });
+  } finally { index.close(); }
 });
