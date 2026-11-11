@@ -7,11 +7,11 @@ if (!home || !kind || !fault) throw new Error("synthetic publication fault needs
 const original = { ...fs }, config = JSON.parse(original.readFileSync(join(home, "vmem.config.json"), "utf8"));
 const root: string = kind.startsWith("note") ? config.vaults[0].path : config.specs[0].path;
 const target = join(root, kind.startsWith("note") ? "notes/alpha.md" : "nested/SPEC.md"), parent = dirname(target);
-const secondTarget = join(root, "notes/beta.md"), secondHeld = join(dirname(root), "held-beta.md");
+const secondTarget = join(root, "notes/beta.md"), secondHeld = join(dirname(root), "held-beta.md"), renamedTarget = join(root, "notes/apricot.md");
 const outside = join(dirname(root), "outside"), held = join(dirname(root), "held-parent");
 original.mkdirSync(outside); original.writeFileSync(join(outside, "sentinel"), "foreign sentinel\n");
 const descriptors = new Map<number, string>(), readonlyTargets = new Map<number, string>(), readonlyTemps = new Set<number>();
-let stagedTemps = 0, stagedTargetReads = 0, directoryFailed = false, rollbackPublished = false;
+let stagedTemps = 0, stagedTargetReads = 0, directoryFailed = false, rollbackPublished = false, forwardPublications = 0, linkAttempts = 0, precheckArmed = false;
 let injected = false, published = false, stagingFailed = false, descriptorOpen = false, replacement: string | undefined;
 function swap(temp?: string) {
   if (fault !== "parent-swap" || injected) return;
@@ -36,6 +36,29 @@ mock.module("node:fs", () => ({ ...original,
     }
     return fd;
   },
+  lstatSync: (...args: Parameters<typeof fs.lstatSync>) => {
+    if (fault.startsWith("precheck-io-") && precheckArmed && !injected && String(args[0]) === parent) {
+      injected = true;
+      const code = fault.slice("precheck-io-".length);
+      throw Object.assign(new Error(`synthetic pre-publication ${code} parent probe unavailable`), { code });
+    }
+    if (fault.startsWith("postcheck-io-") && published && !injected && String(args[0]) === parent) {
+      injected = true;
+      const code = fault.slice("postcheck-io-".length);
+      throw Object.assign(new Error(`synthetic post-publication ${code} path probe unavailable`), { code });
+    }
+    return original.lstatSync(...args);
+  },
+  readSync: (fd: number, buffer: NodeJS.ArrayBufferView, offset: number, length: number, position: number | null) => {
+    if (fault === "non-drift-partial-rollback" && !injected && forwardPublications >= 2 && readonlyTargets.get(fd) === secondTarget) {
+      injected = true;
+      // A torn final read is an ordinary V09, not a namespace PublicationDrift. The earlier deletion also
+      // gains an external replacement, so only the new destination can be rolled back safely.
+      original.appendFileSync(secondTarget, "External third-target edit.\n");
+      original.writeFileSync(target, "External first-target replacement.\n");
+    }
+    return original.readSync(fd, buffer, offset, length, position);
+  },
   writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
     if (fault === "temp-replaced" && descriptors.get(Number(args[0]))?.endsWith(".tmp") && !stagingFailed) {
       stagingFailed = true; throw new Error("synthetic staging failure before cleanup");
@@ -56,12 +79,20 @@ mock.module("node:fs", () => ({ ...original,
         original.renameSync(...args); rollbackPublished = true; injected = true;
         original.writeFileSync(join(outside, basename(target)), "foreign rollback target\n");
         original.renameSync(parent, held); original.symlinkSync(outside, parent);
-      } else { swap(String(args[0])); original.renameSync(...args); published = true; }
-    } else original.renameSync(...args);
+      } else {
+        const restoring = published && injected && fault.startsWith("postcheck-io-");
+        swap(String(args[0])); original.renameSync(...args); published = true;
+        if (restoring) rollbackPublished = true;
+        else forwardPublications++;
+      }
+    } else {
+      original.renameSync(...args);
+      if (String(args[1]) === renamedTarget && !injected) forwardPublications++;
+    }
   },
   fsyncSync: (fd: number) => {
-    if (fault === "rollback-parent-swap" && published && !directoryFailed && original.fstatSync(fd).isDirectory()) {
-      directoryFailed = true; throw new Error("synthetic directory flush failure before rollback");
+    if ((fault === "rollback-parent-swap" || fault === "created-rollback-parent-swap") && published && !directoryFailed && original.fstatSync(fd).isDirectory()) {
+      directoryFailed = true; throw Object.assign(new Error("synthetic directory flush failure before rollback"), { code: "EIO" });
     }
     return original.fsyncSync(fd);
   },
@@ -69,6 +100,9 @@ mock.module("node:fs", () => ({ ...original,
     const readTarget = readonlyTargets.get(fd); readonlyTargets.delete(fd);
     const readTemp = readonlyTemps.delete(fd);
     original.closeSync(fd);
+    // The staged file's final readonly verification has finished; the next parent lstat is the
+    // shared helper's pre-publication check, rather than staging or native hard-link publication.
+    if (readTemp && fault.startsWith("precheck-io-")) precheckArmed = true;
     if (!injected && fault === "partial-prepublish" && published && readTarget === secondTarget) {
       injected = true; original.renameSync(secondTarget, secondHeld); original.symlinkSync(join(outside, "sentinel"), secondTarget);
     }
@@ -82,19 +116,31 @@ mock.module("node:fs", () => ({ ...original,
     }
   },
   linkSync: (...args: Parameters<typeof fs.linkSync>) => {
-    if (String(args[1]) === target) { swap(String(args[0])); original.linkSync(...args); published = true; }
+    if (String(args[1]) === target) { linkAttempts++; swap(String(args[0])); original.linkSync(...args); published = true; }
     else original.linkSync(...args);
   },
   unlinkSync: (...args: Parameters<typeof fs.unlinkSync>) => {
-    if (String(args[0]) === target) { swap(); original.unlinkSync(...args); published = true; }
-    else original.unlinkSync(...args);
+    if (String(args[0]) === target) {
+      if (fault === "created-rollback-parent-swap" && published && directoryFailed && !injected) {
+        original.unlinkSync(...args); rollbackPublished = true; injected = true;
+        original.writeFileSync(join(outside, basename(target)), "foreign rollback target\n");
+        original.renameSync(parent, held); original.symlinkSync(outside, parent);
+      } else { swap(); original.unlinkSync(...args); published = true; forwardPublications++; }
+    } else {
+      original.unlinkSync(...args);
+      if (String(args[0]) === renamedTarget && fault === "non-drift-partial-rollback" && injected) rollbackPublished = true;
+    }
   },
 }));
 let result: Record<string, unknown>;
 if (kind.startsWith("note")) {
   const { createVaultMcp } = await import("../../src/mcp-vault.ts");
   const mcp = createVaultMcp(home, process.env);
-  if (kind === "note-multi") result = await mcp.handlers.vmem_link!({ from: "alpha", to: "beta", relation: "supports" }) as Record<string, unknown>;
+  if (kind === "note-move") {
+    const preview = await mcp.handlers.vmem_move!({ from: "alpha", to: "apricot" }) as Record<string, unknown>;
+    result = await mcp.handlers.vmem_move!({ from: "alpha", to: "apricot", confirm: true, fingerprint: preview.fingerprint }) as Record<string, unknown>;
+  } else if (kind === "note-create") result = await mcp.handlers.vmem_create!({ stem: "alpha", title: "Created synthetic note", type: "insight", description: "Synthetic created write safety evidence.", domain: "research", topics: ["research"] }) as Record<string, unknown>;
+  else if (kind === "note-multi") result = await mcp.handlers.vmem_link!({ from: "alpha", to: "beta", relation: "supports" }) as Record<string, unknown>;
   else if (kind.endsWith("delete")) {
     const preview = await mcp.handlers.vmem_delete!({ path: "alpha" }) as Record<string, unknown>;
     result = await mcp.handlers.vmem_delete!({ path: "alpha", confirm: true, fingerprint: preview.fingerprint }) as Record<string, unknown>;
@@ -109,8 +155,9 @@ if (kind.startsWith("note")) {
   } else result = await mcp.handlers.vmem_spec_update!({ id: "child", set: { title: "Changed synthetic spec" } }) as Record<string, unknown>;
 }
 let text: string | undefined;
-if (kind === "note-multi") {
+if (kind === "note-multi" || kind === "note-move") {
   const { renderWriteReceipt } = await import("../../src/write-output.ts"), { PLAIN } = await import("../../src/text-output.ts");
-  text = renderWriteReceipt(result as unknown as WriteReceipt, PLAIN, { argv: ["link"], positional: ["link", "alpha", "beta"] });
+  const command = kind === "note-move" ? "move" : "link", to = kind === "note-move" ? "apricot" : "beta";
+  text = renderWriteReceipt(result as unknown as WriteReceipt, PLAIN, { argv: [command], positional: [command, "alpha", to] });
 }
-console.log(JSON.stringify({ result, text, injected, descriptorOpen, published, rollbackPublished, replacement, held, outside, secondTarget, secondHeld }));
+console.log(JSON.stringify({ result, text, injected, descriptorOpen, published, rollbackPublished, forwardPublications, linkAttempts, replacement, held, outside, secondTarget, secondHeld, renamedTarget }));

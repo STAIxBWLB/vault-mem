@@ -308,9 +308,10 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
           const backup = backups.get(change.path);
           if (rollbackError instanceof PublicationDrift) {
             rollbackDrift = rollbackError;
-            recordError("ROLLBACK", `${restored
-              ? "rollback restored the original target; its backup name was consumed by publication"
-              : "rollback was not published; inspect the listed retained backup"}; ${rollbackError.message}`, change.path);
+            let outcome: string;
+            if (change.before === null) outcome = restored ? "rollback removed the created target" : "rollback could not remove the created target";
+            else outcome = restored ? "rollback restored the original target; its backup name was consumed" : "rollback was not published; inspect the listed retained backup";
+            recordError("ROLLBACK", `${outcome}; publication path identity or containment changed during rollback; ${outstanding.size > 0 ? "changes remain applied" : "no applied changes remain"}; stop concurrent writers, inspect the registered root and target, and restore the original plain parent directories before another mutation`, change.path);
             for (const path of outstanding) retainBackup(path);
             break;
           }
@@ -318,7 +319,9 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
         }
       }
       applied = outstanding.size > 0;
-      if (rollbackDrift) { appliedPaths = outstanding; throw rollbackDrift; }
+      if (applied || rollbackDrift) appliedPaths = outstanding;
+      // The rollback diagnostic records drift once; the outer handler must retain the original forward cause.
+      if (rollbackDrift) throw error;
       for (const dir of new Set(committed.map(change => dirname(join(root, change.path))))) {
         try { syncDirectory(dir); } catch { recordError("ROLLBACK", "rollback directory flush failed"); }
       }
@@ -340,7 +343,11 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     if (error instanceof WriteRefusal) issues.push(...error.issues.map(issue => request?.operation?.op === "merge" && !issue.message.includes(";")
       ? { ...issue, message: `${issue.message}; repair the indicated merge input or note, then request a fresh preview` } : issue));
     else if (error instanceof PublicationDrift) recordError("V09", error.message, error.file.slice(root.length + 1));
-    else recordError("IO", "write operation failed; inspect filesystem permissions and retry");
+    else {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      const cause = error instanceof Error ? error.message.slice(0, 500) : "unknown I/O failure";
+      recordError("IO", `write operation failed${typeof code === "string" ? ` (${code})` : ""}: ${cause}; inspect filesystem permissions, storage and the write receipt before retrying`);
+    }
     result = { ok: false, applied, issues, changes: reportedChanges(), ...(fingerprint ? { fingerprint } : {}), indexUpdated };
   } finally {
     try { index?.close(); } catch { recordError("INDEX", "derived index close failed"); }

@@ -1,4 +1,4 @@
-import { capturePublicationPath, publishFile, cleanupOwnedFile, PublicationDrift } from "./write-files.ts";
+import { capturePublicationPath, publishFile, cleanupOwnedFile, PublicationDrift, PublicationLinkFailure } from "./write-files.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, rmdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
@@ -342,9 +342,9 @@ export function mutateSpec(home: string, request: Pick<SpecUpdateRequest, "id" |
       if (change.before === null && !result.changed && error instanceof PublicationDrift && error.targetExists) {
         refuse("EEXIST", "create target appeared before publication; inspect the existing target and choose an absent path before retrying", change.path);
       }
-      if (change.before !== null || error instanceof PublicationDrift || result.changed) throw error;
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") refuse("EEXIST", "create target appeared before publication; inspect the existing file and choose an absent path before retrying", change.path);
-      refuse("LINK", `create hard-link publication failed (${writeErrorCause(error)}); check filesystem hard-link support and permissions and free space, then choose a writable worktree on a filesystem supporting same-directory hard links; create never falls back to rename`, change.path);
+      if (change.before !== null || result.changed || !(error instanceof PublicationLinkFailure)) throw error;
+      if ((error.cause as NodeJS.ErrnoException | undefined)?.code === "EEXIST") refuse("EEXIST", "create target appeared before publication; inspect the existing file and choose an absent path before retrying", change.path);
+      refuse("LINK", `create hard-link publication failed (${writeErrorCause(error.cause)}); check filesystem hard-link support and permissions and free space, then choose a writable worktree on a filesystem supporting same-directory hard links; create never falls back to rename`, change.path);
     }
     if (change.before === null) { cleanupOwnedFile(temp!, tempFd!); temp = undefined; }
     syncDirectory(parent); syncCreatedParents(createdDirs); result.ok = true;
