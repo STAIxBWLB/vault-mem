@@ -1,4 +1,4 @@
-import { realPath } from "./platform.ts";
+import { realPath, canonicalPath, isDenied } from "./platform.ts";
 import { Database } from "bun:sqlite";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -78,6 +78,7 @@ export interface NoteReadResult {
   headings?: string[];
   headingsTruncated?: boolean;
 }
+export interface BriefPointer { path: string; title: string; type: string; description: string; bytes: number }
 export interface SearchOptions { limit?: number; type?: string; domain?: string }
 export interface SearchResult { path: string; title: string; description: string; type: string; domain: string; score: number; snippet: string }
 interface StoredNote extends IndexedNote { metadata: string; source: string }
@@ -282,7 +283,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     return this.db.query<Omit<LinkNote, "aliases"> & { aliases: string }, []>("SELECT path,title,aliases,body FROM notes ORDER BY path").all().map(row => ({ ...row, aliases: JSON.parse(row.aliases) as string[] }));
   }
   /** Scan metadata each call; hash only new or metadata-changed files. Atomic cache update. */
-  scan(rebuild = false, options: { skipInvalidFrontmatter?: boolean; captureInvalidFrontmatter?: boolean } = {}): { notes: number; changed: number; removed: number; skipped?: string[] } {
+  scan(rebuild = false, options: { skipInvalidFrontmatter?: boolean; captureInvalidFrontmatter?: boolean; denyPaths?: string[] } = {}): { notes: number; changed: number; removed: number; skipped?: string[] } {
     // Discovery/binding Git calls must never hold a SQLite writer lock.
     let preparedPaths: string[] | undefined;
     if (this.adapter) { this.adapter.validate(); preparedPaths = this.adapter.paths(); }
@@ -301,6 +302,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
       for (const path of paths) {
         this.adapter?.validatePath(path);
         const file = join(this.adapter ? this.root : notesDir, path);
+        if (options.denyPaths && (isDenied(file, options.denyPaths) || isDenied(canonicalPath(file), options.denyPaths))) continue;
         const before = this.adapter ? specFileIO(path, "inspect", () => lstatSync(file)) : lstatSync(file);
         if (!before.isFile() || before.isSymbolicLink()) throw new Error(this.adapter ? `spec discovery ${path}: selected path changed; restore a plain file and retry` : `vault ${this.vault.id}: note path changed`);
         if (!this.adapter && before.size > MAX_NOTE_BYTES) throw new Error(`vault ${this.vault.id}, ${path}: note exceeds ${MAX_NOTE_BYTES} bytes`);
@@ -440,6 +442,44 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     return rows.filter(row => !snapshot || snapshot.get(row.path) === row.sourceHash)
       .slice(snapshot ? snapshotOffset : 0, (snapshot ? snapshotOffset : 0) + (snapshot && allSnapshotRows ? 10000 : limit))
       .map(({ sourceHash: _, ...row }) => ({ ...row, title: boundedText(row.title, 512).content, snippet: boundedText(row.snippet, 1024).content, type: boundedText(row.type, 256).content, domain: boundedText(row.domain, 256).content }));
+  }
+  /** Intent words are OR terms; reuse the search tokenizer, BM25 weights and CJK substring/strong-match rules.
+   * Materialize scores before grouping: FTS5 auxiliary functions cannot run in an aggregate context. No bodies leave SQL. */
+  briefMatches(words: string[]): { path: string; score: number }[] {
+    if (!words.length || words.length > 32 || words.some(word => !word || Buffer.byteLength(word) > 4096)) throw new Error("brief: expected 1..32 bounded search words; shorten the intent and path hints");
+    const { tokens, runs } = splitTerms(words), parts: string[] = [], params: string[] = [];
+    if (tokens.length) {
+      parts.push("SELECT path,bm25(fts,0,5,2,1) AS score,1 AS strong FROM fts WHERE fts MATCH ?");
+      params.push(tokens.join(" OR "));
+    }
+    if (runs.length) {
+      parts.push(`SELECT path,bm25(grams,0,5,2,1) AS score,
+        (path IN (SELECT path FROM fts WHERE fts MATCH ?) OR path IN (SELECT path FROM grams WHERE grams MATCH ?)) AS strong
+        FROM grams WHERE grams MATCH ?`);
+      params.push(runs.map(run => `"${run}"`).join(" OR "), `{title description} : (${runs.map(gramPhrase).join(" OR ")})`, runs.map(gramPhrase).join(" OR "));
+    }
+    const rows = this.db.query<{ path: string; score: number }, string[]>(`WITH hits AS MATERIALIZED (${parts.join(" UNION ALL ")})
+      SELECT path,min(score) AS score,max(strong) AS strength FROM hits GROUP BY path ORDER BY strength DESC,score,path LIMIT 10001`).all(...params);
+    if (rows.length > 10000) throw new Error("brief: more than 10000 matched notes; narrow the intent or use search filters");
+    return rows;
+  }
+  /** Enforce the remaining metadata read budget inside SQL, before values cross into JavaScript. */
+  briefPointer(path: string, maximum: number): BriefPointer | undefined {
+    if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 4096) throw new Error("brief: metadata read bound must be 1..4096 bytes; reduce the requested brief");
+    const bytes = "length(CAST(path AS BLOB))+length(CAST(title AS BLOB))+length(CAST(type AS BLOB))+length(CAST(description AS BLOB))";
+    return this.db.query<BriefPointer, [string, number]>(`SELECT path,title,type,description,${bytes} AS bytes FROM notes WHERE path=? AND (${bytes})<=?`).get(path, maximum) ?? undefined;
+  }
+  /** Resolved incoming and outgoing paths only, never link context/aliases or note bodies. */
+  briefNeighbors(paths: string[]): string[] {
+    if (!paths.length) return [];
+    if (paths.length > 5) throw new Error("brief: at most five seed notes; use the top ranked hits");
+    const slots = paths.map(() => "?").join(",");
+    const rows = this.db.query<{ path: string }, string[]>(`SELECT DISTINCT
+      CASE WHEN source IN (${slots}) THEN json_extract(data,'$.resolved') ELSE source END AS path
+      FROM links WHERE json_extract(data,'$.resolved') IS NOT NULL AND
+      (source IN (${slots}) OR json_extract(data,'$.resolved') IN (${slots})) ORDER BY path LIMIT 10001`).all(...paths, ...paths, ...paths);
+    if (rows.length > 10000) throw new Error("brief: more than 10000 linked neighbors; narrow the intent or use graph neighbors");
+    return rows.map(row => row.path);
   }
   /**
    * The one indexed title closest to a dead link's text, or undefined when no title matches or the best match is at

@@ -1,3 +1,4 @@
+import { vaultBrief } from "./vault-brief.ts";
 import { createSpecMcp } from "./mcp-spec.ts";
 import { SPEC_COMMANDS } from "./spec-command-table.ts";
 import { analysisInput } from "./analysis-input.ts";
@@ -32,7 +33,7 @@ const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLeng
 const metadata = { type: "object", maxProperties: 32, properties: { authors: { type: "array", minItems: 1, maxItems: 100, items: string(1024) } }, additionalProperties: scalar };
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
-export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
+export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_brief", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
   "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_stats", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Server `initialize` instructions: purpose, navigation order and the write contract. Pinned by a test, under 400 bytes. */
@@ -46,6 +47,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
   return [
     tool("vmem_status", "Registered vaults with health, write policy, effective pii and the piiPolicy matrix (read-only).", object({})),
     tool("vmem_search", "Full-text (BM25) search over indexed notes. Literal AND terms.", object({ query: string(1000), vault, limit: integer(1, 50), type: string(64), domain: string(64) }, ["query"])),
+    tool("vmem_brief", "Intent-ranked note pointers and one-hop neighbors, with metadata PII/deny screening and whole-line byte cap including the result JSON. No note bodies; read a selected pointer with vmem_read.", object({ vault, intent: string(1024), paths: { type: "array", maxItems: 16, items: string(1024) }, bytes: integer(256, 4096) }, ["intent"])),
     tool("vmem_read", "Read one note by stem, alias or notes/ path: frontmatter, body, sha256. Bounded by maxBytes; section selects an exact H2, offset pages UTF-8 byte ranges, and truncated reads list H2 headings/nextOffset.", object({ path: note, vault, maxBytes: integer(1, 65536), section: string(1024), offset: integer(0, MAX_NOTE_BYTES) }, ["path"])),
     tool("vmem_read_many", "Read up to 20 notes (8 KiB each).", object({ paths: { type: "array", minItems: 1, maxItems: 20, items: note }, vault }, ["paths"])),
     tool("vmem_list", "List indexed notes under notes/ in path order, optionally by stem prefix, with each note's mtime and the filtered total. Pass the returned nextCursor as cursor for the next page.", object({ vault, prefix: string(256, 0), limit: integer(1, 500), cursor: string(1024) })),
@@ -112,6 +114,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     return { path, sha256: hash, truncated, frontmatter: parsed.data, body: parsed.body };
   };
   const handlers: Record<string, McpHandler> = {
+    vmem_brief: args => vaultBrief(home, { vault: pick(args).id, intent: args.intent as string, paths: args.paths as string[] | undefined, bytes: args.bytes as number | undefined }, pick(args)),
     vmem_promote: async args => {
       const { promoteToOrg } = await import("./org-promote.ts");
       const source = vaults.find(v => v.id === defaultVault && v.kind === "personal");
