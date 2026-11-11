@@ -1,3 +1,4 @@
+import { runBriefCommand } from "./vault-brief.ts";
 import { runSpecCommand, specTools } from "./mcp-spec.ts";
 import { tidyVault, TIDY_RULES } from "./tidy.ts";
 import { originCheck } from "./sync.ts";
@@ -84,6 +85,7 @@ function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLA
   if (args[0] === "promote" || args[0] === "sync") return runOrgCommand(args[0], args.slice(1), resolveHome(env).home, env, text);
   if (args[0] === "log") return runLogCommand(args.slice(1), resolveHome(env).home, env, text);
   if (isWriteCommand(args[0]!)) return runWriteCommand(args[0]!, args.slice(1), resolveHome(env).home, env, text);
+  if (args[0] === "brief") return runBriefCommand(args.slice(1), resolveHome(env).home);
   if (isReadCommand(args[0]!)) return runReadCommand(args[0]!, args.slice(1), resolveHome(env).home, text);
   const group = args[0] === "vaults" || args[0] === "specs";
   const command = group ? `${args[0]} ${args[1] ?? ""}` : args[0];
