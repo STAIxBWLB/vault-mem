@@ -4,6 +4,7 @@
 
 - Skill mining reports how many main-session `Record` rows within the mining window sat below a truncated capture shard's read window and were not mined: JSON `dropped.recordOutsideWindow`, `recordOutsideCapped` and `recordOutsideUnavailable`, and one Markdown report line. The count comes from agent-mem's index-only bounded seek and reads no row content (#163).
 - Raise the exact `@staix/agent-mem` pin from 0.23.0 to 0.24.0. Skill mining skips capture machine directories without a capture database, which 0.24.0 creates for its curated brief cache, instead of counting them as unreadable.
+- The skill-mining report line for uncounted shards now says why (no Record index yet, or no bounded index plan) and how to build a missing index (an off-hook `amem search` in the project), with singular/plural agreement (#220).
 
 ## [0.8.0] - 2026-11-12
 

@@ -400,7 +400,7 @@ export function renderReport(result: Omit<MineResult, "report">, today: string, 
     `- projects: ${result.projects.length}`,
     `- dropped: secret ${result.dropped.secret}, policy ${result.dropped.policy}, oversized ${result.dropped.oversized}, duplicate ${result.dropped.duplicate}, unreadable ${result.dropped.unreadable}, malformed Record ${result.dropped.malformedRecord}`,
     `- truncated capture machine shards: ${result.dropped.truncatedCapture}; rows of any event beyond maxReadRows were not read`,
-    `- Record rows outside the read window: ${result.dropped.recordOutsideCapped ? "at least " : ""}${result.dropped.recordOutsideWindow}${result.dropped.recordOutsideUnavailable ? `; ${result.dropped.recordOutsideUnavailable} truncated shards could not be counted` : ""}`,
+    `- Record rows outside the read window: ${result.dropped.recordOutsideCapped ? "at least " : ""}${result.dropped.recordOutsideWindow}${result.dropped.recordOutsideUnavailable ? `; ${result.dropped.recordOutsideUnavailable} truncated ${result.dropped.recordOutsideUnavailable === 1 ? "shard" : "shards"} could not be counted (no Record index yet, or no bounded index plan; an off-hook \`amem search\` in the project builds a missing index)` : ""}`,
     `- graph: ${result.graph.nodes} nodes, ${result.graph.edges} edges, ${result.graph.communities} communities (deterministic Leiden)`, "",
   ];
   if (result.godNodes.length) {
