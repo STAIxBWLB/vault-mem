@@ -431,8 +431,8 @@ export function graphPath(graph: VaultGraph, from: string, to: string, options: 
   while (ids[0] !== from) ids.unshift(parent.get(ids[0]!)!);
   const steps: GraphEdge[] = [];
   for (let i = 1; i < ids.length; i++) {
-    const [a, b] = [ids[i - 1]!, ids[i]!], [s, t] = [a, b].sort(compare);
-    const edge = edges.find(e => e.source === s && e.target === t)!;
+    const [a, b] = [ids[i - 1]!, ids[i]!];
+    const edge = edges.find(e => (e.source === a && e.target === b) || (e.source === b && e.target === a))!;
     steps.push({ ...edge, source: a, target: b });
   }
   return { from, to, found: true, length: steps.length, nodes: ids.map(id => byId.get(id)!), edges: steps };

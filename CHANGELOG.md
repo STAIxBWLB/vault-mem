@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add `vmem graph path` and read-only `vmem_graph_path`: the shortest undirected link path between two notes from the live index (breadth-first, code-point tie order, `moc`/`bu` hubs not used as intermediate steps unless `--via-hubs`/`viaHubs`, optional relation filter, `--max-hops` 1..6). No path within the limit is `found: false`, not an error (#211).
+
 ## [0.7.0] - 2026-11-11
 
 - N-1: 0.6.0 runs beside 0.7.0 without either version rebuilding the other's derived state or rewriting the other's configuration: both use the same note and spec index files (`links2-schema4`, schema 4) and config format 4, and note/spec files stay shared. The command set only gains `vmem brief` / `vmem_brief`, and the pinned MCP `initialize` instructions are the same bytes, but receipts a client reads change: `vmem_promote` and `vmem_promote_from_amem` omit `refused: true` when the receipt is applied with errors, the amem promotion receipt reports `applied: true` once the note was written, rollback receipts mark which paths stayed applied and keep the original forward cause instead of the rollback drift, a publication-path permission, storage or descriptor failure is `IO` rather than `V09` (note writes) or `DRIFT` (spec writes), and `LINK` is reserved for the native hard-link operation, so a client keyed on `refused`, `applied` or those codes needs 0.7.0.
