@@ -35,7 +35,8 @@
         "scripts/release-parity.ts",
         "scripts/release-tag.ts",
         "scripts/release-ci.ts",
-        ".github/workflows/release.yml"
+        ".github/workflows/release.yml",
+        "scripts/package-smoke.ts"
       ]
     },
     "docs/release-workflow.md": {
