@@ -6,7 +6,7 @@ import type { SearchResult, NoteReadResult } from "./vault-index.ts";
 import type { ResolvedLink, SuggestedLink } from "./links.ts";
 import type { LogReadResult, LogReceipt } from "./log-types.ts";
 import type { LintCode, LintReport } from "./analysis-types.ts";
-import type { GraphNeighborhood } from "./vault-graph.ts";
+import type { GraphNeighborhood, GraphPath } from "./vault-graph.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
 import { blocks, clean, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
 
@@ -98,4 +98,15 @@ export function neighborsText(r: GraphNeighborhood, o: TextOptions, c: { vault: 
   const more = r.truncated && c.limit < 500 ? nextCommand("next", command("graph", "neighbors", c.vault, r.start, "--hops", String(r.hops), "--limit", String(Math.min(500, c.limit * 2)), ...(c.relation ? ["--relation", c.relation] : [])), o) : undefined;
   if (!nodes.length) return [count, more].filter(Boolean).join("\n");
   return blocks(table(["NOTE", "HOPS", "RELATION", "TITLE"], nodes.map(n => [n.id, hops.get(n.id), relation(n.id), n.label]), o), [count, more].filter(Boolean).join("\n"));
+}
+
+export function pathText(r: GraphPath, o: TextOptions, c: { vault: string; maxHops: number; viaHubs: boolean; relation?: string }): string {
+  if (!r.found) {
+    const words = ["graph", "path", c.vault, r.from, r.to, ...(c.relation ? ["--relation", c.relation] : [])];
+    const hints = [...(c.viaHubs ? [] : [nextCommand("next", command(...words, "--max-hops", String(c.maxHops), "--via-hubs"), o)]),
+      ...(c.maxHops < 6 ? [nextCommand("next", command(...words, "--max-hops", "6", ...(c.viaHubs ? ["--via-hubs"] : [])), o)] : [])];
+    return [`no path from ${clean(r.from)} to ${clean(r.to)} within ${plural(c.maxHops, "hop")}`, ...hints].join("\n");
+  }
+  const lines = r.edges.map(e => `${clean(e.source)} -[${e.relation === "wiki_link" ? e.rel ?? e.relation : e.relation}]-> ${clean(e.target)}`);
+  return [...lines, `path from ${clean(r.from)} to ${clean(r.to)}: ${plural(r.length, "hop")}`].join("\n");
 }

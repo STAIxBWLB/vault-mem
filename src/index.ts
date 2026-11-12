@@ -28,7 +28,7 @@ export type { AmemSeam, AmemCandidate, AmemOptions } from "./amem/seam.ts";
 
 
 export { lintVault } from "./vault-lint.ts";
-export { buildGraph, graphNeighbors, graphReport } from "./vault-graph.ts";
+export { buildGraph, graphNeighbors, graphPath, graphReport } from "./vault-graph.ts";
 export type { VaultGraph, GraphNeighborhood } from "./vault-graph.ts";
 export type { AnalysisSnapshot, LintCode, LintReport } from "./analysis-types.ts";
 export { writeAnalysisReports } from "./analysis-reports.ts";
