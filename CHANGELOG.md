@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Skill mining reports how many main-session `Record` rows within the mining window sat below a truncated capture shard's read window and were not mined: JSON `dropped.recordOutsideWindow`, `recordOutsideCapped` and `recordOutsideUnavailable`, and one Markdown report line. The count comes from agent-mem's index-only bounded seek and reads no row content (#163).
+- Raise the exact `@staix/agent-mem` pin from 0.23.0 to 0.24.0. Skill mining skips capture machine directories without a capture database, which 0.24.0 creates for its curated brief cache, instead of counting them as unreadable.
+
 ## [0.8.0] - 2026-11-12
 
 - N-1: 0.7.0 runs beside 0.8.0 without either version rebuilding the other's derived state or rewriting the other's configuration: both use the same note and spec index files (`links2-schema4`, schema 4) and config format 4, and note/spec files stay shared. Link resolution is unchanged, the pinned MCP `initialize` instructions are the same bytes, and no receipt field or error code changes. The surface only gains the CLI `graph path` and the read-only MCP `vmem_graph_path` (37 -> 38 tools), and the only other observable difference is message text: the `graph: use build ...` usage line and the `--relation` option-scope message now also name `graph path`, so a 0.7.0 client sees the same results for every command and tool it already calls.
