@@ -20,7 +20,11 @@ test("lint and graph build name the option they refuse and where it applies (#12
   // Wrong positional counts keep their messages.
   expect(() => runAnalysisCommand("lint", [], home)).toThrow("lint: requires one vault id");
   expect(() => runAnalysisCommand("graph", ["build"], home)).toThrow("graph build: requires one vault id");
-  expect(() => runAnalysisCommand("graph", ["neighbors", "v"], home)).toThrow("graph: use build <vault> or neighbors <vault> <stem>");
+  expect(() => runAnalysisCommand("graph", ["neighbors", "v"], home)).toThrow("graph: use build <vault>, neighbors <vault> <stem> or path <vault> <from> <to>");
+  expect(() => runAnalysisCommand("graph", ["path", "v", "a"], home)).toThrow("graph path: requires <vault> <from> <to>");
+  expect(() => runAnalysisCommand("graph", ["path", "v", "a", "b", "--hops", "2"], home)).toThrow("graph path: --hops applies only to graph neighbors");
+  expect(() => runAnalysisCommand("graph", ["path", "v", "a", "b", "--max-hops", "7"], home)).toThrow("graph path: max hops 1..6");
+  expect(() => runAnalysisCommand("graph", ["neighbors", "v", "a", "--via-hubs"], home)).toThrow("graph neighbors: --via-hubs applies only to graph path");
 });
 
 test("a refused option exits 1 through the CLI with the named message (#121)", () => {

@@ -57,7 +57,7 @@ test("tools/list: vault enum is the registered ids, default is first personal, e
   }
   expect(tools.filter(t => t.annotations.destructiveHint).map(t => t.name)).toEqual(["vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_promote", "vmem_spec_delete"]);
   // Graph, agent-mem and org-promotion providers are implemented; the org target is an enum of registered org vaults.
-  expect(tools.filter(t => /graph/.test(t.name)).map(t => t.name)).toEqual(["vmem_graph_build", "vmem_graph_neighbors", "vmem_spec_graph"]);
+  expect(tools.filter(t => /graph/.test(t.name)).map(t => t.name)).toEqual(["vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_spec_graph"]);
   expect(tools.find(t => t.name === "vmem_promote").inputSchema.properties.to.enum).toEqual(["team"]);
 });
 

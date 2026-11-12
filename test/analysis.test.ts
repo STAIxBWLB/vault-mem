@@ -102,6 +102,8 @@ test("write refusals and symlink reports fail closed; MCP read works for readonl
   expect(writeAnalysisReports(f.home,{vault:"test",kind:"graph",today:f.snapshot.today}).ok).toBe(false);expect(disk(f.root)).toEqual(before);
   const mcp=createVaultMcp(f.home);expect(mcp.tools.some(t=>t.name==="vmem_graph_neighbors")).toBe(true);
   const result=await mcp.handlers.vmem_graph_neighbors!({vault:"test",path:"a",hops:1,limit:2});expect(result).toBeDefined();
+  expect(mcp.tools.find(t=>t.name==="vmem_graph_path")?.annotations.readOnlyHint).toBe(true);
+  expect(await mcp.handlers.vmem_graph_path!({vault:"test",from:"a",to:"a"})).toMatchObject({found:true,length:0});
   const g=fixture();rmSync(join(g.vault,"reports","vault-graph.json"));symlinkSync(join(g.root,"registry.yaml"),join(g.vault,"reports","vault-graph.json"));
   expect(()=>analysisInput(g.home,"test")).toThrow();
 });

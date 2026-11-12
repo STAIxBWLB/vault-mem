@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { AnalysisSnapshot } from "../src/analysis-types.ts";
-import { buildGraph, graphNeighbors, graphReport, leidenCommunities, pythonTitle } from "../src/vault-graph.ts";
+import { buildGraph, graphNeighbors, graphPath, graphReport, leidenCommunities, pythonTitle } from "../src/vault-graph.ts";
 
 function snapshot(notes: Record<string, string>): AnalysisSnapshot {
   return { notes: Object.entries(notes).map(([path, source]) => ({ path: `${path}.md`, source })),
@@ -219,4 +219,38 @@ test("typed relation lookup stays linear on one long line of links (#74)", () =>
   const graph = buildGraph(snapshot({ a: note(long), b: note(""), c: note("") }));
   expect(performance.now() - started).toBeLessThan(1500);
   expect(graph.edges.map(edge => [edge.target, edge.rel])).toEqual([["b", "supports"], ["c", undefined]]);
+});
+
+test("graph path finds direct, multi-step and deterministic shortest paths (#211)", () => {
+  const notes = { a: note("[[b]] [[c]]"), b: note("[[d]]"), c: note("[[d]]"), d: note("[[e]]"), e: note(""), lone: note("") };
+  const graph = buildGraph(snapshot(notes));
+  const direct = graphPath(graph, "a", "b");
+  expect(direct).toMatchObject({ from: "a", to: "b", found: true, length: 1 });
+  expect(direct.edges.map(edge => [edge.source, edge.relation, edge.target])).toEqual([["a", "wiki_link", "b"]]);
+  const multi = graphPath(graph, "a", "e");
+  expect(multi.nodes.map(node => node.id)).toEqual(["a", "b", "d", "e"]);
+  expect(multi.length).toBe(3);
+  expect(multi.nodes[0]).toHaveProperty("community"); expect(multi.nodes[0]).toHaveProperty("degree");
+  const shuffled = buildGraph(snapshot(Object.fromEntries(Object.entries(notes).reverse())));
+  expect(graphPath(shuffled, "a", "e").nodes.map(node => node.id)).toEqual(["a", "b", "d", "e"]);
+  expect(graphPath(shuffled, "e", "a").nodes.map(node => node.id)).toEqual(["e", "d", "b", "a"]);
+  expect(graphPath(graph, "a", "a")).toMatchObject({ found: true, length: 0, edges: [] });
+  expect(graphPath(graph, "a", "a").nodes.map(node => node.id)).toEqual(["a"]);
+  expect(graphPath(graph, "a", "e", { maxHops: 2 })).toEqual({ from: "a", to: "e", found: false, length: 0, nodes: [], edges: [] });
+  expect(graphPath(graph, "a", "lone").found).toBe(false);
+});
+
+test("graph path skips hubs unless viaHubs, filters relation and refuses bad input (#211)", () => {
+  const graph = buildGraph(snapshot({ index: note("[[x]] [[y]]", "moc"), x: note("- [[z]] (supports)"), y: note("[[z]] [[w]]"), z: note(""), w: note("") }));
+  expect(graphPath(graph, "x", "y").nodes.map(node => node.id)).toEqual(["x", "z", "y"]);
+  expect(graphPath(graph, "x", "y", { viaHubs: true }).nodes.map(node => node.id)).toEqual(["x", "index", "y"]);
+  expect(graphPath(graph, "index", "w").nodes.map(node => node.id)).toEqual(["index", "y", "w"]);
+  const typed = graphPath(graph, "x", "z", { relation: "supports" });
+  expect(typed.edges.map(edge => edge.rel)).toEqual(["supports"]);
+  expect(graphPath(graph, "x", "y", { relation: "supports" }).found).toBe(false);
+  expect(() => graphPath(graph, "nope", "x")).toThrow("graph path: unknown note");
+  expect(() => graphPath(graph, "x", "nope")).toThrow("graph path: unknown note");
+  expect(() => graphPath(graph, "x", "y", { maxHops: 0 })).toThrow("max hops must be 1..6");
+  expect(() => graphPath(graph, "x", "y", { maxHops: 7 })).toThrow("max hops must be 1..6");
+  expect(() => graphPath(graph, "x", "y", { relation: "refutes" })).toThrow("unknown relation");
 });

@@ -401,6 +401,42 @@ export function graphNeighbors(graph: VaultGraph, start: string, hops: 1 | 2, li
   const selected = new Set([...distances].sort(([a, ad], [b, bd]) => ad - bd || compare(a, b)).slice(0, limit).map(([id]) => id));
   return { start, hops, nodes: graph.nodes.filter(node => selected.has(node.id)), edges: graph.edges.filter(edge => selected.has(edge.source) && selected.has(edge.target)), truncated: distances.size > limit };
 }
+export interface GraphPathOptions { maxHops?: number; relation?: string; viaHubs?: boolean }
+export interface GraphPath { from: string; to: string; found: boolean; length: number; nodes: GraphNode[]; edges: GraphEdge[] }
+/** Undirected BFS shortest path; neighbours in code-point order, `moc`/`bu` hubs skipped as intermediates unless `viaHubs`. */
+export function graphPath(graph: VaultGraph, from: string, to: string, options: GraphPathOptions = {}): GraphPath {
+  const maxHops = options.maxHops ?? 6, relation = options.relation;
+  if (!Number.isInteger(maxHops) || maxHops < 1 || maxHops > 6) throw new Error("graph path: max hops must be 1..6");
+  if (relation !== undefined && relation !== "wiki_link" && !(LINK_RELATIONS as readonly string[]).includes(relation))
+    throw new Error(`graph path: unknown relation ${JSON.stringify(relation)}; use wiki_link or ${LINK_RELATIONS.join(", ")}`);
+  const edges = relation === undefined ? graph.edges : graph.edges.filter(edge => edgeRelation(edge) === relation);
+  const neighbors = adjacency({ ...graph, edges });
+  if (!neighbors.has(from)) throw new Error("graph path: unknown note (from)");
+  if (!neighbors.has(to)) throw new Error("graph path: unknown note (to)");
+  const byId = new Map(graph.nodes.map(node => [node.id, node]));
+  if (from === to) return { from, to, found: true, length: 0, nodes: [byId.get(from)!], edges: [] };
+  const hub = (id: string) => !options.viaHubs && HUB_TYPES.has(byId.get(id)!.type);
+  const parent = new Map<string, string>([[from, from]]), depth = new Map([[from, 0]]), queue = [from];
+  search: for (let i = 0; i < queue.length; i++) {
+    const id = queue[i]!, d = depth.get(id)!;
+    if (d >= maxHops || (id !== from && hub(id))) continue;
+    for (const next of [...neighbors.get(id)!].sort(compare)) {
+      if (parent.has(next)) continue;
+      parent.set(next, id); depth.set(next, d + 1); queue.push(next);
+      if (next === to) break search;
+    }
+  }
+  if (!parent.has(to)) return { from, to, found: false, length: 0, nodes: [], edges: [] };
+  const ids = [to];
+  while (ids[0] !== from) ids.unshift(parent.get(ids[0]!)!);
+  const steps: GraphEdge[] = [];
+  for (let i = 1; i < ids.length; i++) {
+    const [a, b] = [ids[i - 1]!, ids[i]!];
+    const edge = edges.find(e => (e.source === a && e.target === b) || (e.source === b && e.target === a))!;
+    steps.push({ ...edge, source: a, target: b });
+  }
+  return { from, to, found: true, length: steps.length, nodes: ids.map(id => byId.get(id)!), edges: steps };
+}
 export function graphReport(graph: VaultGraph, today: string): string {
   const byId = new Map(graph.nodes.map(node => [node.id, node]));
   const rank = (a: GraphNode, b: GraphNode) => b.degree - a.degree || compare(a.id, b.id);

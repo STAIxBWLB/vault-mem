@@ -2,7 +2,7 @@ import { vaultBrief } from "./vault-brief.ts";
 import { createSpecMcp } from "./mcp-spec.ts";
 import { SPEC_COMMANDS } from "./spec-command-table.ts";
 import { analysisInput } from "./analysis-input.ts";
-import { buildGraph, graphNeighbors, LINK_RELATIONS } from "./vault-graph.ts";
+import { buildGraph, graphNeighbors, graphPath, LINK_RELATIONS } from "./vault-graph.ts";
 import { lintVault } from "./vault-lint.ts";
 import { writeAnalysisReports } from "./analysis-reports.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
@@ -34,7 +34,7 @@ const metadata = { type: "object", maxProperties: 32, properties: { authors: { t
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_brief", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_stats", ...SPEC_COMMANDS.map(item => item.name)] as const;
+  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_stats", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Server `initialize` instructions: purpose, navigation order and the write contract. Pinned by a test, under 400 bytes. */
 export const VMEM_INSTRUCTIONS = "vmem is a vault of durable, linked knowledge: notes with frontmatter, wiki-links and an append-only log. Search first with vmem_search, then read the best match with vmem_read, using section for one H2. Writes are validated and receipted: a refusal lists issues, and a failure after publication can leave changes behind, so read the receipt and its issues before retrying.";
@@ -70,6 +70,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_lint", "Lint a private derived snapshot; write=true writes a screened report.", object({ vault, write: { type: "boolean" }, dryRun: { type: "boolean" } }), "write"),
     tool("vmem_graph_build", "Build a deterministic graph and screened reports; dryRun changes nothing.", object({ vault, dryRun: { type: "boolean" }, workspace: { type: "boolean" } }), "write"),
     tool("vmem_graph_neighbors", "Read a bounded graph neighborhood.", object({ vault, path: note, hops: integer(1,2), limit: integer(1,500), relation: { type: "string", enum: ["wiki_link", ...LINK_RELATIONS] } }, ["path"])),
+    tool("vmem_graph_path", "Read the shortest undirected link path between two notes (BFS, code-point tie order). MOC/bu hubs are not intermediates unless viaHubs. found=false when no path within maxHops (default 6).", object({ vault, from: note, to: note, maxHops: integer(1,6), relation: { type: "string", enum: ["wiki_link", ...LINK_RELATIONS] }, viaHubs: { type: "boolean" } }, ["from", "to"])),
     tool("vmem_promote", "Two-step promotion of a personal note into a local org vault clone (never pushes): without confirm returns the full transformed text, dropped links, screen result and fingerprint; confirm=true with that fingerprint writes the org note, source provenance and SYNC log lines. Configured target-vault canonTables add advisory canonical row matches and link-existing choices; personal rows are never included and matches do not affect the fingerprint or block confirm. Publishing is the separate `vmem sync` CLI.",
       object({ path: note, to: orgVault, topics: { type: "array", maxItems: 32, items: string(200) }, again: { type: "boolean" }, ...twoStep }, ["path", "to"]), "confirm"),
     tool("vmem_skills_mine", "Read-only skill-candidate mining over amem curated entries, amem capture rows and vault notes: dictionary matching, deterministic communities and novelty scoring. Returns counts, masked candidates and a markdown report; writes nothing.",
@@ -143,6 +144,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_lint: args => args.write === true ? writeAnalysisReports(home,{vault:pick(args).id,kind:"lint",channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env) : lintVault(analysisInput(home,pick(args).id,{expectedVault:pick(args),hints:true}).snapshot),
     vmem_graph_build: args => writeAnalysisReports(home,{vault:pick(args).id,kind:"graph",workspace:args.workspace === true,channel:"mcp",expectedVault:pick(args),dryRun:args.dryRun === true},env),
     vmem_graph_neighbors: args => graphNeighbors(buildGraph(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),str(args.path)!, (args.hops as 1|2|undefined) ?? 1, (args.limit as number|undefined) ?? 50, str(args.relation)),
+    vmem_graph_path: args => graphPath(buildGraph(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),str(args.from)!,str(args.to)!,{maxHops:(args.maxHops as number|undefined) ?? 6,viaHubs:args.viaHubs === true,...(str(args.relation) === undefined ? {} : {relation:str(args.relation)!})}),
     vmem_status: () => ({ defaultVault: defaultVault ?? null, vaults: registryStatus(home).filter(v => ids.includes(v.id)) }),
     vmem_search: args => read(args, index => ({ hits: index.search(str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }) })),
     vmem_read: args => read(args, index => { const r = index.show(str(args.path)!, (args.maxBytes as number | undefined) ?? 16384, str(args.section), args.offset as number | undefined); return document(r); }),
