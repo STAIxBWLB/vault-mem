@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-12
+
+- N-1: 0.7.0 runs beside 0.8.0 without either version rebuilding the other's derived state or rewriting the other's configuration: both use the same note and spec index files (`links2-schema4`, schema 4) and config format 4, and note/spec files stay shared. Link resolution is unchanged, the pinned MCP `initialize` instructions are the same bytes, and no receipt field or error code changes. The surface only gains the CLI `graph path` and the read-only MCP `vmem_graph_path` (37 -> 38 tools), and the only other observable difference is message text: the `graph: use build ...` usage line and the `--relation` option-scope message now also name `graph path`, so a 0.7.0 client sees the same results for every command and tool it already calls.
+
 - Add `vmem graph path` and read-only `vmem_graph_path`: the shortest undirected link path between two notes from the live index (breadth-first, code-point tie order, `moc`/`bu` hubs not used as intermediate steps unless `--via-hubs`/`viaHubs`, optional relation filter, `--max-hops` 1..6). No path within the limit is `found: false`, not an error (#211).
 
 ## [0.7.0] - 2026-11-11
