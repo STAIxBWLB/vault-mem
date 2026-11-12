@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "documents": {
     "README.md": {
-      "verifiedAgainst": "ec80b69e3a3c559530ccf8cb10822d514b83c7a9",
+      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
       "paths": [
         "src/",
         "bin/",
@@ -19,7 +19,7 @@
       ]
     },
     "docs/cutover-checklist.md": {
-      "verifiedAgainst": "ec80b69e3a3c559530ccf8cb10822d514b83c7a9",
+      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
       "paths": [
         "src/setup.ts",
         "src/registry.ts",
@@ -28,7 +28,7 @@
       ]
     },
     "docs/release-readiness.md": {
-      "verifiedAgainst": "ec80b69e3a3c559530ccf8cb10822d514b83c7a9",
+      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
       "paths": [
         "scripts/release-evidence.ts",
         "scripts/release-performance.ts",
@@ -39,7 +39,7 @@
       ]
     },
     "docs/release-workflow.md": {
-      "verifiedAgainst": "ec80b69e3a3c559530ccf8cb10822d514b83c7a9",
+      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
       "paths": [
         ".github/workflows/release.yml",
         "scripts/release-tag.ts",
