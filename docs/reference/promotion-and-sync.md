@@ -1,0 +1,50 @@
+# Promotion and sync
+
+Read before promoting from agent-mem, promoting a note to an org vault, or running `vmem sync`.
+
+## Promotion from agent-mem
+
+`vmem promote-from-amem` turns one durable agent-mem entry into a vault note and records agent-mem's own vault link back to it. Agent memory is never indexed or copied into a second store, and no agent-mem tool is added: candidates come from agent-mem's `vaultCandidates` selection and the link from its `recordVaultLink`.
+
+```sh
+vmem promote-from-amem personal                                  # candidates of the current project (--project KEY | --all-projects, --limit 1..200)
+vmem promote-from-amem personal mem:<id> --type decision --domain research --topics storage   # preview: full note text + fingerprint
+vmem promote-from-amem personal mem:<id> ... --confirm --fingerprint <sha>
+vmem promote-from-amem personal mem:<id> --link-to existing-note  # link an existing note instead of creating one
+```
+
+- `src/amem/seam.ts` is the only module that imports the `@staix/agent-mem` root (exact pin <!-- facts:amem-version -->0.23.0<!-- /facts:amem-version -->, at or above agent-mem's 0.13 floor for agent workflows). Reads, writes and other commands never load it; promotion and mining load it when they run, and `vmem mcp` loads it at startup. The project defaults to agent-mem's key for the current directory (`--project` overrides); `AMEM_HOME` selects the memory home as in agent-mem.
+- Listing and linking require agent-mem's generation profile; a shared-v1 memory home is refused. Candidate listing applies agent-mem's durable selection and policy (secrets, default PII and the vault config's `piiPatterns`) before ordering and `--limit`; previews screen the requested entry with the same policy.
+- The preview prefills the H1 and stem from the entry title, the body from its text, `about[]` as Relevant Notes hints, and provenance `promoted_from: mem:<id>` plus `promoted_at`. `--stem --type --domain --topics --description --title` and `--body file|-` override it; none of this needs a TTY. When a note with the same stem or title exists, the preview is refused with V08 and lists `link-existing <path>` choices; `--link-to` takes one. `--edit` opens `$VISUAL`/`$EDITOR` on the draft only when stdin is a terminal (the only TTY check); the edited text is previewed and confirmed with `--body`.
+- Confirm requires the preview fingerprint, then creates the note through `applyWrite` (V01-V10), appends one `LEARN  <project>  mem:<id> → notes/<stem>.md  <em-dash> promoted: <kind>` event (`--log-project` sets the project field; it defaults to the last segment of the agent-mem project key) and records the vault link last.
+- If the final link fails, the note stays, the result reports `LINK` and `link-only notes/<stem>.md`, and the entry stays a candidate. A rerun finds the note through `promoted_from` and offers link-only, never a second note or a second LEARN event.
+- `vmem_promote_from_amem` is the same two steps over MCP and needs a vault with `write: mcp`.
+
+Configured canonical tables add `canonRowMatches: [{path,line,key,row}]` to promotion results and deduplicated `link-existing <path>` choices. Keys come from the selected Markdown-table column: bold, wiki brackets and inline code are stripped; parentheses, comma and spaced-slash aliases are split; one-character keys are ignored. Matching uses whole-token Unicode boundaries, ignoring case only for Latin characters, including in mixed-script keys. Matches rank by key length, then configured table/row order, with at most five distinct rows and 200 characters of row text. Text output lists "canonical rows" beside possible duplicates. `vmem promote --to <org>` uses only the org target's own tables; personal-vault rows never appear in its preview.
+
+Rows and `canonTableWarnings` are advisory, outside the fingerprint: changing `canonTables` leaves a preview valid, while draft and note edits still invalidate it. A table is a header row followed by a delimiter row whose cells each hold one or more hyphens with optional leading and trailing colons, as GFM allows, so `|-|-|`, `|--|--|` and `| :-: | - |` all open a table. A missing/unreadable/denied note produces `canonTables: <path> not read (<cause>)` plus recovery advice, and a note that reads but holds no recognizable table produces `canonTables: <path> has no recognizable Markdown table` with what a table needs, so an empty `canonRowMatches` names its cause instead of staying silent. With no `canonTables` key, JSON and text output retain their previous shape. Reads reuse the open target note index with its 2 MiB per-note limit, an 8 MiB aggregate byte budget and at most 16 attempts; parsing is bounded to 20000 rows, 40000 aliases and 256 KiB of key text. There are no model calls, embeddings, automatic row edits or canonical-row lint rules.
+
+## Org promotion and sync
+
+Each vault is its own git repository. There is no cross-vault link syntax: `[[x]]` always resolves inside its own vault, so an org note cannot link back into a personal vault. Nothing is scheduled and nothing pushes on its own.
+
+```sh
+vmem promote personal shared-method --to team                     # preview: full org text, dropped links, screen result, fingerprint
+vmem promote personal shared-method --to team --confirm --fingerprint <sha>
+vmem sync team                                                    # preview: remote check, branch, ahead/behind, paths to stage
+vmem sync team --confirm --fingerprint <sha>
+```
+
+`vmem promote` copies one note from a personal vault into the local clone of a writable org vault (`kind: org`, `write` not `none`):
+
+- **Transform.** The last prose `## Topics` section (never one inside a code fence) is replaced with the target topics, which must name MOCs that already exist in the org vault (source topics by default, `--topics` to override); a missing section is appended. Body wiki links that do not resolve in the org vault become plain text (their label, if any); wiki-valued frontmatter (`project`, `supersedes`, `superseded_by`, `source_ref`) pointing outside it is dropped. All of this is listed in `droppedLinks`. The org note gets `promoted_from: "<personal>:notes/x.md"` and `promoted_at`.
+- **Screen (fail closed).** It refuses: secrets; PII denied by the org vault's `promotion` cells (org defaults to `deny`, plus configured `piiPatterns`; a `warn` cell is reported, not refused); `type: person` or `domain: people` records; private correspondence (`source`/`source_ref` from `inbox/`, `outlook:`, `telegram(`, `kakao`); and internal meeting notes (`source` under `meetings/`). These are keyword heuristics; the org clone's `git diff` before `vmem sync` is the review surface. Body links that are dropped are also resolved in the personal vault: a link to a person/people, meeting or correspondence note refuses the promotion (reporting only the category and count), so their names never reach the org vault. A refusal or a preview writes nothing in either vault.
+- **Confirm.** It requires the current fingerprint. Then it creates the org note through `applyWrite`, records `promoted_to: "<org>:notes/x.md"` on the source, and appends `SYNC  <project>  personal:notes/x.md → <org>:notes/x.md  <em-dash> promoted: <type>` to both vault logs (`--log-project` sets the project, default `-`). The note is also linted against the org vault (`lintVault` over the org snapshot with the note overlaid, scoped to that note): any L01/L02/L13 error refuses the preview, and the lint result is returned again after the write. Vault-wide warnings do not block. A second promotion of the same note needs `--again`, and an existing org note is never overwritten. If the source provenance write failed after the org note was created, a rerun detects the org note's matching `promoted_from` and offers a provenance-only preview and confirm.
+- **MCP.** `vmem_promote` does the same over MCP and needs `write: mcp` on both vaults.
+
+`vmem sync <vault>` is the only command that commits or pushes:
+
+- **Preview.** It requires a configured `remote` that every effective `origin` fetch and push URL matches (`remote.origin.pushurl` included), after normalising scheme, credentials, host case and, for host remotes only, a trailing `.git` (local and `file:` paths keep their case and their `.git` suffix, because `x` and `x.git` are different repositories). Any `url.*.insteadOf` or `pushInsteadOf` rewrite is refused, because the real push destination cannot be verified. A mismatch fetches and pushes nothing; the push URLs are part of the preview fingerprint and are checked again just before pushing. It refuses a detached HEAD or an in-progress rebase or merge, then fetches and previews the branch, ahead/behind counts, and the changed paths it will stage: only `notes/`, `reports/` and `log`. Anything else is listed under `ignored` and never staged. A changed file that matches the configured `denyPaths` or the default deny names refuses the whole sync (before hashing, staging, committing or pushing) and is reported only as a count; a denied vault root is never synced.
+- **Confirm.** With the current fingerprint it commits those paths, rebases onto `origin/<branch>` when behind, pushes, then re-fetches and reports success only when the remote head equals the local head. Conflicting history aborts the rebase and keeps the local commit (`DIVERGED`). A refused push (`PUSH`) or a failed fetch (`FETCH`, for example missing credentials) reports `ok: false`.
+- **Git hardening.** Git runs through agent-mem's hardened argv: hooks, fsmonitor, external diff, pager, credential helper and askpass are disabled, `GIT_TERMINAL_PROMPT=0` is set, and repository-redirecting `GIT_*` variables are removed. So sync uses ssh keys or a deploy key and never prompts.
+- **Not decided by the tool.** Which org, visibility, remote and deploy key a vault uses are deployment decisions, and whether an agent may push a given org vault is the workspace's external-sending rule.

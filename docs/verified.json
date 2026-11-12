@@ -35,7 +35,8 @@
         "scripts/release-parity.ts",
         "scripts/release-tag.ts",
         "scripts/release-ci.ts",
-        ".github/workflows/release.yml"
+        ".github/workflows/release.yml",
+        "scripts/package-smoke.ts"
       ]
     },
     "docs/release-workflow.md": {
@@ -44,6 +45,125 @@
         ".github/workflows/release.yml",
         "scripts/release-tag.ts",
         "scripts/release-ci.ts"
+      ]
+    },
+    "docs/reference/analysis.md": {
+      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "paths": [
+        "src/",
+        "bin/",
+        "scripts/package-smoke.ts",
+        "scripts/release-parity.ts",
+        "scripts/release-evidence.ts",
+        "scripts/release-performance.ts",
+        "scripts/lint-parity.ts",
+        "scripts/graph-parity.ts",
+        "scripts/workspace-parity.ts",
+        "scripts/leiden-live.ts",
+        "scripts/frontmatter-probe.ts",
+        ".github/workflows/check.yml"
+      ]
+    },
+    "docs/reference/configuration.md": {
+      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "paths": [
+        "src/",
+        "bin/",
+        "scripts/package-smoke.ts",
+        "scripts/release-parity.ts",
+        "scripts/release-evidence.ts",
+        "scripts/release-performance.ts",
+        "scripts/lint-parity.ts",
+        "scripts/graph-parity.ts",
+        "scripts/workspace-parity.ts",
+        "scripts/leiden-live.ts",
+        "scripts/frontmatter-probe.ts",
+        ".github/workflows/check.yml"
+      ]
+    },
+    "docs/reference/mcp-and-setup.md": {
+      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "paths": [
+        "src/",
+        "bin/",
+        "scripts/package-smoke.ts",
+        "scripts/release-parity.ts",
+        "scripts/release-evidence.ts",
+        "scripts/release-performance.ts",
+        "scripts/lint-parity.ts",
+        "scripts/graph-parity.ts",
+        "scripts/workspace-parity.ts",
+        "scripts/leiden-live.ts",
+        "scripts/frontmatter-probe.ts",
+        ".github/workflows/check.yml"
+      ]
+    },
+    "docs/reference/promotion-and-sync.md": {
+      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "paths": [
+        "src/",
+        "bin/",
+        "scripts/package-smoke.ts",
+        "scripts/release-parity.ts",
+        "scripts/release-evidence.ts",
+        "scripts/release-performance.ts",
+        "scripts/lint-parity.ts",
+        "scripts/graph-parity.ts",
+        "scripts/workspace-parity.ts",
+        "scripts/leiden-live.ts",
+        "scripts/frontmatter-probe.ts",
+        ".github/workflows/check.yml"
+      ]
+    },
+    "docs/reference/reads.md": {
+      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "paths": [
+        "src/",
+        "bin/",
+        "scripts/package-smoke.ts",
+        "scripts/release-parity.ts",
+        "scripts/release-evidence.ts",
+        "scripts/release-performance.ts",
+        "scripts/lint-parity.ts",
+        "scripts/graph-parity.ts",
+        "scripts/workspace-parity.ts",
+        "scripts/leiden-live.ts",
+        "scripts/frontmatter-probe.ts",
+        ".github/workflows/check.yml"
+      ]
+    },
+    "docs/reference/specs.md": {
+      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "paths": [
+        "src/",
+        "bin/",
+        "scripts/package-smoke.ts",
+        "scripts/release-parity.ts",
+        "scripts/release-evidence.ts",
+        "scripts/release-performance.ts",
+        "scripts/lint-parity.ts",
+        "scripts/graph-parity.ts",
+        "scripts/workspace-parity.ts",
+        "scripts/leiden-live.ts",
+        "scripts/frontmatter-probe.ts",
+        ".github/workflows/check.yml"
+      ]
+    },
+    "docs/reference/writes.md": {
+      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "paths": [
+        "src/",
+        "bin/",
+        "scripts/package-smoke.ts",
+        "scripts/release-parity.ts",
+        "scripts/release-evidence.ts",
+        "scripts/release-performance.ts",
+        "scripts/lint-parity.ts",
+        "scripts/graph-parity.ts",
+        "scripts/workspace-parity.ts",
+        "scripts/leiden-live.ts",
+        "scripts/frontmatter-probe.ts",
+        ".github/workflows/check.yml"
       ]
     }
   }
