@@ -1,0 +1,86 @@
+# MCP server and host setup
+
+Read before calling vmem over MCP, registering it in an agent host, or using the console plugin.
+
+## MCP server
+
+`vmem mcp` serves newline-delimited JSON-RPC 2.0 (MCP tools, protocol 2025-06-18 and earlier) on stdio. stdout carries protocol messages only; it needs no TTY and runs in agent sessions. Requests are limited to 64 KiB per frame and results to 256 KiB (a larger result becomes a structured `LIMIT` refusal). Arguments are validated against each tool's bounded schema (`additionalProperties: false`, string/array/integer caps); invalid arguments or unknown tools return JSON-RPC `-32602`, unknown methods `-32601`, malformed frames `-32700`/`-32600`. At startup it loads every module a tool can run, the `@staix/agent-mem` root included, so a server keeps its own code and tool list when its install is replaced or a newer release is installed beside it; restart the host session to pick up the new release.
+
+The vault set is read once at startup: every tool's `vault` property is an enum of the registered ids and defaults to the first `personal` vault. Restart the host session after `vaults add/remove`. Registered spec sources are also read once when `vmem mcp` starts; restart the MCP server after `specs add` or `specs remove`. Reads go through the same index as the CLI; writes go through `applyWrite`/`appendLog` with channel `mcp`, so they require `write: mcp` and pass the same V01-V10 gates. Every tool returns a JSON result: a receipt, or `{refused: true, issues}` for policy, validation or lookup failures. Direct note-write and promotion tools (`vmem_promote`, `vmem_promote_from_amem`) return an applied-with-errors receipt (`applied: true`, `ok: false`) without `refused: true`; inspect and recover the recorded write instead of retrying it as an unapplied refusal. Spec mutations add `refused: true` only when no change was applied (`ok: false`, `changed: false`); post-publication errors return the applied receipt (`changed: true`, `ok: false`) without that marker.
+
+| tool | arguments (caps) |
+|---|---|
+| `vmem_spec_get` | `id`, optional `source`, absolute `worktree`, `body`, `maxBytes`<=65536, `section`, `offset`<=2097152; metadata, relations, hash, freshness and optional body pages |
+| `vmem_spec_graph` | `id`, optional `source`, `worktree`, `direction` subtree/ancestors/neighbors, `edge`, `depth`<=3, `limit`<=500 |
+| `vmem_spec_grep` | optional `source`, `worktree`, `query`<=1024 UTF-8 bytes, `literal`, `type`, `status`, `tag`, `parent`, `dependsOn`, `coversPath`, `offset`<=10000, `limit`<=500; continuation after filters |
+| `vmem_spec_validate` | optional `source`, `worktree`, `requireFresh`, `limit`<=500; bounded report; stale is fatal only with `requireFresh` |
+| `vmem_status` | none; vaults with health, write policy, effective pii and `piiPolicy` (read-only) |
+| `vmem_brief` | `intent`<=1024 bytes, optional `vault`, `paths[]`<=16 (1024 bytes each), `bytes` 256..4096 (default 1024); ranked screened pointers and one-hop neighbors, no bodies |
+| `vmem_search` | `query`<=1000, `vault`, `limit`<=50, `type`, `domain` |
+| `vmem_read` | `path` (stem, alias or `notes/` path), `vault`, `maxBytes`<=65536; returns `{path, frontmatter, body, sha256, truncated}` |
+| `vmem_read_many` | `paths`<=20 (8 KiB each), `vault` |
+| `vmem_list` | `vault`, `prefix`, `limit`<=500, `cursor`; rows in path order with `mtime`, the filtered `total` and `nextCursor` while more remain |
+| `vmem_links` | `path`, `vault`, `direction` out/in/both, `limit`<=200; returns `{out, dead, in}`, each `dead` entry with `suggested` (the closest title and its score, or null; a hint, never a rewrite) |
+| `vmem_mocs` | `vault`; MOC notes with incoming link counts |
+| `vmem_check` | `vault`, `path`, `text`<=256 KiB; validation only |
+| `vmem_log_tail` | `vault`, `n`<=200, `type`, `grep`<=256 |
+| `vmem_create` | `stem`, `type`, `domain`, `description`, `topics[]`<=32, `title`, `body`<=65536, `source`, `confidence`, `status`, `extra`, `log` |
+| `vmem_patch` | `path`, `oldString`<=8192 and `newString`<=8192, or `edits[]` 1..32 of `{oldString, newString}` (all-or-nothing), `expectedSha`, `log` |
+| `vmem_append` | `path`, `section`<=120, `markdown`<=16384, `expectedSha`, `log` |
+| `vmem_set_frontmatter` | `path`, `set`, `unset[]`, `expectedSha`, `log` |
+| `vmem_link` | `from`, `to`, `relation`, `context`, `bidirectional` (default true), `log` |
+| `vmem_supersede` | `old`, `next`, `log` |
+| `vmem_log_append` | `type`, `project`, `source`, `dest`, `note`<=500 |
+| `vmem_move` | `from`, `to`, `confirm`, `fingerprint` (two-step), `log` (on confirm) |
+| `vmem_merge` | `keep`, `absorb`, optional `confirm`, `fingerprint`, `log`; full body/source/topic/inbound preview, then locked merge and supersession |
+| `vmem_delete` | `path`, `confirm`, `fingerprint` (two-step; the preview lists backlinks), `log` (on confirm) |
+| `vmem_promote` | `path` (in the personal vault), `to` (enum of org vaults), `topics[]`, `again`, `confirm`, `fingerprint` (two-step; never pushes) |
+| `vmem_skills_mine` | `vault`, `days`, `project`, `allProjects`, `vocab`, `skills[]`, `minSize`, `minNovelty` (read-only; see [Skill mining](analysis.md#skill-mining)) |
+| `vmem_stats` | `vault`, `days`<=3650 (default 30); read-only counts, note size and note-to-source ratio, see [Vault statistics](reads.md#vault-statistics) |
+| `vmem_promote_from_amem` | `id`, `project`, `stem`, `type`, `domain`, `topics[]`, `description`, `title`, `body`<=65536, `linkTo`, `confirm`, `fingerprint` (two-step) |
+| `vmem_read_file` | `path`, `vault`, `maxBytes`<=65536, `offset`<=2097152; returns `{path, sha256, truncated, body, offset?, nextOffset?}` (read-only; allowed roots below the table) |
+| `vmem_list_files` | `dir`, `vault`; one level, <=500 entries `{name, path, type, bytes?}` (read-only) |
+| `vmem_report` | `path` under `reports/` or `ops/`, `body`<=65536, `dryRun`, `log`; the receipt of `vmem report` |
+
+<!-- facts:mcp-tools -->
+
+`vmem mcp` lists 38 tools: `vmem_status`, `vmem_search`, `vmem_brief`, `vmem_read`, `vmem_read_many`, `vmem_list`, `vmem_links`, `vmem_mocs`, `vmem_check`, `vmem_log_tail`, `vmem_create`, `vmem_patch`, `vmem_append`, `vmem_set_frontmatter`, `vmem_link`, `vmem_supersede`, `vmem_log_append`, `vmem_move`, `vmem_merge`, `vmem_delete`, `vmem_promote_from_amem`, `vmem_lint`, `vmem_graph_build`, `vmem_graph_neighbors`, `vmem_graph_path`, `vmem_promote`, `vmem_skills_mine`, `vmem_read_file`, `vmem_list_files`, `vmem_report`, `vmem_stats`, `vmem_spec_get`, `vmem_spec_graph`, `vmem_spec_grep`, `vmem_spec_validate`, `vmem_spec_create`, `vmem_spec_update`, `vmem_spec_delete`.
+
+<!-- /facts:mcp-tools -->
+
+Move and delete without `confirm` write nothing and return the preview and `fingerprint`; `confirm: true` requires the fingerprint recomputed on the current state, otherwise the call is refused with `V09`. `vmem_promote_from_amem` is described under [Promotion from agent-mem](promotion-and-sync.md#promotion-from-agent-mem). `vmem_promote` is described under [Org promotion and sync](promotion-and-sync.md#org-promotion-and-sync). Graph/lint tools are described under [Lint and graph analysis](analysis.md#lint-and-graph-analysis). Note paths in read results are relative to `notes/`.
+
+File reads and reports: `vmem_read_file` and `vmem_list_files` read only these roots: `ops/`, `reports/`, `self/`, `templates/`, `AGENTS.md` and `README.md`. They refuse `notes/` (use `vmem_read`), `log` (use `vmem_log_tail`), absolute paths, `.` or `..` segments, dot paths such as `.git`, any symlinked component, denied paths, non-UTF-8 files and files over 2 MiB. Paging, `maxBytes` and `offset` match `vmem_read`; listings leave out dot, linked, special and denied entries. Neither tool takes a lock, touches the index or writes a file. `vmem_report` is `vmem report` over MCP: the same path rules, screening, receipt and default `EXTRACT` event (a `log` override sets another event, for example `LINT` or `GRAPH`), with `write: mcp` required; MCP events always carry the agent attribution.
+
+The `initialize` result carries short `instructions` (under 400 bytes): the vault is durable, linked knowledge; search first with `vmem_search`, then read the best match with `vmem_read` by section; writes are validated and receipted, and because a failure after publication can leave changes behind, read the receipt and its issues before retrying. The receipt state field differs by tool: `applied` and `changes` for vault writes, `changed` for spec writes.
+
+## Host setup
+
+```sh
+vmem setup claude            # dry-run: lists the file and change per host, writes nothing
+vmem setup all --apply       # claude codex kimi pi qwen jcode
+vmem setup agy --apply       # run inside the workspace; writes ./.agents/mcp_config.json
+vmem setup all --undo
+vmem setup all --root ~/.local/share/vmem/releases/0.3.0 --apply   # register a versioned install root
+```
+
+Setup registers one server entry named `vmem` (`<bun> --smol <package>/bin/vmem.js mcp`) by editing the host's own MCP configuration: `~/.claude.json` (`mcpServers`; `$CLAUDE_CONFIG_DIR/.claude.json` when set), `$CODEX_HOME/config.toml` (`[mcp_servers.vmem]`), `$KIMI_CODE_HOME/mcp.json`, `$PI_CODING_AGENT_DIR/mcp.json`, `$QWEN_HOME/settings.json` (all `mcpServers`), `$JCODE_HOME/mcp.json` (`servers`) and the workspace's `.agents/mcp_config.json` for Antigravity. Defaults are `~/.codex`, `~/.kimi-code`, `~/.pi/agent`, `~/.qwen` and `~/.jcode`; overrides must be absolute. It does not call host CLIs and does not need a TTY. `--root <absolute path>` registers another vault-mem install root instead of the running one, for example a versioned `<install>/releases/<version>/` that a newer release is installed beside; the root is resolved to its real path (a `current` link registers the release it names) and must hold the package's `package.json` (a plain file of at most 64 KiB) and `bin/vmem.js`. The report names the root and its version. The current registration changes only on `--apply`; running servers keep their release until the host session restarts. Run it while the host is closed: Claude Code in particular rewrites `.claude.json` while it runs and can overwrite a concurrent change.
+
+Apply is idempotent and touches only the `vmem` entry: other servers and settings are preserved (TOML is edited textually, so comments and other tables stay byte-identical; JSON is re-serialized with its indentation). Configuration files must be plain strict JSON or TOML; links, JSONC and unparsable files are refused per host without writing, and the command exits 1. Apply records the prior `vmem` value in a receipt, `$VMEM_HOME/setup/<host>-<hash of the config path>.json`, so separate host profiles (for example two `CODEX_HOME`s) sharing one `VMEM_HOME` keep separate receipts. The receipt is written before the host file; if the host write fails, the receipt is rolled back. In TOML, every `[mcp_servers.vmem]` and `[mcp_servers.vmem.*]` table belongs to the entry, even when other tables sit between them. Undo restores that prior value (or removes the entry, and the file if setup created it and nothing else was added) only while the entry is still the one setup installed; an entry edited later is left alone and reported as `refused`. Every mode also handles the console plugin manifest (see "Console plugin"): apply writes it, undo removes it while it still points at this install.
+
+`vmem completion bash|zsh|fish` prints a completion script generated from the same command table as `--help`.
+
+`vmem manifest --json` prints `{name, version, configVersion, mcp: {server, tools}, commands}`: the package version, the config format it writes, the MCP tools and the CLI command names from the same table, for tools that would otherwise hard-code them. A read-only tool (its `readOnlyHint` annotation) is listed as `{name, readOnly: true}`, every other tool as its plain name.
+
+## Console plugin
+
+`vmem setup <target> --apply` also writes `$AGENTHUB_HOME/console/plugins/vmem.json` (default `~/.agenthub`; directory 0700, file 0600) with the absolute path and sha256 of `src/ui/plugin.ts`. `acon ui` then shows a Vault area. The panel needs agent-console 0.1.0 or later, the first release with the `host.ui` panel kit and `ui.button`. An older acon still loads the plugin, but the panel then fails with a TypeError on `host.ui`; upgrade agent-console to fix it. Re-run setup after upgrading vmem: acon refuses a module whose hash changed.
+
+- Panels: Overview (vaults, maps, recent log), Search, Note (body, links, actions), Promote (agent-mem candidates), Lint (typed findings linked to notes) and Log (parsed rows).
+- Inbox: promotion candidates (group `candidate`), lint errors, a stale graph report and org-vault sync pending (group `alert`). Sync pending counts uncommitted paths plus local commits ahead of the upstream tracking ref; without an upstream it counts only uncommitted paths. It reads local Git state only (no fetch or credential prompt) and opens Overview with that vault, with no one-key sync verb. The palette searches notes.
+- Inbox snapshots share one background refresh, with one worker source at a time. A cold snapshot waits at most 700 ms and then shows a refreshing status row; `refreshing: true` also marks an active collection. Later snapshots keep serving the last complete rows while refreshing. A source failure retains its last rows; if every source is unavailable at startup, a separate unavailable status row opens Overview and advises checking System. Snapshots are cached by the registered vault logs and registry metadata (inode, size and nanosecond modification/change times), a 256-byte log tail and the size-limited registry contents, without opening Git or scanning notes on a warm poll. Applied console writes invalidate freshness even if their log receipt failed. Revision-triggered refreshes wait at least 10 seconds from the start of the last collection, so sustained vault log appends cannot rerun every source on each poll, while an applied console write still refreshes on the next poll. A matching numeric `after` cursor returns only `{changed:false,cursor}`. An in-flight first collection waits only on its first request, so repeated rail polls return immediately. A 60-second safety refresh retains freshness for new agent-mem candidates, direct edits without a log receipt, and failed-source retries.
+- Promote scans are single-flight and cached by the same revision, with the same 60-second safety refresh. Brief candidate titles are capped at 160 characters; pages include at most 32 KiB of serialized UTF-8 JSON, including their envelope. `nextPage` is passed back as `page`; an actually changed candidate set makes a stale page restart at the first page, or the selected candidate, and the panel hides `First page` when that reply is page 0. Identical rescans keep page tokens and conditional cursors stable. Unreadable revision evidence degrades to a stable error stamp; source collection retains its existing failure isolation and recovers when the file is readable again. A matching `after` cursor returns `{changed:false,cursor}` for that page and selection. Failed scans reuse one error cursor until a scan succeeds, so the panel does not rebuild the same error view on each poll; recovery sends full rows even if candidates are identical. Under continuous revision changes, collection makes at most two scans per request and serves the last completed pages at their old revision; the next request retries freshness. The current console contract pin has no `maxAgeMs` or `inboxMaxAgeMs`; these hints await agent-console#105.
+- The inbox returns at most 50 rows, errors and alerts first, then newest candidates, with titles capped at 160 Unicode code points and detail at 240. `more` counts omitted rows. Because agent-mem limits candidates per project and exposes no total-count API, vmem fetches 51 per project to detect overflow: when `moreIsLowerBound: true`, read `more` as "at least N more", not an exact total. That lower bound does not decrease when candidates are added to the same population, but may stay flat once a project reaches the fetch limit. A source failure retains its previous count too. Full candidate and lint details are available in their panels. Each source has a 30-second budget to initiate worker termination; shutdown may wait for an active native call, without blocking inbox responses.
+- Actions: `delete`, `move`, `promote` (to an org vault) and `promote-from-amem` reuse the two-step MCP tools. Each first answers a preview with the planned changes; the write happens only after the console's confirm dialog, and only while the fingerprint still matches.
+- The provider calls the `vmem mcp` handlers in process, so the console has exactly the MCP rights: writes need a vault with `write: mcp`, and log lines carry the agent attribution.
+- The module is exported as `@staix/vault-mem/ui-plugin`. Lint results are cached for 60 seconds per vault.

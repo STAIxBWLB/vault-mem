@@ -1,7 +1,7 @@
 // Usage: bun scripts/readme-facts.ts [--write]
-// Renders README blocks between <!-- facts:NAME --> and <!-- /facts:NAME --> from the package's own sources.
-// Without --write it exits 1 when a block differs from what it would write.
-import { readFileSync, writeFileSync } from "node:fs";
+// Renders blocks between <!-- facts:NAME --> and <!-- /facts:NAME --> in README.md and docs/reference/*.md from the package's own sources.
+// Every fact must appear in at least one of those files. Without --write it exits 1 when a block differs from what it would write.
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
 import { INDEX_SCHEMA, LINK_RESOLUTION } from "../src/vault-index.ts";
@@ -32,34 +32,40 @@ export function facts(): Record<string, string> {
   };
 }
 
-export function render(text: string, values: Record<string, string>): { text: string; problems: string[] } {
-  const problems: string[] = [], seen = new Set<string>();
+export function render(text: string, values: Record<string, string>, seen = new Set<string>()): { text: string; problems: string[]; seen: Set<string> } {
+  const problems: string[] = [];
   const out = text.replace(/<!-- facts:([a-z-]+) -->([\s\S]*?)<!-- \/facts:\1 -->/g, (whole, name: string, current: string) => {
     const want = values[name];
     if (want === undefined) { problems.push(`facts:${name} is not a known fact (known: ${Object.keys(values).join(", ")})`); return whole; }
     seen.add(name);
-    if (current !== want) problems.push(`facts:${name} differs: README has ${JSON.stringify(current.trim().slice(0, 80))}, source gives ${JSON.stringify(want.trim().slice(0, 80))}`);
+    if (current !== want) problems.push(`facts:${name} differs: file has ${JSON.stringify(current.trim().slice(0, 80))}, source gives ${JSON.stringify(want.trim().slice(0, 80))}`);
     return `<!-- facts:${name} -->${want}<!-- /facts:${name} -->`;
   });
   const opened = text.match(/<!-- facts:/g)?.length ?? 0, closed = text.match(/<!-- \/facts:/g)?.length ?? 0;
   const matched = text.match(/<!-- facts:([a-z-]+) -->[\s\S]*?<!-- \/facts:\1 -->/g)?.length ?? 0;
   if (opened !== matched || closed !== matched) problems.push(`unbalanced facts markers: ${opened} opening, ${closed} closing, ${matched} matched pairs`);
-  for (const name of Object.keys(values)) if (!seen.has(name)) problems.push(`facts:${name} has no block in README.md`);
-  return { text: out, problems };
+  return { text: out, problems, seen };
 }
 
 if (import.meta.main) {
   const args = process.argv.slice(2);
   if (args.some(arg => arg !== "--write")) throw new Error("Unknown argument. Use bun scripts/readme-facts.ts [--write].");
-  const before = read("README.md");
-  const { text, problems } = render(before, facts());
+  const files = ["README.md", ...readdirSync(join(root, "docs/reference")).filter(name => name.endsWith(".md")).sort().map(name => `docs/reference/${name}`)];
+  const values = facts(), seen = new Set<string>(), problems: string[] = [], rendered: [string, string, string][] = [];
+  for (const file of files) {
+    const before = read(file), result = render(before, values, seen);
+    problems.push(...result.problems.map(problem => `${file}: ${problem}`));
+    rendered.push([file, before, result.text]);
+  }
+  for (const name of Object.keys(values)) if (!seen.has(name)) problems.push(`facts:${name} has no block in ${files.join(", ")}`);
   const structural = problems.filter(problem => !problem.includes(" differs: "));
   if (args.includes("--write") && !structural.length) {
-    if (text !== before) writeFileSync(join(root, "README.md"), text);
-    console.log(`readme-facts: ${text === before ? "unchanged" : "README.md rewritten"}`);
+    const changed = rendered.filter(([, before, text]) => text !== before);
+    for (const [file, , text] of changed) writeFileSync(join(root, file), text);
+    console.log(`readme-facts: ${changed.length ? `rewritten ${changed.map(([file]) => file).join(", ")}` : "unchanged"}`);
   } else if (problems.length) {
     for (const problem of problems) console.error(`readme-facts: ${problem}`);
-    console.error(structural.length ? "readme-facts: fix the markers in README.md, then rerun." : "readme-facts: run bun scripts/readme-facts.ts --write and commit README.md.");
+    console.error(structural.length ? "readme-facts: fix the markers named above, then rerun." : "readme-facts: run bun scripts/readme-facts.ts --write and commit the changed files.");
     process.exit(1);
   } else console.log("readme-facts: ok");
 }
