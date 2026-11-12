@@ -27,7 +27,7 @@ vmem tidy personal --all        # once after upgrading an existing vault: previe
 
 ## Concepts
 
-- **Home**: the registry and policies live in `vmem.config.json` under the vmem home: `VMEM_HOME`, else `$AGENTHUB_HOME/vmem`, else `~/.agenthub/vmem`. Derived index caches live under the home, never inside a vault.
+- **Home**: the registry and policies live in `vmem.config.json` under the vmem home: `VMEM_HOME`, else the `home` pointer in the default home's config, else the default home (`$AGENTHUB_HOME/vmem`, or `~/.agenthub/vmem`). Derived index caches live under the home, never inside a vault.
 - **Vault**: a directory with a flat `notes/` folder, an append-only `log` and optional `reports/` and `ops/`. Each vault has a `kind` (`personal` or `org`), a `write` policy (`mcp` allows CLI and MCP writes, `cli` CLI only, `none` no writes) and a PII policy (default `allow` for personal, `deny` for org).
 - **Notes**: frontmatter `type` is one of <!-- facts:note-types -->`insight`, `decision`, `observation`, `person`, `project`, `method`, `moc`, `reference`<!-- /facts:note-types -->; links are `[[wiki links]]` resolved by filename stem inside the same vault.
 - **Two-step changes**: move, delete, merge, tidy, promotion and sync first return a preview with a fingerprint and change nothing; `--confirm --fingerprint <sha>` (MCP `confirm`, `fingerprint`) applies exactly that preview.
