@@ -16,7 +16,7 @@ vmem --version
 ```sh
 vmem vaults add personal /absolute/vault --kind personal --write mcp   # the directory must contain notes/
 vmem status                     # home, registered vaults and health
-vmem doctor                     # path, remote, registry and pending-tidy checks; exits 1 when unhealthy
+vmem doctor                     # path, remote, registry, pending-tidy and spec-source checks; exits 1 when unhealthy
 vmem setup claude               # dry run: the MCP entry it would add
 vmem setup claude --apply       # register `vmem mcp` in the host, then restart the host session
 vmem search personal "project discovery"

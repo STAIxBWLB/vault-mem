@@ -47,7 +47,7 @@ Validation candidates are any `SPEC.md`, plus Markdown with parsed `id` or `type
 
 `specsCoveringPath` matches a tracked relative filename using Git's pathspec engine. `validateSpecRepo(repo, { requireFresh?, limit?, env? })` discovers and validates a checkout without reading or creating a registry, home or disk cache, returning `{ code, report }`; code is 1 for validation errors or required stale scopes. CLI `vmem spec validate --repo` implements this registry-free mode.
 
-The portable schema contract is [test/fixtures/spec-graph/README.md](test/fixtures/spec-graph/README.md), with independent small valid/error/warning trees and expected codes. Consumers can copy the fixtures without a runtime dependency. Validation/CI reports omit raw sources; display limits are 1..500 records per collection and 128 KiB total, with errors shown before warnings, with `truncated` when records or oversized optional identifiers are omitted. Fixing errors and rerunning reveals later items.
+The portable schema contract is [test/fixtures/spec-graph/README.md](../../test/fixtures/spec-graph/README.md), with independent small valid/error/warning trees and expected codes. Consumers can copy the fixtures without a runtime dependency. Validation/CI reports omit raw sources; display limits are 1..500 records per collection and 128 KiB total, with errors shown before warnings, with `truncated` when records or oversized optional identifiers are omitted. Fixing errors and rerunning reveals later items.
 
 `vmem_spec_create` / `vmem spec create <path> --id ID --type TYPE --title TEXT` share the create schema in `SPEC_COMMANDS`:
 
