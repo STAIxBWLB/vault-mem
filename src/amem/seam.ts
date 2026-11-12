@@ -50,7 +50,8 @@ export async function openAmem(options: AmemOptions = {}): Promise<AmemSeam> {
   };
 }
 export interface MineAmemRecord { source: "curated" | "capture"; kind: string; at: string; text: string; project: string }
-export interface MineAmemRead { records: MineAmemRecord[]; projects: string[]; screened: number; truncatedCapture: number; unreadable: number; malformedRecord: number }
+/** `recordOutside*`: main-session `Record` rows below a truncated shard's read window, summed over shards; `Capped` and `Unavailable` count shards whose answer is a lower bound or absent. */
+export interface MineAmemRead { records: MineAmemRecord[]; projects: string[]; screened: number; truncatedCapture: number; unreadable: number; malformedRecord: number; recordOutsideWindow: number; recordOutsideCapped: number; recordOutsideUnavailable: number }
 const MINE_KINDS = new Set(["decision", "finding", "contract", "fail"]);
 const MINE_EVENTS = new Set(["UserPromptSubmit", "observation", "summary", "Recap", "Compact", "Record"]);
 /**
@@ -62,7 +63,7 @@ export async function readAmemForMining(options: { env?: NodeJS.ProcessEnv; proj
   const amem = await import("@staix/agent-mem");
   const { existsSync } = await import("node:fs"), { basename, join } = await import("node:path");
   const base = amem.memoryHome(options.env ?? process.env), maxRows = options.maxCaptureRows ?? 20000;
-  const out: MineAmemRead = { records: [], projects: [], screened: 0, truncatedCapture: 0, unreadable: 0, malformedRecord: 0 };
+  const out: MineAmemRead = { records: [], projects: [], screened: 0, truncatedCapture: 0, unreadable: 0, malformedRecord: 0, recordOutsideWindow: 0, recordOutsideCapped: 0, recordOutsideUnavailable: 0 };
   if (!existsSync(base)) return out;
   const policy = amem.createStandalonePolicy({ ...(options.piiPatterns?.length ? { piiPatterns: [...options.piiPatterns] } : {}) });
   const state = amem.lifecycleResolver(base);
@@ -90,10 +91,18 @@ export async function readAmemForMining(options: { env?: NodeJS.ProcessEnv; proj
       } catch { out.unreadable++; }
       finally { if (store && store !== shared) store.close(); }
       for (const dir of shard.machineDirs) {
+        // agent-mem 0.24 keeps the curated brief cache in the machine directory, so a curated-only project has one without a capture database.
+        if (!existsSync(join(dir, "capture.db"))) continue;
         let capture: InstanceType<typeof amem.CaptureStore> | undefined;
         try {
           capture = new amem.CaptureStore({ memoryDir: base, project: shard.key, machine: basename(dir), readOnly: true, recentReadRows: true, maxReadRows: maxRows });
-          if (capture.recentReadTruncated) out.truncatedCapture++;
+          if (capture.recentReadTruncated) {
+            out.truncatedCapture++;
+            // Index-only bounded seek (#331): no row content is read, and a store that cannot answer it reports unavailable.
+            const outside = capture.countOutsideRecent({ event: "Record", since: options.since });
+            if (!outside.available) out.recordOutsideUnavailable++;
+            else { out.recordOutsideWindow += outside.rows; if (outside.capped) out.recordOutsideCapped++; }
+          }
           for (const row of capture.rows({ limit: maxRows })) {
             if (!MINE_EVENTS.has(row.event) || row.at < options.since) continue;
             if (row.event === "Record") {

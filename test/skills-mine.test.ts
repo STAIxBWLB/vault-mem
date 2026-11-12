@@ -106,11 +106,13 @@ async function fixture() {
 
   const base = { op: "note" as const, scope: "project" as const, tier: "long" as const, peer: "person", about: [], source: "person" as const };
   let clock = Date.parse("2026-10-21T09:00:00Z");
-  const store = new MemoryStore({ memoryDir, deferPromotions: true, now: () => (clock += 86400000) });
-  store.note({ ...base, project, kind: "decision", title: "Summarize meeting notes", text: "Summarize the meeting notes into an email digest." });
-  store.note({ ...base, project, kind: "finding", title: "Policy screened", text: "The confidential-codename summary must stay private." });
-  store.note({ ...base, project, kind: "fact" as never, title: "Not mined", text: "A fact about meeting notes summary." });
-  store.note({ ...base, project: other, kind: "fail", title: "Inbox draft", text: "Drafting inbox replies by hand failed; write a template." });
+  // A fixed three days per note (the dates the expectations below were calibrated on), however often the store reads its clock.
+  const store = new MemoryStore({ memoryDir, deferPromotions: true, now: () => clock });
+  const curated = (entry: Parameters<MemoryStore["note"]>[0]) => { clock += 3 * 86400000; store.note(entry); };
+  curated({ ...base, project, kind: "decision", title: "Summarize meeting notes", text: "Summarize the meeting notes into an email digest." });
+  curated({ ...base, project, kind: "finding", title: "Policy screened", text: "The confidential-codename summary must stay private." });
+  curated({ ...base, project, kind: "fact" as never, title: "Not mined", text: "A fact about meeting notes summary." });
+  curated({ ...base, project: other, kind: "fail", title: "Inbox draft", text: "Drafting inbox replies by hand failed; write a template." });
   store.close();
   await migrate({ memoryDir, mode: "apply", generation: "c".repeat(32), authorizedPerson: true, tty: true });
   const capture = new CaptureStore({ memoryDir, project });
@@ -150,7 +152,7 @@ test("skills mine reads curated, capture and vault records, masks them and write
   // curated: decision + fail pass, one finding screened by piiPatterns, a fact skipped; capture: 5 mined events, a tool event skipped, 1 duplicate;
   // vault: 3 notes in the window (person, moc and an old note excluded; the undated one uses its mtime).
   expect(result.records).toEqual({ curated: 2, capture: 5, vault: 3 });
-  expect(result.dropped).toEqual({ secret: 0, policy: 1, oversized: 0, duplicate: 1, unreadable: 0, truncatedCapture: 0, malformedRecord: 0 });
+  expect(result.dropped).toEqual({ secret: 0, policy: 1, oversized: 0, duplicate: 1, unreadable: 0, truncatedCapture: 0, malformedRecord: 0, recordOutsideWindow: 0, recordOutsideCapped: 0, recordOutsideUnavailable: 0 });
   expect(result.graph).toEqual({ nodes: 17, edges: 28, communities: 3, partitioner: "leiden" });
   expect(result.candidates.map(({ cid, label, gloss, size, day_span, unique_days, cohesion, novelty, rank, triggers, similar_skills, sources }) =>
     ({ cid, label, gloss, size, day_span, unique_days, cohesion, novelty, rank, triggers, similar_skills, sources }))).toEqual([
@@ -279,6 +281,26 @@ test("Recap and Compact keep their event kinds, pass existing screens and leave 
   }
 });
 
+
+test("Record rows crowded below a truncated read window are counted without reading them", async () => {
+  const f = await fixture();
+  const capture = new CaptureStore({ memoryDir: f.memoryDir, project });
+  for (const [event, at] of [["Record", "2026-09-20T00:00:00.000Z"], ["Record", "2026-10-29T00:00:00.000Z"], ["Record", "2026-10-29T01:00:00.000Z"], ["PostToolUse", "2026-10-30T00:00:00.000Z"], ["PostToolUse", "2026-10-30T01:00:00.000Z"]]) {
+    capture.append({ project, agent: "claude", event: event!, excerpt: event === "Record" ? `amem: fix | src/a.ts | meeting notes fail -> retry ${at}` : "tool output " + at, at: at! } as never);
+  }
+  capture.close();
+  // The September Record is before `since`, so only the two October Records count.
+  const input = await readAmemForMining({ env: f.env, project, since: "2026-10-01T00:00:00.000Z", maxCaptureRows: 2 });
+  expect([input.truncatedCapture, input.recordOutsideWindow, input.recordOutsideCapped, input.recordOutsideUnavailable]).toEqual([1, 2, 0, 0]);
+  expect(input.records.filter(row => row.source === "capture")).toEqual([]);
+  const capped = await readAmemForMining({ env: f.env, project, since: "2026-09-01T00:00:00.000Z", maxCaptureRows: 2 });
+  expect([capped.recordOutsideWindow, capped.recordOutsideCapped]).toEqual([2, 1]);
+  const report = mineRecords({ vault: "mine", days: 30, since: "2026-10-01", projects: input.projects, records: [], vocab: { actions, objects }, registry: [], skills: [], minSize: 3, minNovelty: 0.3, today: "2026-10-31", dropped: { truncatedCapture: 1, recordOutsideWindow: 2, recordOutsideCapped: 1, recordOutsideUnavailable: 1 } });
+  expect(report.report).toContain("- Record rows outside the read window: at least 2; 1 truncated shards could not be counted");
+  const complete = await readAmemForMining({ env: f.env, project, since: "2026-10-01T00:00:00.000Z", maxCaptureRows: 20 });
+  expect([complete.truncatedCapture, complete.recordOutsideWindow]).toEqual([0, 0]);
+  expect(complete.records.filter(row => row.kind === "fix")).toHaveLength(2);
+});
 
 test("tool rows can crowd summaries outside a bounded read window and the report counts truncated shards", async () => {
   const f = await fixture();
