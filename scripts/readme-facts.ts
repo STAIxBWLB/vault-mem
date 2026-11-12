@@ -1,7 +1,7 @@
 // Usage: bun scripts/readme-facts.ts [--write]
 // Renders blocks between <!-- facts:NAME --> and <!-- /facts:NAME --> in README.md and docs/reference/*.md from the package's own sources.
 // Every fact must appear in at least one of those files. Without --write it exits 1 when a block differs from what it would write.
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
 import { INDEX_SCHEMA, LINK_RESOLUTION } from "../src/vault-index.ts";
@@ -32,7 +32,7 @@ export function facts(): Record<string, string> {
   };
 }
 
-export function render(text: string, values: Record<string, string>, seen = new Set<string>()): { text: string; problems: string[]; seen: Set<string> } {
+export function render(text: string, values: Record<string, string>, seen = new Set<string>()): { text: string; problems: string[] } {
   const problems: string[] = [];
   const out = text.replace(/<!-- facts:([a-z-]+) -->([\s\S]*?)<!-- \/facts:\1 -->/g, (whole, name: string, current: string) => {
     const want = values[name];
@@ -44,12 +44,16 @@ export function render(text: string, values: Record<string, string>, seen = new 
   const opened = text.match(/<!-- facts:/g)?.length ?? 0, closed = text.match(/<!-- \/facts:/g)?.length ?? 0;
   const matched = text.match(/<!-- facts:([a-z-]+) -->[\s\S]*?<!-- \/facts:\1 -->/g)?.length ?? 0;
   if (opened !== matched || closed !== matched) problems.push(`unbalanced facts markers: ${opened} opening, ${closed} closing, ${matched} matched pairs`);
-  return { text: out, problems, seen };
+  return { text: out, problems };
 }
 
 if (import.meta.main) {
   const args = process.argv.slice(2);
   if (args.some(arg => arg !== "--write")) throw new Error("Unknown argument. Use bun scripts/readme-facts.ts [--write].");
+  if (!existsSync(join(root, "docs/reference"))) {
+    console.error("readme-facts: docs/reference/ is missing; restore it, or update the file list in scripts/readme-facts.ts if the reference files moved.");
+    process.exit(1);
+  }
   const files = ["README.md", ...readdirSync(join(root, "docs/reference")).filter(name => name.endsWith(".md")).sort().map(name => `docs/reference/${name}`)];
   const values = facts(), seen = new Set<string>(), problems: string[] = [], rendered: [string, string, string][] = [];
   for (const file of files) {

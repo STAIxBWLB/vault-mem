@@ -4,6 +4,11 @@ Read before registering a vault or spec source, changing `vmem.config.json`, a v
 
 ## Registry
 
+```sh
+vmem vaults remove personal              # preview
+vmem vaults remove personal --confirm    # unregister; vault files stay
+```
+
 The first `vmem vaults remove` prints a preview; `--confirm` unregisters the vault. It never deletes vault files. Commands work without a TTY and in agent environments. Add requires an existing `notes/` directory, stores the canonical vault path, and rejects duplicate ids and paths. Doctor returns a nonzero status when a registered vault becomes unavailable or its notes directory is replaced by a symlink.
 
 ## Home and configuration file
@@ -21,6 +26,11 @@ A vault entry may declare `"domains": ["finance", "health", "household"]` in `vm
 ## Durability and crash recovery
 
 Durability: the temporary file is fsynced before the rename and the home directory is fsynced after it. On Linux this makes the new config durable once the command returns. On macOS directory fsync succeeds but does not flush the drive cache (no `F_FULLFSYNC`), so a power loss right after a change can revert to the previous complete config, never to a partial one. Windows is not a supported platform for durability claims; the rename stays atomic.
+
+```sh
+vmem recover               # preview crash leftovers
+vmem recover --confirm
+```
 
 Crash recovery: the lock file records the writer's pid, host and start time. Nothing is cleaned up automatically. `vmem recover` previews the state; `vmem recover --confirm` removes the lock only when it names this host and a pid that no longer runs, and then removes leftover `.config-<uuid>.tmp` files. A live lock, a lock from another host, or an unreadable (older-format) lock is never removed and the command exits 1; confirm no writer runs, then delete `config.lock` by hand. No other file in the home or any vault is touched. If cleanup fails after an operation (for example the lock cannot be removed), the original error is kept and the cleanup failure, including a retained lock, is appended to it.
 
