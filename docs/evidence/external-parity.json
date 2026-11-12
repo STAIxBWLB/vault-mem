@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "kind": "external Python synthetic fixture parity",
-  "privateCorpus": "Not rerun for 0.6.0; historical authorized private-corpus results remain separate and private.",
+  "privateCorpus": "Not rerun for 0.8.0; historical authorized private-corpus results remain separate and private.",
   "references": {
     "lintSha256": "1b38d417aef8e3ea395da36e9c58dc2fa0d33bdb65fd2ea50a771a6f5dfa2ad6",
     "graphSha256": "5ff417ae8e129c208034516b7db8250473312ddeca669af0ba68931e4fd87aa8"
@@ -10,7 +10,7 @@
     "src/frontmatter.ts": "83431907513f69864b152b0bd2f1352bef8b54f005129151bda29a6bd7300ffe",
     "src/analysis-yaml.ts": "355c308ac11a7a71051c51409ee6e7437a491e07cb1910d2f0a0b80b32c4e2d7",
     "src/vault-lint.ts": "9c7d9b221c723a7597c496bf2fc77dd46a9d999dc8d5d4eed0e6b1cf97a6179f",
-    "src/vault-graph.ts": "8b0314ebf8d6cc952a8d4b0e10badad8b01260853090619f1e06ceabe170cb91",
+    "src/vault-graph.ts": "07edc88ebbd4999b5a3e78f7551bfcd9c85c415ebff40e94be379fb45c0b21b8",
     "test/fixtures/analysis-corpus.ts": "200232cf87fc8c77027eb8e1e1f08543d1c365556968978e732bcec48b52b5b2",
     "test/fixtures/analysis/lint-oracle.json": "d3e4cb1c009b4be44c2b6323425e54d2f0af3797c4a992bf589b47f0073c4628",
     "test/fixtures/analysis/graph-oracle.json": "2416f03f3bf4052af5320bac46264c7985f4e4c90ce7ab92151ebdb95f3a4b89",
@@ -33,9 +33,9 @@
     }
   ],
   "referencesRetired": false,
-  "candidate": "acf8c8bdf5b91d1127c04de085198a82d82fd5e0",
-  "measuredAt": "2026-11-10T23:29:37.394Z",
-  "runtimeDigest": "28c5475c14f841293896dd525a555ed6cdb0fc3abf2a9e78c2f0d406a7e559db",
+  "candidate": "94c6f45904fbca11ecce6e6856d0108e1d87a489",
+  "measuredAt": "2026-11-12T02:51:48.784Z",
+  "runtimeDigest": "80feaffb6a22d4525e083de335d13258713e679bcc2a36c1cada18ca7b7429dd",
   "fixtureDigest": "c018376b88b57d84ebba5484dd285b80acfc4c0f60ac7728dcd124ea54edc83c",
   "frontmatter": {
     "files": 4,
