@@ -296,8 +296,8 @@ test("Record rows crowded below a truncated read window are counted without read
   const capped = await readAmemForMining({ env: f.env, project, since: "2026-09-01T00:00:00.000Z", maxCaptureRows: 2 });
   expect([capped.recordOutsideWindow, capped.recordOutsideCapped]).toEqual([2, 1]);
   const report = mineRecords({ vault: "mine", days: 30, since: "2026-10-01", projects: input.projects, records: [], vocab: { actions, objects }, registry: [], skills: [], minSize: 3, minNovelty: 0.3, today: "2026-10-31", dropped: { truncatedCapture: 1, recordOutsideWindow: 2, recordOutsideCapped: 1, recordOutsideUnavailable: 1 } });
-  expect(report.report).toContain("- Record rows outside the read window: at least 2; 1 truncated shard has no Record index yet and could not be counted (an off-hook `amem search` in the project builds it)");
-  expect(mineRecords({ vault: "mine", days: 30, since: "2026-10-01", projects: input.projects, records: [], vocab: { actions, objects }, registry: [], skills: [], minSize: 3, minNovelty: 0.3, today: "2026-10-31", dropped: { truncatedCapture: 2, recordOutsideUnavailable: 2 } }).report).toContain("- Record rows outside the read window: 0; 2 truncated shards have no Record index yet");
+  expect(report.report).toContain("- Record rows outside the read window: at least 2; 1 truncated shard could not be counted (no Record index yet, or no bounded index plan; an off-hook `amem search` in the project builds a missing index)");
+  expect(mineRecords({ vault: "mine", days: 30, since: "2026-10-01", projects: input.projects, records: [], vocab: { actions, objects }, registry: [], skills: [], minSize: 3, minNovelty: 0.3, today: "2026-10-31", dropped: { truncatedCapture: 2, recordOutsideUnavailable: 2 } }).report).toContain("- Record rows outside the read window: 0; 2 truncated shards could not be counted (");
   const complete = await readAmemForMining({ env: f.env, project, since: "2026-10-01T00:00:00.000Z", maxCaptureRows: 20 });
   expect([complete.truncatedCapture, complete.recordOutsideWindow]).toEqual([0, 0]);
   expect(complete.records.filter(row => row.kind === "fix")).toHaveLength(2);
