@@ -51,7 +51,7 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   if (args.some(arg => arg !== "--write")) throw new Error("Unknown argument. Use bun scripts/readme-facts.ts [--write].");
   if (!existsSync(join(root, "docs/reference")) || !statSync(join(root, "docs/reference")).isDirectory()) {
-    console.error("readme-facts: docs/reference/ is missing or not a directory; restore it, or update the file list in scripts/readme-facts.ts if the reference files moved.");
+    console.error("readme-facts: docs/reference/ is missing or not a directory; restore it, or update the reference list in scripts/readme-facts.ts and scripts/check-docs.mjs if the files moved.");
     process.exit(1);
   }
   const files = ["README.md", ...readdirSync(join(root, "docs/reference")).filter(name => name.endsWith(".md")).sort().map(name => `docs/reference/${name}`)];

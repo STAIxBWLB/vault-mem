@@ -13,7 +13,12 @@ const args = process.argv.slice(2);
 const requireFresh = args.includes("--require-fresh");
 const root = resolve(args.find((arg) => arg !== "--require-fresh") ?? fileURLToPath(new URL("..", import.meta.url)));
 // Every reference file needs a stamp too, so deleting its manifest entry cannot pass silently.
-if (existsSync(join(root, "docs/reference")) && statSync(join(root, "docs/reference")).isDirectory()) REQUIRED.push(...readdirSync(join(root, "docs/reference")).filter((name) => name.endsWith(".md")).sort().map((name) => `docs/reference/${name}`));
+const referenceDir = join(root, "docs/reference");
+const referenceMissing = !existsSync(referenceDir) || !statSync(referenceDir).isDirectory();
+if (!referenceMissing) {
+  const names = readdirSync(referenceDir).filter((name) => name.endsWith(".md")).sort();
+  REQUIRED.push(...names.map((name) => `docs/reference/${name}`));
+}
 const errors = [];
 const reports = [];
 // A readback must not execute repository-configured helpers.
@@ -58,6 +63,7 @@ const dirtiness = (paths) => {
 };
 
 try {
+  if (referenceMissing) errors.push("docs/reference/ is missing or not a directory; restore it, or update the reference list in scripts/check-docs.mjs and scripts/readme-facts.ts if the files moved");
   const manifest = JSON.parse(readFileSync(join(root, "docs/verified.json"), "utf8"));
   if (manifest.schemaVersion !== 1 || !manifest.documents || typeof manifest.documents !== "object" || Array.isArray(manifest.documents)) throw new Error("invalid docs/verified.json schema");
   for (const path of REQUIRED) if (!Object.hasOwn(manifest.documents, path)) errors.push(`missing manifest entry: ${path}`);
