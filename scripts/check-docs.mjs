@@ -13,7 +13,7 @@ const args = process.argv.slice(2);
 const requireFresh = args.includes("--require-fresh");
 const root = resolve(args.find((arg) => arg !== "--require-fresh") ?? fileURLToPath(new URL("..", import.meta.url)));
 // Every reference file needs a stamp too, so deleting its manifest entry cannot pass silently.
-if (existsSync(join(root, "docs/reference"))) REQUIRED.push(...readdirSync(join(root, "docs/reference")).filter((name) => name.endsWith(".md")).sort().map((name) => `docs/reference/${name}`));
+if (existsSync(join(root, "docs/reference")) && statSync(join(root, "docs/reference")).isDirectory()) REQUIRED.push(...readdirSync(join(root, "docs/reference")).filter((name) => name.endsWith(".md")).sort().map((name) => `docs/reference/${name}`));
 const errors = [];
 const reports = [];
 // A readback must not execute repository-configured helpers.

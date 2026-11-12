@@ -1,7 +1,7 @@
 // Usage: bun scripts/readme-facts.ts [--write]
 // Renders blocks between <!-- facts:NAME --> and <!-- /facts:NAME --> in README.md and docs/reference/*.md from the package's own sources.
 // Every fact must appear in at least one of those files. Without --write it exits 1 when a block differs from what it would write.
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
 import { INDEX_SCHEMA, LINK_RESOLUTION } from "../src/vault-index.ts";
@@ -50,8 +50,8 @@ export function render(text: string, values: Record<string, string>, seen = new 
 if (import.meta.main) {
   const args = process.argv.slice(2);
   if (args.some(arg => arg !== "--write")) throw new Error("Unknown argument. Use bun scripts/readme-facts.ts [--write].");
-  if (!existsSync(join(root, "docs/reference"))) {
-    console.error("readme-facts: docs/reference/ is missing; restore it, or update the file list in scripts/readme-facts.ts if the reference files moved.");
+  if (!existsSync(join(root, "docs/reference")) || !statSync(join(root, "docs/reference")).isDirectory()) {
+    console.error("readme-facts: docs/reference/ is missing or not a directory; restore it, or update the file list in scripts/readme-facts.ts if the reference files moved.");
     process.exit(1);
   }
   const files = ["README.md", ...readdirSync(join(root, "docs/reference")).filter(name => name.endsWith(".md")).sort().map(name => `docs/reference/${name}`)];
