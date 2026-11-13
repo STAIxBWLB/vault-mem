@@ -22,8 +22,9 @@ const LINT_ERRORS: LintCode[] = ["L01", "L02", "L13"];
 const CACHE_MS = 60_000;
 const POLL_MS = 15_000;
 // The shell reuses a snapshot for maxAgeMs, then serves it stale once more while it refreshes, and drops it on every
-// console action. Half the poll keeps both windows inside one poll, so a change made outside the console (CLI, MCP,
-// an editor) shows by the next poll. Note and Search answer the person's own input and keep the shell's 2 s default.
+// console action. Half the poll keeps both windows inside one poll, so the shell cache never delays a refresh past the
+// next poll; the provider's own caches (lint, inbox and promote revisions, 60 s safety refresh) still bound what a
+// change made outside the console shows. Note and Search answer the person's own input and keep the shell's 2 s default.
 const REUSE_MS = POLL_MS / 2;
 
 type Args = Record<string, unknown>;
