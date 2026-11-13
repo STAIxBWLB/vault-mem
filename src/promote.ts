@@ -77,8 +77,18 @@ function recordSections(entry: AmemCandidate): [string, string][] | undefined {
   const fields = lines.map((line, i): [string, string] => [FAIL_LABELS[i]!, line.slice(FAIL_LABELS[i]!.length + 1).trim()]).filter(([, value]) => value);
   return fields.length ? fields : undefined;
 }
-/** An about node as a repository anchor: `path:p` is `p`, `symbol:s@p` is `p#s`; other nodes stay as they are. */
-const anchor = (node: string) => node.startsWith("path:") ? node.slice(5) : /^symbol:(.+)@([^@]+)$/.exec(node)?.slice(1).reverse().join("#") ?? node;
+/**
+ * About nodes as repository anchors: `path:p` is `p`, `symbol:s@p` is `p#s`; other nodes stay as they are. Paths and
+ * symbols may hold `@`, so a symbol is split at the longest `path:` node of the same entry it ends with (amem emits both).
+ */
+function anchors(about: string[]): string[] {
+  const paths = about.filter(node => node.startsWith("path:")).map(node => node.slice(5)).sort((a, b) => b.length - a.length);
+  return about.map(node => {
+    if (node.startsWith("path:")) return node.slice(5);
+    const path = node.startsWith("symbol:") ? paths.find(p => node.length > 8 + p.length && node.endsWith(`@${p}`)) : undefined;
+    return path === undefined ? node : `${path}#${node.slice("symbol:".length, node.length - path.length - 1)}`;
+  });
+}
 const bullets = (items: string[]) => items.map(item => `- ${item.replace(/[\r\n[\]]/g, " ")}`).join("\n");
 /** Prefilled note text: H1 from the title, body from the entry text, about[] as hints, provenance in frontmatter. */
 export function draftNote(entry: AmemCandidate, meta: PromoteMetadata, now = new Date()): { stem: string; frontmatter: Record<string, unknown>; text: string } {
@@ -94,10 +104,10 @@ export function draftNote(entry: AmemCandidate, meta: PromoteMetadata, now = new
   // A Record-derived fail note's Evidence already lists its anchors (amem joins them with ", "), so Anchors skips those.
   const evidence = new Set(sections?.find(([label]) => label === "Evidence")?.[1].split(", ") ?? []);
   // A path is implied by its own `path#symbol` anchor, so only the symbol line is kept.
-  const all = sections ? about.map(anchor) : [], covered = [...evidence, ...all];
+  const all = sections ? anchors(about) : [], covered = [...evidence, ...all];
   const listed = all.filter(item => !evidence.has(item) && !covered.some(other => other.startsWith(`${item}#`)));
-  const anchors = listed.length ? `## Anchors\n\n${bullets(listed)}\n\n` : "";
-  const content = sections ? `${sections.map(([label, value]) => `## ${label}\n\n${value}\n\n`).join("")}${anchors}` : `${entry.text.trim()}\n\n`;
+  const anchorSection = listed.length ? `## Anchors\n\n${bullets(listed)}\n\n` : "";
+  const content = sections ? `${sections.map(([label, value]) => `## ${label}\n\n${value}\n\n`).join("")}${anchorSection}` : `${entry.text.trim()}\n\n`;
   const hints = !sections && about.length ? `${bullets(about)}\n` : "";
   const body = meta.body ?? `# ${title}\n\n${content}## Relevant Notes\n\n${hints}\n## Topics\n\n${topics.map(topic => `- ${topic}`).join("\n")}\n`;
   return { stem, frontmatter, text: emitFrontmatter(parseFrontmatter(body), frontmatter) };

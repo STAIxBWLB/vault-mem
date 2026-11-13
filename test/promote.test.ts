@@ -286,6 +286,11 @@ test("#222 a Record-derived fail note drops empty fields and anchors its Evidenc
   expect(draft.text).toContain("## Anchors\n\n- src/extra.ts\n\n");
   expect(draft.text).not.toContain("Approach");
 });
+test("#222 anchors keep paths and symbols that contain @", () => {
+  const about = ["path:node_modules/@scope/pkg/index.ts", "symbol:load@v2@node_modules/@scope/pkg/index.ts", "path:docs/a@b.md", "symbol:orphan@nowhere.ts"];
+  const draft = draftNote(entry("finding", "fix: scoped import", "wrong scoped import -> pin the scope", about), {});
+  expect(draft.text).toContain("## Anchors\n\n- node_modules/@scope/pkg/index.ts#load@v2\n- docs/a@b.md\n- symbol:orphan@nowhere.ts\n\n");
+});
 test("#222 other entries draft as before and explicit metadata wins", () => {
   const plain = draftNote(entry("finding", "fix: no arrow here", "a finding without the record arrow", ["path:src/a.ts"]), {});
   expect(plain.frontmatter.type).toBe("insight");
