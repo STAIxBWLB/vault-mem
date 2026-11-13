@@ -61,17 +61,55 @@ function firstSentence(text: string): string {
   const line = text.replace(/\s+/g, " ").trim(), cut = /^(.{20,200}?[.!?])(?:\s|$)/.exec(line)?.[1] ?? line.slice(0, 200);
   return cut.trim();
 }
+const FAIL_LABELS = ["Approach", "Symptom", "Cause", "Evidence", "Retry when"] as const;
+/**
+ * Record-shaped amem text as titled sections (#222): a `fix:`-titled finding `<cause> -> <fix>` (agent-mem 0.25 maps a
+ * `fix` Record to it), or the five labelled lines of an amem fail note with the empty ones dropped.
+ */
+function recordSections(entry: AmemCandidate): [string, string][] | undefined {
+  const text = entry.text.trim();
+  if (entry.kind === "finding" && entry.title?.startsWith("fix: ")) {
+    const at = text.indexOf(" -> ");
+    return at > 0 ? [["Cause", text.slice(0, at).trim()], ["Fix", text.slice(at + 4).trim()]] : undefined;
+  }
+  const lines = entry.kind === "fail" ? text.split("\n") : [];
+  if (lines.length !== FAIL_LABELS.length || !lines.every((line, i) => line.startsWith(`${FAIL_LABELS[i]}:`))) return undefined;
+  const fields = lines.map((line, i): [string, string] => [FAIL_LABELS[i]!, line.slice(FAIL_LABELS[i]!.length + 1).trim()]).filter(([, value]) => value);
+  return fields.length ? fields : undefined;
+}
+/**
+ * About nodes as repository anchors: `path:p` is `p`, `symbol:s@p` is `p#s`; other nodes stay as they are. Paths and
+ * symbols may hold `@`, so a symbol is split at the longest `path:` node of the same entry it ends with (amem emits both).
+ */
+function anchors(about: string[]): string[] {
+  const paths = about.filter(node => node.startsWith("path:")).map(node => node.slice(5)).sort((a, b) => b.length - a.length);
+  return about.map(node => {
+    if (node.startsWith("path:")) return node.slice(5);
+    const path = node.startsWith("symbol:") ? paths.find(p => node.length > 8 + p.length && node.endsWith(`@${p}`)) : undefined;
+    return path === undefined ? node : `${path}#${node.slice("symbol:".length, node.length - path.length - 1)}`;
+  });
+}
+const bullets = (items: string[]) => items.map(item => `- ${item.replace(/[\r\n[\]]/g, " ")}`).join("\n");
 /** Prefilled note text: H1 from the title, body from the entry text, about[] as hints, provenance in frontmatter. */
 export function draftNote(entry: AmemCandidate, meta: PromoteMetadata, now = new Date()): { stem: string; frontmatter: Record<string, unknown>; text: string } {
   const title = meta.title ?? entry.title ?? firstSentence(entry.text);
   const stem = meta.stem ?? stemFor(title);
   const topics = (meta.topics ?? []).map(value => value.startsWith("[[") ? value : `[[${value}]]`);
+  const sections = recordSections(entry), about = entry.about.slice(0, 20);
   const frontmatter: Record<string, unknown> = {
-    title, description: meta.description ?? firstSentence(entry.text), type: meta.type ?? (entry.kind === "decision" ? "decision" : entry.kind === "fail" ? "method" : "insight"),
+    title, description: meta.description ?? firstSentence(sections?.[0]?.[1] ?? entry.text),
+    type: meta.type ?? (sections || entry.kind === "fail" ? "method" : entry.kind === "decision" ? "decision" : "insight"),
     ...(meta.domain ? { domain: meta.domain } : {}), topics, promoted_from: `mem:${entry.id}`, promoted_at: localDate(now),
   };
-  const hints = entry.about.length ? `${entry.about.slice(0, 20).map(node => `- ${node.replace(/[\r\n[\]]/g, " ")}`).join("\n")}\n` : "";
-  const body = meta.body ?? `# ${title}\n\n${entry.text.trim()}\n\n## Relevant Notes\n\n${hints}\n## Topics\n\n${topics.map(topic => `- ${topic}`).join("\n")}\n`;
+  // A Record-derived fail note's Evidence already lists its anchors (amem joins them with ", "), so Anchors skips those.
+  const evidence = new Set(sections?.find(([label]) => label === "Evidence")?.[1].split(", ") ?? []);
+  // A path is implied by its own `path#symbol` anchor, so only the symbol line is kept.
+  const all = sections ? anchors(about) : [], covered = [...evidence, ...all];
+  const listed = all.filter(item => !evidence.has(item) && !covered.some(other => other.startsWith(`${item}#`)));
+  const anchorSection = listed.length ? `## Anchors\n\n${bullets(listed)}\n\n` : "";
+  const content = sections ? `${sections.map(([label, value]) => `## ${label}\n\n${value}\n\n`).join("")}${anchorSection}` : `${entry.text.trim()}\n\n`;
+  const hints = !sections && about.length ? `${bullets(about)}\n` : "";
+  const body = meta.body ?? `# ${title}\n\n${content}## Relevant Notes\n\n${hints}\n## Topics\n\n${topics.map(topic => `- ${topic}`).join("\n")}\n`;
   return { stem, frontmatter, text: emitFrontmatter(parseFrontmatter(body), frontmatter) };
 }
 function vaultSpec(home: string, id: string): { spec: VaultSpec; all: VaultSpec[]; denyPaths: string[] } {
