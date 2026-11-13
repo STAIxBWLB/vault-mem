@@ -6,7 +6,7 @@ import { PassThrough } from "node:stream";
 // Test-only: the fixture authors entries through agent-mem's own store; src/ reaches the root only via the seam.
 import { MemoryStore, migrate } from "@staix/agent-mem";
 import { addVault } from "../src/registry.ts";
-import { promoteFromAmem, listPromotionCandidates, type SeamFactory } from "../src/promote.ts";
+import { draftNote, promoteFromAmem, listPromotionCandidates, type SeamFactory } from "../src/promote.ts";
 import { openAmem } from "../src/amem/seam.ts";
 import { formatLogEvent } from "../src/log-format.ts";
 import { readLog } from "../src/vault-log.ts";
@@ -268,4 +268,41 @@ test("the agent-mem root loads only through the seam and only when promotion run
   expect(probe(`await import("./src/cli.ts"); await import("./src/mcp-vault.ts"); await import("./src/promote.ts"); console.log(${loaded})`)).toBe("0");
   expect(probe(`await import("./src/amem/seam.ts"); console.log(${loaded})`)).toBe("0");
   expect(probe(`const s = await import("./src/amem/seam.ts"); await s.openAmem({ env: { AMEM_HOME: "/nonexistent-vmem-probe" }, project: "x/y" }).catch(() => {}); console.log(${loaded} > 0 ? 1 : 0)`)).toBe("1");
+});
+
+const entry = (kind: string, title: string | null, text: string, about: string[] = []) => ({ id: "c".repeat(32), project, kind, title, text, about, at: "2026-11-13T00:00:00.000Z" });
+const sections = (text: string) => [...text.matchAll(/^## (.+)$/gm)].map(match => match[1]);
+test("#222 a fix-titled finding drafts as a method with Cause, Fix and Anchors", () => {
+  const draft = draftNote(entry("finding", "fix: stale lock -> clear on open", "stale lock after crash -> clear the lock on open", ["path:src/lock.ts", "symbol:open@src/lock.ts", "path:src/cli.ts"]), {});
+  expect(draft.frontmatter).toMatchObject({ type: "method", title: "fix: stale lock -> clear on open", description: "stale lock after crash" });
+  expect(sections(draft.text)).toEqual(["Cause", "Fix", "Anchors", "Relevant Notes", "Topics"]);
+  expect(draft.text).toContain("## Cause\n\nstale lock after crash\n\n## Fix\n\nclear the lock on open\n\n## Anchors\n\n- src/lock.ts#open\n- src/cli.ts\n\n## Relevant Notes\n\n\n## Topics");
+});
+test("#222 a Record-derived fail note drops empty fields and anchors its Evidence already lists", () => {
+  const text = "Approach: \nSymptom: queue stalls under load\nCause: \nEvidence: src/queue.ts#drain\nRetry when: retry after the queue drains";
+  const draft = draftNote(entry("fail", "queue stalls under load", text, ["path:src/queue.ts", "symbol:drain@src/queue.ts", "path:src/extra.ts"]), {});
+  expect(draft.frontmatter).toMatchObject({ type: "method", description: "queue stalls under load" });
+  expect(sections(draft.text)).toEqual(["Symptom", "Evidence", "Retry when", "Anchors", "Relevant Notes", "Topics"]);
+  expect(draft.text).toContain("## Anchors\n\n- src/extra.ts\n\n");
+  expect(draft.text).not.toContain("Approach");
+});
+test("#222 other entries draft as before and explicit metadata wins", () => {
+  const plain = draftNote(entry("finding", "fix: no arrow here", "a finding without the record arrow", ["path:src/a.ts"]), {});
+  expect(plain.frontmatter.type).toBe("insight");
+  expect(plain.text).toContain("# fix: no arrow here\n\na finding without the record arrow\n\n## Relevant Notes\n\n- path:src/a.ts\n");
+  for (const kind of ["decision", "contract", "finding"]) expect(sections(draftNote(entry(kind, "Plain", "a -> b"), {}).text)).toEqual(["Relevant Notes", "Topics"]);
+  expect(draftNote(entry("fail", "free text", "a fail note that is not labelled"), {}).frontmatter.type).toBe("method");
+  const fix = entry("finding", "fix: x", "cause text -> fix text");
+  expect(draftNote(fix, { type: "insight" }).frontmatter.type).toBe("insight");
+  expect(draftNote(fix, { body: "# Own\n\nOwn body.\n" }).text).toContain("# Own\n\nOwn body.\n");
+});
+test("#222 a promote preview on a fixture home shows the structured fix draft", async () => {
+  const f = await fixture();
+  const store = new MemoryStore({ memoryDir: f.memoryDir, deferPromotions: true });
+  const id = store.note({ ...lesson, kind: "finding", title: "fix: lock left behind after crash", text: "lock left behind after crash -> clear stale locks on open", about: ["path:src/lock.ts", "symbol:open@src/lock.ts"] });
+  store.close();
+  const preview = await promoteFromAmem(f.home, { vault: "mine", id, domain: "research", topics: ["storage"], stem: "stale-lock-fix" }, { env: f.env, project });
+  expect(preview).toMatchObject({ ok: true, preview: true, applied: false });
+  expect(parseFrontmatter(preview.text!).data).toMatchObject({ type: "method" });
+  expect(preview.text!).toContain("## Cause\n\nlock left behind after crash\n\n## Fix\n\nclear stale locks on open\n\n## Anchors\n\n- src/lock.ts#open\n");
 });
