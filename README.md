@@ -59,7 +59,6 @@ Output: every command prints text for people by default, following agent-hub's C
 - Cross-vault links: `[[x]]` always resolves inside its own vault.
 - Scheduled or automatic sync and push.
 - A resolution setting for graph communities.
-- Console freshness hints (`maxAgeMs`, `inboxMaxAgeMs`): they await agent-console#105.
 - An event-filtered capture read for skill mining.
 - A console bin: vault-mem ships only the plugin module for the `acon` console of [agent-console](https://github.com/STAIxBWLB/agent-console).
 

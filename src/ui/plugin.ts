@@ -20,6 +20,11 @@ const asset = (name: string) => readFileSync(new URL(name, import.meta.url), "ut
 const VERSION = (JSON.parse(asset("../../package.json")) as { version: string }).version;
 const LINT_ERRORS: LintCode[] = ["L01", "L02", "L13"];
 const CACHE_MS = 60_000;
+const POLL_MS = 15_000;
+// The shell reuses a snapshot for maxAgeMs, then serves it stale once more while it refreshes, and drops it on every
+// console action. Half the poll keeps both windows inside one poll, so a change made outside the console (CLI, MCP,
+// an editor) shows by the next poll. Note and Search answer the person's own input and keep the shell's 2 s default.
+const REUSE_MS = POLL_MS / 2;
 
 type Args = Record<string, unknown>;
 const str = (v: unknown): string | undefined => typeof v === "string" && v.length > 0 ? v : undefined;
@@ -76,16 +81,16 @@ function changesOf(receipt: Args): Change[] {
 
 export const plugin: ConsolePlugin = {
   manifest: {
-    api: 1, tool: "vmem", version: VERSION, title: "Vault", icon: "vault", pollMs: 15_000,
+    api: 1, tool: "vmem", version: VERSION, title: "Vault", icon: "vault", pollMs: POLL_MS,
     panels: [
-      { id: "overview", title: "Overview", order: 1 },
+      { id: "overview", title: "Overview", order: 1, maxAgeMs: REUSE_MS },
       { id: "notes", title: "Search", order: 2 },
       { id: "note", title: "Note", order: 3 },
-      { id: "promote", title: "Promote", order: 4 },
-      { id: "lint", title: "Lint", order: 5 },
-      { id: "log", title: "Log", order: 6 },
+      { id: "promote", title: "Promote", order: 4, maxAgeMs: REUSE_MS },
+      { id: "lint", title: "Lint", order: 5, maxAgeMs: REUSE_MS },
+      { id: "log", title: "Log", order: 6, maxAgeMs: REUSE_MS },
     ],
-    capabilities: { actions: ["delete", "move", "promote", "promote-from-amem"], confirm: true, inbox: true, search: true },
+    capabilities: { actions: ["delete", "move", "promote", "promote-from-amem"], confirm: true, inbox: true, inboxMaxAgeMs: REUSE_MS, search: true },
   },
   async open(ctx): Promise<ConsoleProvider> {
     const home = resolveHome().home;

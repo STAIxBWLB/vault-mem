@@ -261,3 +261,11 @@ test("Promote keeps one error cursor until a scan succeeds, and recovery sends a
     expect(await p.snapshot({ panel: "promote", after: recovered.cursor as number })).toEqual({ changed: false, cursor: recovered.cursor });
   } finally { writeFileSync(config, original); await p.close?.(); }
 });
+
+test("#223 agent-console 0.2.0 resolves the declared snapshot reuse per panel", async () => {
+  // Test-only: the shell's own resolver, which the package does not export, so a misplaced hint cannot pass.
+  const { snapshotMaxAge } = await import("../node_modules/@staix/agent-console/src/snapshot-cache.ts");
+  const ages = Object.fromEntries(["overview", "notes", "note", "promote", "lint", "log", "inbox"].map(panel => [panel, snapshotMaxAge(plugin.manifest, panel)]));
+  expect(ages).toEqual({ overview: 7500, notes: 2000, note: 2000, promote: 7500, lint: 7500, log: 7500, inbox: 7500 });
+  for (const age of Object.values(ages)) expect(2 * age).toBeLessThanOrEqual(plugin.manifest.pollMs!);
+});

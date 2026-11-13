@@ -8,14 +8,14 @@
         "@staix/agent-mem": "0.25.0",
       },
       "devDependencies": {
-        "@staix/agent-console": "github:STAIxBWLB/agent-console#4c4c1e0",
+        "@staix/agent-console": "github:STAIxBWLB/agent-console#c978b31",
         "@types/bun": "^1.3.0",
         "typescript": "^5.8.0",
       },
     },
   },
   "packages": {
-    "@staix/agent-console": ["@staix/agent-console@github:STAIxBWLB/agent-console#4c4c1e0", { "bin": { "acon": "bin/acon.js" } }, "STAIxBWLB-agent-console-4c4c1e0", "sha512-iebfTIq5/ty50QLiZVNnoEMT6WbhuCQajwp1Nb3NC2H3Yay7NptDC9f2xW8yJmGC/CT+T6gLxkAiEx3bH4/LQA=="],
+    "@staix/agent-console": ["@staix/agent-console@github:STAIxBWLB/agent-console#c978b31", { "bin": { "acon": "bin/acon.js" } }, "STAIxBWLB-agent-console-c978b31", "sha512-yS7wNwKx9w8VAa6esSa8gACc8IFwUfl6DEcYoqy1mP8pXyIgjD84BPybLmD3Ak5yme3ExO7eh2TbM518hjhYWA=="],
 
     "@staix/agent-mem": ["@staix/agent-mem@0.25.0", "", { "bin": { "amem": "bin/amem.js" } }, "sha512-qIdnzjOiXeBqV2iKGLCKBKYqNz2eIPLgmRsO7WMh7iz+GiRkWc7x665wJrK1HTIKXTn9W9qxATq5GuU46avliA=="],
 
