@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "documents": {
     "README.md": {
-      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "verifiedAgainst": "3a9cadedab87c0c80403cd69abd275393abacd14",
       "paths": [
         "src/",
         "bin/",
@@ -19,7 +19,7 @@
       ]
     },
     "docs/cutover-checklist.md": {
-      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "verifiedAgainst": "3a9cadedab87c0c80403cd69abd275393abacd14",
       "paths": [
         "src/setup.ts",
         "src/registry.ts",
@@ -28,7 +28,7 @@
       ]
     },
     "docs/release-readiness.md": {
-      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "verifiedAgainst": "3a9cadedab87c0c80403cd69abd275393abacd14",
       "paths": [
         "scripts/release-evidence.ts",
         "scripts/release-performance.ts",
@@ -40,7 +40,7 @@
       ]
     },
     "docs/release-workflow.md": {
-      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "verifiedAgainst": "3a9cadedab87c0c80403cd69abd275393abacd14",
       "paths": [
         ".github/workflows/release.yml",
         "scripts/release-tag.ts",
@@ -48,7 +48,7 @@
       ]
     },
     "docs/reference/analysis.md": {
-      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "verifiedAgainst": "3a9cadedab87c0c80403cd69abd275393abacd14",
       "paths": [
         "src/",
         "bin/",
@@ -65,7 +65,7 @@
       ]
     },
     "docs/reference/configuration.md": {
-      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "verifiedAgainst": "3a9cadedab87c0c80403cd69abd275393abacd14",
       "paths": [
         "src/",
         "bin/",
@@ -82,7 +82,7 @@
       ]
     },
     "docs/reference/mcp-and-setup.md": {
-      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "verifiedAgainst": "3a9cadedab87c0c80403cd69abd275393abacd14",
       "paths": [
         "src/",
         "bin/",
@@ -99,7 +99,7 @@
       ]
     },
     "docs/reference/promotion-and-sync.md": {
-      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "verifiedAgainst": "3a9cadedab87c0c80403cd69abd275393abacd14",
       "paths": [
         "src/",
         "bin/",
@@ -116,7 +116,7 @@
       ]
     },
     "docs/reference/reads.md": {
-      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "verifiedAgainst": "3a9cadedab87c0c80403cd69abd275393abacd14",
       "paths": [
         "src/",
         "bin/",
@@ -133,7 +133,7 @@
       ]
     },
     "docs/reference/specs.md": {
-      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "verifiedAgainst": "3a9cadedab87c0c80403cd69abd275393abacd14",
       "paths": [
         "src/",
         "bin/",
@@ -150,7 +150,7 @@
       ]
     },
     "docs/reference/writes.md": {
-      "verifiedAgainst": "b8f18515197debd509d0909c37d4eadfc8c99be6",
+      "verifiedAgainst": "3a9cadedab87c0c80403cd69abd275393abacd14",
       "paths": [
         "src/",
         "bin/",
