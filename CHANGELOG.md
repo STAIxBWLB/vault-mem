@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Raise the exact `@staix/agent-mem` pin from 0.25.0 to 0.28.0, so an installed vmem no longer holds a home's `sync` or `home` format floor at 0.25.0 when the person raises it to 0.28.0 with `amem formats raise`. vmem uses none of the APIs whose defaults changed between them (0.27.0 groups curated search hits by task; vmem does not call amem search). 0.26.0-0.28.0 keep the curated index version, capture and candidate formats readable by 0.25.0, and none raises a floor implicitly.
+
 ## [0.9.0] - 2026-11-13
 
 - N-1: 0.8.0 runs beside 0.9.0 without either version rebuilding the other's derived state or rewriting the other's configuration: both use the same note and spec index files (`links2-schema4`, schema 4) and config format 4, and note/spec files stay shared. Link resolution, the pinned MCP `initialize` instructions, the 38 MCP tools and the CLI commands are unchanged, and no receipt field or error code changes. The agent-mem pin moves from 0.23.0 to 0.25.0, which changes no agent-mem index or format version, so both versions read the same memory home. The observable differences are additive or draft-only: `vmem_skills_mine` JSON gains `dropped.recordOutsideWindow`, `recordOutsideCapped` and `recordOutsideUnavailable` plus one report line, a promotion preview of a Record-shaped agent-mem entry drafts structured sections (a confirmed note is still validated the same way), and the console manifest gains snapshot-reuse hints that an older acon ignores.
