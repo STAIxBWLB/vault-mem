@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-17
+
+- Keeps the 0.9 line's N-1 with 0.8.0 unchanged: note and spec index files (`links2-schema4`, schema 4), config format 4, link resolution, the pinned MCP `initialize` instructions, the 38 MCP tools and the CLI commands are the same as 0.9.0, and agent-mem 0.28.0 keeps curated `INDEX_VERSION` 4, so both versions still read the same memory home.
 - Raise the exact `@staix/agent-mem` pin from 0.25.0 to 0.28.0, so an installed vmem no longer holds a home's `sync` or `home` format floor at 0.25.0 when the person raises it to 0.28.0 with `amem formats raise`. vmem uses none of the APIs whose defaults changed between them (0.27.0 groups curated search hits by task; vmem does not call amem search). 0.26.0-0.28.0 keep the curated index version, capture and candidate formats readable by 0.25.0, and none raises a floor implicitly.
 
 ## [0.9.0] - 2026-11-13
