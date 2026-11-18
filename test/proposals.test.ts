@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalPayloadDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
 import { createStoredProposal, readStoredProposal } from "../src/proposal-storage.ts";
-import { chmodSync, linkSync, lstatSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { submitProposal } from "../src/proposal-provider.ts";
+import { addVault } from "../src/registry.ts";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -59,4 +61,30 @@ test("private record storage refuses overwrite, linked files and permissive dire
     symlinkSync(join(home, "outside"), file);
     expect(() => readStoredProposal(home, record.bindingDigest, record.id)).toThrow();
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("submission screens and validates before storing without changing the vault", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-submit-"))), home = join(root, "home"), vault = join(root, "vault"), notes = join(vault, "notes");
+  try {
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, "research.md"), "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n");
+    addVault(home, { id: "test", path: vault, kind: "personal", write: "mcp" });
+    const operation = { op: "create", path: "proposed", frontmatter: { type: "insight", domain: "research", description: "Synthetic finding.", topics: ["[[research]]"] }, body: "# Proposed\n\nSynthetic body.\n\n## Topics\n\n- [[research]]\n" };
+    const before = readdirSync(notes);
+    const result = submitProposal(home, { vault: "test", operation, agentLabel: "test-agent" }, { channel: "mcp" });
+    expect(result).toMatchObject({ vault: "test", state: "pending", path: "notes/proposed.md" });
+    expect(result).not.toHaveProperty("operation");
+    expect(readdirSync(notes)).toEqual(before);
+    expect(existsSync(join(vault, "log"))).toBe(false);
+    const store = join(home, "proposals"), bucket = readdirSync(store)[0]!;
+    const stored = readdirSync(join(store, bucket));
+    expect(() => submitProposal(home, { vault: "test", operation: { ...operation, body: "password: syntheticsecret" } }, { channel: "mcp" })).toThrow("screening refused");
+    expect(readdirSync(join(store, bucket))).toEqual(stored);
+    expect(readdirSync(notes)).toEqual(before);
+    expect(existsSync(join(notes, "proposed.md"))).toBe(false);
+    const lockedVault = join(root, "locked"); mkdirSync(join(lockedVault, "notes"), { recursive: true });
+    addVault(home, { id: "locked", path: lockedVault, kind: "personal", write: "none" });
+    expect(() => submitProposal(home, { vault: "locked", operation }, { channel: "cli" })).toThrow("write policy");
+    expect(readdirSync(store)).toEqual([bucket]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
