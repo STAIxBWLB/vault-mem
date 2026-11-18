@@ -223,3 +223,54 @@ test("applied notes stay applied when logging fails and cannot be replayed", () 
     expect(() => applyProposal(home, { vault: "test", id: submitted.id, fingerprint: preview.fingerprint }, { channel: "mcp" })).toThrow("no longer pending");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+for (const mode of ["before", "after", "before-receipt", "after-receipt"] as const) test(`interrupted ${mode} publication retains an honest state and cannot replay`, () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-crash-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
+  try {
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, "research.md"), "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n");
+    addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp" });
+    const operation = { op: "create", path: "proposed", frontmatter: { type: "insight", domain: "research", description: "Synthetic finding.", topics: ["[[research]]"] }, body: "# Proposed\n\nSynthetic body.\n\n## Topics\n\n- [[research]]\n" };
+    const submitted = submitProposal(home, { vault: "test", operation }, { channel: "mcp" });
+    const preview = previewProposalApply(home, { vault: "test", id: submitted.id }, { channel: "mcp" });
+    const fixture = join(import.meta.dir, "fixtures", "proposal-crash.ts");
+    const child = Bun.spawnSync([process.execPath, fixture, home, vaultPath, submitted.id, preview.fingerprint, mode], { stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).not.toBe(0);
+    const bindingDigest = readdirSync(join(home, "proposals")).find(name => /^[a-f0-9]{64}$/.test(name))!, stored = readStoredProposal(home, bindingDigest, submitted.id);
+    const persisted = mode === "after-receipt";
+    expect(stored.state).toBe(persisted ? "applied" : "apply_unknown");
+    expect(existsSync(join(notes, "proposed.md"))).toBe(mode !== "before");
+    expect(existsSync(join(vaultPath, "log"))).toBe(mode === "before-receipt" || persisted);
+    if (persisted) {
+      expect(stored.receipt).toMatchObject({ applied: true, logged: true });
+      expect(() => reconcileProposal(home, { vault: "test", id: submitted.id }, { channel: "mcp" })).toThrow("needs an uncertain apply");
+    } else {
+      const review = reconcileProposal(home, { vault: "test", id: submitted.id }, { channel: "mcp" });
+      expect(review).toMatchObject({ state: "apply_unknown", receiptEvidence: "unavailable", matchesBefore: mode === "before", matchesAfter: mode !== "before" });
+    }
+    expect(() => applyProposal(home, { vault: "test", id: submitted.id, fingerprint: preview.fingerprint }, { channel: "mcp" })).toThrow(persisted ? "no longer pending" : "outcome is unknown");
+    expect(readStoredProposal(home, bindingDigest, submitted.id).state).toBe(persisted ? "applied" : "apply_unknown");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("two concurrent confirmations publish the note at most once", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-race-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
+  try {
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, "research.md"), "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n");
+    addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp" });
+    const operation = { op: "create", path: "proposed", frontmatter: { type: "insight", domain: "research", description: "Synthetic finding.", topics: ["[[research]]"] }, body: "# Proposed\n\nSynthetic body.\n\n## Topics\n\n- [[research]]\n" };
+    const submitted = submitProposal(home, { vault: "test", operation }, { channel: "mcp" });
+    const preview = previewProposalApply(home, { vault: "test", id: submitted.id }, { channel: "mcp" });
+    const fixture = join(import.meta.dir, "fixtures", "proposal-apply.ts"), args = [process.execPath, fixture, home, submitted.id, preview.fingerprint];
+    const children = [Bun.spawn(args, { stdout: "pipe", stderr: "pipe" }), Bun.spawn(args, { stdout: "pipe", stderr: "pipe" })];
+    const outputs = await Promise.all(children.map(async child => ({ code: await child.exited, text: await new Response(child.stdout).text(), error: await new Response(child.stderr).text() })));
+    for (const output of outputs) expect(output.code).toBe(0);
+    const results = outputs.map(output => JSON.parse(output.text) as { applied: boolean });
+    expect(results.filter(result => result.applied)).toHaveLength(1);
+    expect(existsSync(join(notes, "proposed.md"))).toBe(true);
+    expect(readFileSync(join(vaultPath, "log"), "utf8").trim().split("\n")).toHaveLength(1);
+    const bindingDigest = readdirSync(join(home, "proposals")).find(name => /^[a-f0-9]{64}$/.test(name))!;
+    expect(readStoredProposal(home, bindingDigest, submitted.id).state).toBe("applied");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
