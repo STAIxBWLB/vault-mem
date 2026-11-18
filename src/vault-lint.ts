@@ -9,7 +9,7 @@ const LEGACY = new Set("CREATE UPDATE MIGRATE REFACTOR MERGE MOVE RELOCATE RENAM
 const CODE_TITLES: Record<LintCode, string> = {
   L01: "L01 — dead wiki-link", L02: "L02 — 필수 frontmatter / 허용값", L03: "L03 — orphan",
   L09: "L09 — 로그 포맷", L10: "L10 — project 값", L11: "L11 — graph report staleness", L12: "L12 — island community", L13: "L13 — filename", L14: "L14 — source paths",
-  L15: "L15 — proven confidence의 source", L16: "L16 — evidence drift",
+  L15: "L15 — proven confidence의 source", L16: "L16 — evidence drift", L17: "L17 — source changed after updated",
 };
 const truth = yamlTruthy;
 const emptySource = (value: unknown) => !truth(value) || typeof value === "string" && !value.trim();
@@ -110,10 +110,18 @@ function graphChecks(snapshot: AnalysisSnapshot): { l11: string[]; l12: string[]
   singles.sort();
   return { l11, l12, info: `nodes ${graph.nodes?.length ?? 0} / edges ${edges.length} / communities ${communities.size}; singleton ${singles.length}개${singles.length ? ": " + singles.slice(0,10).map(s => `\`${s}\``).join(", ") : ""}` };
 }
+/** Counted, never flagged: notes without `updated`, and paths the bound or an unavailable git left unchecked. */
+function sourceAgeInfo(age: AnalysisSnapshot["sourceAge"]): string {
+  if (!age) return "정보: 워크스페이스 루트 없음 (registry 미지정) — L17 생략";
+  const parts = [`unknown age ${age.unknownAge}건 (updated 없음, 미검사)`];
+  if (age.skipped) parts.push(`미검사 source ${age.skipped}건`);
+  if (age.gitUnavailable) parts.push(`git: ${age.gitUnavailable}`);
+  return `정보: ${parts.join("; ")}`;
+}
 export function lintVault(snapshot: AnalysisSnapshot, only?: string): LintReport { return lintDetails(snapshot, only).report; }
 /** The report plus what only its markdown carries: the note count, check titles and per-check info lines, for the CLI text view. */
 export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report: LintReport; notes: number; titles: Record<LintCode, string>; info: Partial<Record<LintCode, string>> } {
-  const findings: Record<LintCode,string[]> = {L01:[],L02:[],L03:[],L09:[],L10:[],L11:[],L12:[],L13:[],L14:[],L15:[],L16:[]};
+  const findings: Record<LintCode,string[]> = {L01:[],L02:[],L03:[],L09:[],L10:[],L11:[],L12:[],L13:[],L14:[],L15:[],L16:[],L17:[]};
   const notes = [...snapshot.notes].sort((a,b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map(n => ({...n,...legacyDocument(n.source),stem: n.path.replace(/^notes\//, "").slice(0,-3)}));
   const stems = new Set(notes.map(n => n.stem)), inlinks = new Map(notes.map(n => [n.stem,0]));
   // A text the hint pass never reached was not looked up, so its line must not read as a title that merely did not match.
@@ -123,6 +131,7 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
     const rel = `notes/${note.stem}.md`, prefix = `\`${rel}\`: `, fm = note.fm;
     for (const message of ownValue(snapshot.sourceWarnings, note.path) ?? []) findings.L14.push(prefix+message);
     for (const message of ownValue(snapshot.evidenceWarnings, note.path) ?? []) findings.L16.push(prefix+message);
+    for (const message of ownValue(snapshot.sourceAge?.findings, note.path) ?? []) findings.L17.push(prefix+message);
     const allLinks: [string,string][] = links(note.body).map(t => ["body",t]);
     if (fm) for (const field of FIELDS) for (const t of links(fm[field])) allLinks.push([field,t]);
     for (const [field,t] of allLinks) {
@@ -168,9 +177,9 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
   }
   if (data > 20000) findings.L09.push(`log ${data} 라인 > 20000 — 수동 아카이브 권장`);
   const graph = graphChecks(snapshot); findings.L11 = graph.l11; findings.L12 = graph.l12;
-  if (only) for (const code of ["L01","L02","L03","L10","L13","L14","L15","L16"] as const) findings[code] = findings[code].filter(s => s.startsWith(`\`${only}\``));
+  if (only) for (const code of ["L01","L02","L03","L10","L13","L14","L15","L16","L17"] as const) findings[code] = findings[code].filter(s => s.startsWith(`\`${only}\``));
   const errors = findings.L01.length + findings.L02.length + findings.L13.length;
-  const warnings = findings.L03.length + findings.L09.length + findings.L10.length + findings.L11.length + findings.L12.length + findings.L14.length + findings.L15.length + findings.L16.length;
+  const warnings = findings.L03.length + findings.L09.length + findings.L10.length + findings.L11.length + findings.L12.length + findings.L14.length + findings.L15.length + findings.L16.length + findings.L17.length;
   const summary = `SUMMARY errors=${errors} warnings=${warnings}`;
   const extra: Partial<Record<LintCode,string>> = {
     L01: bound ? `정보: 힌트 상한 ${bound.cap}개 텍스트 초과 — ${bound.skipped}개 dead link 텍스트는 힌트 미계산 (미탐 아님)` : "",
@@ -178,6 +187,7 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
     L03: "hub MOC `notes/index.md`는 설계상 예외",
     L09: snapshot.log === null ? "정보: log 없음" : `정보: ${legacy ? `legacy TYPE ${legacy}건 (정규화표 등재), 최종 사용 ${last}, 신규 발생 없음` : "legacy TYPE 0건"}`,
     L10: snapshot.registryIds === null ? "registry 미지정 — plain id 검사 생략" : "", L12: graph.info,
+    L17: sourceAgeInfo(snapshot.sourceAge),
   };
   const lines = [`<!-- lint.py ${snapshot.today} notes=${notes.length} errors=${errors} warnings=${warnings} -->`,""];
   for (const code of Object.keys(findings) as LintCode[]) {
