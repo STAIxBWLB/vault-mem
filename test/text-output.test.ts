@@ -51,7 +51,7 @@ test("#114 the executable dispatches on the command even when --color comes firs
     const skills = Bun.spawnSync([process.execPath, bin, "--color=never", "skills", "mine", "absent"], { env, stdout: "pipe", stderr: "pipe" });
     expect(skills.stderr.toString()).not.toContain("unknown command");
     const bad = Bun.spawnSync([process.execPath, bin, "--color=loud", "status"], { env, stdout: "pipe", stderr: "pipe" });
-    expect(bad.exitCode).toBe(1);
+    expect(bad.exitCode).toBe(2);
     expect(bad.stderr.toString()).toContain("--color=auto");
     const mcp = Bun.spawn([process.execPath, bin, "--color=never", "mcp"], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } }) + "\n");

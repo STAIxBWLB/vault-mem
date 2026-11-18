@@ -10,7 +10,7 @@ import type { OrgPromoteResult } from "./org-promote.ts";
 import type { SyncResult } from "./sync.ts";
 import type { PromoteResult } from "./promote.ts";
 import { notePath } from "./write-operations.ts";
-import { blocks, clean, fields, heading, issueTable, nextCommand, paragraph, plural, shellWord, table, type TextOptions, type Tone } from "./text-output.ts";
+import { blocks, clean, fields, heading, issueTable, nextCommand, paragraph, plural, shellWord, summary, table, type TextOptions, type Tone } from "./text-output.ts";
 
 /** The words the command was run with (`[command, ...args]`, no `--color`) and its positional arguments. */
 export interface WriteContext { argv: string[]; positional: string[] }
@@ -63,7 +63,7 @@ export function renderWriteReceipt(r: WriteReceipt, o: TextOptions, ctx: WriteCo
   if (command === "check") {
     const path = r.changes[0]?.path ?? r.issues.find(issue => issue.path)?.path ?? "the note", e = errors(r.issues), w = r.issues.length - e;
     const verdict = r.ok ? `ok: ${path} passes validation${w ? ` (${plural(w, "warning")})` : ""}` : `fail: ${path} has ${plural(e, "error")}${w ? ` and ${plural(w, "warning")}` : ""}`;
-    return blocks(issues, line(verdict, o, r.ok ? "ok" : "fail"));
+    return blocks(issues, line(verdict, o, r.ok ? "ok" : "fail"), summary({ failed: e || (r.ok ? 0 : 1), warnings: w, ok: r.ok ? 1 : 0 }, o));
   }
   const twoStep = command === "merge" || command === "move" || command === "delete";
   const hasState = r.changes.some(change => change.applied !== undefined);

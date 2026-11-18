@@ -17,17 +17,17 @@ import { resolveHome } from "./home.ts";
 import { addVault, addSpec, removeSpec, specStatus, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault, setVaultPii } from "./registry.ts";
 import { piiPolicy } from "./pii.ts";
 import { vaultStats } from "./vault-stats.ts";
-import { PLAIN, shellWord, takeColorFlag, textOptions, type TextOptions } from "./text-output.ts";
+import { PLAIN, UsageError, shellWord, takeColorFlag, textOptions, type TextOptions } from "./text-output.ts";
 import { renderDoctor, renderManifest, renderRecover, renderRemove, renderSetup, renderSpecAdd, renderSpecsList, renderStats, renderStatus, renderVaultAdd, renderVaultPii, renderVaultsList, type StatusResult } from "./cli-output.ts";
 function parse(args: string[], allowed: string[], values: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const word = args[i]!;
     if (!word.startsWith("-")) { positional.push(word); continue; }
-    if (!allowed.includes(word) || word in flags) throw new Error(`unknown or repeated option: ${word}`);
+    if (!allowed.includes(word) || word in flags) throw new UsageError(`unknown or repeated option: ${word}`);
     if (values.includes(word)) {
       const value = args[++i];
-      if (!value || value.startsWith("--")) throw new Error(`${word}: value required`);
+      if (!value || value.startsWith("--")) throw new UsageError(`${word}: value required`);
       flags[word] = value;
     } else flags[word] = true;
   }
@@ -200,7 +200,7 @@ function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLA
       result = removed; render = () => renderRemove("vaults", removed, text);
       break;
     }
-    default: throw new Error(`unknown command: ${command}; use --help`);
+    default: throw new UsageError(`unknown command: ${command}; use --help`);
   }
   return { text: flags["--json"] ? JSON.stringify(result) : render(), code };
 }
@@ -231,9 +231,18 @@ export async function runAsync(argv: string[], env: NodeJS.ProcessEnv = process.
 }
 export async function mainAsync(args: string[]): Promise<number> {
   try { const output = await runAsync(args, process.env, { stdinIsTTY: process.stdin.isTTY === true, stdout: process.stdout }); console.log(output.text); return output.code; }
-  catch (error) { console.error(`vmem: ${error instanceof Error ? error.message : "operation failed"}`); return 1; }
+  catch (error) { return reportError(error, args); }
 }
 export function main(args: string[]): number {
   try { const output = run(args, process.env, process.stdout); console.log(output.text); return output.code; }
-  catch (error) { console.error(`vmem: ${error instanceof Error ? error.message : "operation failed"}`); return 1; }
+  catch (error) { return reportError(error, args); }
+}
+
+function reportError(error: unknown, args: string[]): number {
+  console.error(`vmem: ${error instanceof Error ? error.message : "operation failed"}`);
+  if (!(error instanceof UsageError)) return 1;
+  const command = args.find(arg => !arg.startsWith("-"));
+  console.error(`Usage: vmem ${command ?? "<command>"} [options]`);
+  console.error(`Run 'vmem help ${command ?? ""}'.`);
+  return 2;
 }

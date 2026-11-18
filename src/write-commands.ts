@@ -10,7 +10,7 @@ import type { LogEvent } from "./log-types.ts";
 import { LOG_EVENT_SCHEMA } from "./log-format.ts";
 import { argumentError } from "./mcp.ts";
 import { parseTidyMap, tidyVault, TIDY_RULES } from "./tidy.ts";
-import { PLAIN, type TextOptions } from "./text-output.ts";
+import { PLAIN, UsageError, type TextOptions } from "./text-output.ts";
 import { renderTidy, renderWriteReceipt } from "./write-output.ts";
 const COMMANDS = new Set(["new", "patch", "append", "frontmatter", "link", "supersede", "merge", "move", "delete", "tidy", "report", "check"]);
 export function isWriteCommand(command: string): boolean { return COMMANDS.has(command); }
@@ -59,21 +59,21 @@ export function runWriteCommand(command: string, args: string[], home: string, e
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (!arg.startsWith("--")) { positional.push(arg); continue; }
-    if (Object.hasOwn(flags, arg) || (!values.includes(arg) && !booleans.includes(arg))) throw new Error(`${command}: unknown or repeated option: ${arg}`);
+    if (Object.hasOwn(flags, arg) || (!values.includes(arg) && !booleans.includes(arg))) throw new UsageError(`${command}: unknown or repeated option: ${arg}`);
     if (booleans.includes(arg)) flags[arg] = true;
     else {
       const value = args[++i];
-      if (value === undefined || value.startsWith("--")) throw new Error(`${arg}: value required`);
+      if (value === undefined || value.startsWith("--")) throw new UsageError(`${arg}: value required`);
       flags[arg] = value;
     }
   }
-  const required = (name: string): string => { if (typeof flags[name] !== "string") throw new Error(`${name}: required`); return flags[name] as string; };
+  const required = (name: string): string => { if (typeof flags[name] !== "string") throw new UsageError(`${name}: required`); return flags[name] as string; };
   const optional = (name: string): string | undefined => typeof flags[name] === "string" ? flags[name] as string : undefined;
   const usage = COMMAND_USAGE.find(item => item.name === command)!.usage;
   const targets = usage.slice(command.length).split(/\s+(?:--|\[)/, 1)[0]!.match(/<[^>]+>/g) ?? [];
   if (positional.length !== targets.length) {
     const expected = targets.length === 2 ? `${targets[0]} and one ${targets[1]}` : targets.join(" and ");
-    throw new Error(`${command}: takes ${expected}; got ${Math.max(0, positional.length - 1)} targets`);
+    throw new UsageError(`${command}: takes ${expected}; got ${Math.max(0, positional.length - 1)} targets`);
   }
   const vault = positional[0]!, target = positional[1]!;
   if (command === "tidy") {

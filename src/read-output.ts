@@ -9,7 +9,7 @@ import type { LintCode, LintReport } from "./analysis-types.ts";
 import type { GraphNeighborhood, GraphPath } from "./vault-graph.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
 import type { EvidenceReport } from "./evidence.ts";
-import { blocks, clean, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
+import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paint, paragraph, plural, shellWord, summary, table, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
 
 const command = (...words: string[]) => ["vmem", ...words].map(shellWord).join(" ");
 
@@ -68,10 +68,11 @@ const verdict = (r: { errors: number; warnings: number; summary: string }, o: Te
 export function lintText(d: { report: LintReport; notes: number; titles: Record<LintCode, string>; info: Partial<Record<LintCode, string>> }, o: TextOptions, c: { vault: string; note?: string }): string {
   const rows = (Object.keys(d.report.findings) as LintCode[]).flatMap(code => {
     const check = d.titles[code].replace(" — ", " "), found = d.report.findings[code];
-    return [...(found.length ? found.map(f => [tone(LEVELS[code], LEVELS[code] === "error" ? "fail" : "warn"), check, f]) : [[tone("ok", "ok"), check, "위반 없음"]]),
+    return [...(found.length ? found.map(f => [`${marker(LEVELS[code] === "error" ? "fail" : "warn", { ...o, color: false })} ${LEVELS[code]}`, check, f]) : [[`${marker("ok", { ...o, color: false })} ok`, check, "위반 없음"]]),
       ...(d.info[code] ? [[tone("info", "muted"), check, d.info[code]]] : [])];
   });
-  return blocks(heading(`lint ${c.vault}${c.note ? ` ${c.note}` : ""}: ${plural(d.notes, "note")}`, o), table(["LEVEL", "CHECK", "FINDING"], rows, o), verdict(d.report, o));
+  const ok = (Object.keys(d.report.findings) as LintCode[]).filter(code => !d.report.findings[code].length).length;
+  return blocks(heading(`lint ${c.vault}${c.note ? ` ${c.note}` : ""}: ${plural(d.notes, "note")}`, o), table(["LEVEL", "CHECK", "FINDING"], rows, o), verdict(d.report, o), summary({ failed: d.report.errors, warnings: d.report.warnings, ok }, o));
 }
 
 /** `lint --write` and `graph build`: what was written or would be, then issues and the log event. */
@@ -83,7 +84,8 @@ export function analysisWriteText(r: { ok: boolean; applied: boolean; summary: u
     : fields((["nodes", "edges", "communities", "work_docs"] as const).map(k => [k.replace("_", " "), typeof s[k] === "number" ? s[k] : undefined]), o);
   const issues: WriteIssue[] = [...r.receipts.flatMap(x => x.issues), ...(r.log?.issues ?? [])];
   const logged = r.log ? (r.log.ok ? `logged ${c.kind === "lint" ? "LINT" : "GRAPH"} event` : paint("log event not appended", "fail", o)) : undefined;
-  return blocks(line, r.paths.map(p => `  ${clean(p)}`).join("\n"), counts, issueTable(issues, o), logged);
+  const lintSummary = c.kind === "lint" ? summary({ failed: Number(s.errors ?? 0) || (r.ok ? 0 : 1), warnings: Number(s.warnings ?? 0), ok: r.ok && !s.errors && !s.warnings ? 1 : 0 }, o) : undefined;
+  return blocks(line, r.paths.map(p => `  ${clean(p)}`).join("\n"), counts, issueTable(issues, o), logged, lintSummary);
 }
 
 export function neighborsText(r: GraphNeighborhood, o: TextOptions, c: { vault: string; limit: number; relation?: string }): string {

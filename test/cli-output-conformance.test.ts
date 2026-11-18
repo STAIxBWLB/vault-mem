@@ -37,3 +37,16 @@ test("LANG=C selects ASCII markers", () => {
   expect(marker("next", options)).toBe("->");
   expect(marker("ok", textOptions("never", { LANG: "C.UTF-8" }))).toBe("✓ ");
 });
+
+test("usage and operation failures have distinct process exits", () => {
+  const bin = new URL("../bin/vmem.js", import.meta.url).pathname;
+  const env = { ...process.env, LANG: "C", VMEM_HOME: "/nonexistent-vmem-test-home" };
+  for (const args of [["lint"], ["check"], ["not-a-command"], ["lint", "--bad"]]) {
+    const result = Bun.spawnSync([process.execPath, bin, ...args], { env, stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr.toString()).toContain("vmem: ");
+  }
+  const failure = Bun.spawnSync([process.execPath, bin, "lint", "missing"], { env, stdout: "pipe", stderr: "pipe" });
+  expect(failure.exitCode).toBe(1);
+  expect(failure.stderr.toString()).toContain("vmem: ");
+});

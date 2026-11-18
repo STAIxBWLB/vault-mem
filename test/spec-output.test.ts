@@ -123,6 +123,6 @@ test("#114 AC1: spec commands print text by default and the previous compact JSO
   }
   expect(run(["spec", "validate", "--repo", repo, "--json"], env).text).toBe(JSON.stringify(validateSpecRepo(repo, { env }).report));
   expect(run(["spec", "validate", "--repo", repo], env).text).toEndWith("ok: 0 errors, 1 warning, 0 stale scopes");
-  expect(run(["spec", "get", "root", "--color=always"], env).text).toContain("\u001b[1mspec root");
+  expect(run(["spec", "get", "root", "--color=always"], env).text).toContain("\u001b[1;34mspec root");
   expect(run(["spec", "get", "root", "--color=never"], env).text).not.toContain("\u001b");
 });

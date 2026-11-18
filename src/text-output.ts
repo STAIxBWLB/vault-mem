@@ -29,6 +29,7 @@ export function summary(counts: { failed?: number; warnings?: number; ok?: numbe
   const entries = [["fail", counts.failed, "failed"], ["warn", counts.warnings, "warnings"], ["ok", counts.ok, "ok"], ["unknown", counts.unknown, "unknown"]] as const;
   return entries.filter(([, count]) => count).map(([name, count, label]) => `${marker(name, o)} ${count} ${label}`).join("  ") || `${marker("ok", o)} 0 ok`;
 }
+export class UsageError extends Error {}
 const COLOR_USAGE = "--color: expected --color=auto, --color=always or --color=never";
 
 /** Removes the one allowed `--color=` flag from args. It may appear anywhere before a `--` separator. */
@@ -36,13 +37,13 @@ export function takeColorFlag(args: string[]): { args: string[]; color?: string 
   const end = args.includes("--") ? args.indexOf("--") : args.length;
   const found = args.slice(0, end).filter(arg => arg === "--color" || arg.startsWith("--color="));
   if (!found.length) return { args };
-  if (found.length > 1 || found[0] === "--color") throw new Error(`${COLOR_USAGE}, given once`);
+  if (found.length > 1 || found[0] === "--color") throw new UsageError(`${COLOR_USAGE}, given once`);
   return { args: args.filter((arg, i) => i >= end || arg !== found[0]), color: found[0]!.slice("--color=".length) };
 }
 export function resolveColor(flag: string | undefined, env: { isTTY: boolean; TERM?: string; NO_COLOR?: string; FORCE_COLOR?: string; CLICOLOR_FORCE?: string; CLICOLOR?: string }): boolean {
   if (flag === "always") return true;
   if (flag === "never") return false;
-  if (flag !== undefined && flag !== "auto") throw new Error(COLOR_USAGE);
+  if (flag !== undefined && flag !== "auto") throw new UsageError(COLOR_USAGE);
   if (env.NO_COLOR) return false;
   if ((env.FORCE_COLOR && env.FORCE_COLOR !== "0") || (env.CLICOLOR_FORCE && env.CLICOLOR_FORCE !== "0")) return true;
   if (env.FORCE_COLOR === "0" || env.CLICOLOR === "0") return false;
@@ -102,7 +103,7 @@ const pad = (text: string, size: number) => text + " ".repeat(Math.max(0, size -
 export function table(headers: string[], rows: CellInput[][], o: TextOptions): string {
   const data = rows.map(row => headers.map((_, i) => { const c = cell(row[i]); return { ...c, text: clean(c.text) }; }));
   const last = headers.length - 1;
-  const sizes = headers.map((header, i) => Math.min(i === last ? Infinity : 32, Math.max(width(header), ...data.map(row => width(row[i]!.text)))));
+  const sizes = headers.map((header, i) => Math.min(i === last || o.columns === undefined ? Infinity : 32, Math.max(width(header), ...data.map(row => width(row[i]!.text)))));
   if (o.columns !== undefined) {
     while (sizes.slice(0, last).reduce((sum, size) => sum + size + 2, 0) + 10 > o.columns) {
       let largest = -1;
