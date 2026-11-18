@@ -11,6 +11,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import type { VaultSpec } from "./config.ts";
 import { loadRegistry, registryStatus } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
+import { CHANGES_PAGE_LIMIT, HISTORY_PAGE_LIMIT, readChanges, readHistory, readRevision } from "./vault-history.ts";
 import { listVaultFiles, readVaultFile } from "./vault-files.ts";
 import { appendLog, readLog } from "./vault-log.ts";
 import { STATS_MAX_DAYS, vaultStats } from "./vault-stats.ts";
@@ -30,12 +31,13 @@ const tool = (name: string, description: string, inputSchema: Record<string, unk
 const RELATIONS = ["supports", "contradicts", "extends", "applies-to", "context-for"];
 const LOG_TYPES = ["INGEST", "ROUTE", "EXTRACT", "CONNECT", "DIGEST", "LEARN", "LINT", "TASK", "GRAPH", "SYNC", "RETHINK", "SOURCE"];
 const note = string(1024), sha = { type: "string", minLength: 64, maxLength: 64 };
+const oid = { type: "string", minLength: 40, maxLength: 64, pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" };
 const logEvent = LOG_EVENT_SCHEMA;
 const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLength: 4096, maxItems: 64, items: { type: ["string", "number", "boolean"], maxLength: 1024 } };
 const metadata = { type: "object", maxProperties: 32, properties: { authors: { type: "array", minItems: 1, maxItems: 100, items: string(1024) } }, additionalProperties: scalar };
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
-export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_brief", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
+export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_brief", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_history", "vmem_changes", "vmem_mocs", "vmem_check", "vmem_log_tail",
   "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_graph_explain", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_evidence", "vmem_stats", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Server `initialize` instructions: purpose, navigation order and the write contract. Pinned by a test, under 400 bytes. */
@@ -50,10 +52,12 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_status", "Registered vaults with health, write policy, effective pii and the piiPolicy matrix (read-only).", object({})),
     tool("vmem_search", "Full-text (BM25) search over indexed notes. Literal AND terms.", object({ query: string(1000), vault, limit: integer(1, 50), type: string(64), domain: string(64) }, ["query"])),
     tool("vmem_brief", "Intent-ranked note pointers and one-hop neighbors, with metadata PII/deny screening and whole-line byte cap including the result JSON. No note bodies; read a selected pointer with vmem_read.", object({ vault, intent: string(1024), paths: { type: "array", maxItems: 16, items: string(1024) }, bytes: integer(256, 4096) }, ["intent"])),
-    tool("vmem_read", "Read one note by stem, alias or notes/ path: frontmatter, body, sha256. Bounded by maxBytes; section selects an exact H2, offset pages UTF-8 byte ranges, and truncated reads list H2 headings/nextOffset.", object({ path: note, vault, maxBytes: integer(1, 65536), section: string(1024), offset: integer(0, MAX_NOTE_BYTES) }, ["path"])),
+    tool("vmem_read", "Read one note by stem, alias or notes/ path: frontmatter, body, sha256. Bounded by maxBytes; section selects an exact H2, offset pages UTF-8 byte ranges, and truncated reads list H2 headings/nextOffset. With revision, read that full commit id's blob for the path instead: the result carries revision, blob and content sha256 plus basis git_snapshot, within the 48 KiB transport bound.", object({ path: note, vault, maxBytes: integer(1, 65536), section: string(1024), offset: integer(0, MAX_NOTE_BYTES), revision: oid }, ["path"])),
     tool("vmem_read_many", "Read up to 20 notes (8 KiB each).", object({ paths: { type: "array", minItems: 1, maxItems: 20, items: note }, vault }, ["paths"])),
     tool("vmem_list", "List indexed notes under notes/ in path order, optionally by stem prefix, with each note's mtime and the filtered total. Pass the returned nextCursor as cursor for the next page.", object({ vault, prefix: string(256, 0), limit: integer(1, 500), cursor: string(1024) })),
     tool("vmem_links", "Outgoing links (with resolution) and/or incoming backlinks of a note. Each dead link carries at most one suggested existing target from the title search, with its score; it is a hint and the link is never rewritten.", object({ path: note, vault, direction: { type: "string", enum: ["out", "in", "both"] }, limit: integer(1, 200) }, ["path"])),
+    tool("vmem_history", "Read-only Git snapshot history of one note path, newest first: full commit ids reachable from the vault HEAD, blob ids, sizes and Git commit metadata (never assertion time). Pinned to the HEAD the first page saw; pass the returned continuation as cursor. First-parent only, exact path only. Non-repositories, shallow history, unavailable Git, unreachable objects, revision expressions, symlinked and denied paths are reported or refused explicitly, never replaced with current content.", object({ vault, path: note, limit: integer(1, HISTORY_PAGE_LIMIT), cursor: string(1024) }, ["path"])),
+    tool("vmem_changes", "Compare two pinned commits over notes/ only: path, status and before/after blob ids, never a content diff. Both ids must be full commits reachable from the vault HEAD. At most 500 paths per page with a continuation cursor; denied and symlinked entries stay out.", object({ vault, from: oid, to: oid, limit: integer(1, CHANGES_PAGE_LIMIT), cursor: string(1024) }, ["from", "to"])),
     tool("vmem_mocs", "MOC notes with incoming link counts.", object({ vault })),
     tool("vmem_check", "Validate a prospective note text without writing.", object({ vault, path: string(200), text: string(262144, 0) }, ["text"])),
     tool("vmem_log_tail", "Read the newest vault log lines, optionally filtered.", object({ vault, n: integer(1, 200), type: { type: "string", enum: LOG_TYPES }, grep: string(256) })),
@@ -152,7 +156,10 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_graph_explain: args => explainGraphPath(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot,str(args.from)!,str(args.to)!,{maxHops:(args.maxHops as number|undefined) ?? 6,viaHubs:args.viaHubs === true,...(str(args.relation) === undefined ? {} : {relation:str(args.relation)!})}),
     vmem_status: () => ({ defaultVault: defaultVault ?? null, vaults: registryStatus(home).filter(v => ids.includes(v.id)) }),
     vmem_search: args => read(args, index => ({ hits: index.search(str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }) })),
-    vmem_read: args => read(args, index => { const r = index.show(str(args.path)!, (args.maxBytes as number | undefined) ?? 16384, str(args.section), args.offset as number | undefined); return document(r); }),
+    vmem_read: args => str(args.revision) === undefined
+      ? read(args, index => { const r = index.show(str(args.path)!, (args.maxBytes as number | undefined) ?? 16384, str(args.section), args.offset as number | undefined); return document(r); })
+      : readRevision({ vault: pick(args), home, denyPaths: loadRegistry(home).denyPaths ?? [], note: str(args.path)!, revision: str(args.revision)!,
+        ...(typeof args.maxBytes === "number" ? { maxBytes: args.maxBytes } : {}), ...(typeof args.offset === "number" ? { offset: args.offset } : {}), ...(str(args.section) ? { section: str(args.section)! } : {}) }),
     vmem_read_many: args => read(args, index => ({ notes: (args.paths as string[]).map(path => {
       try { const r = index.show(path, 8192); return document(r); }
       catch (error) { return { path, ...refusal("V04", error instanceof Error ? error.message : "unreadable") }; }
@@ -166,6 +173,10 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
       const out = direction === "in" ? [] : index.links(str(args.path)!, limit);
       return { out: out.filter(l => l.resolved), dead: out.filter(l => !l.resolved), in: direction === "out" ? [] : index.backlinks(str(args.path)!, limit) };
     }),
+    vmem_history: args => readHistory({ vault: pick(args), home, denyPaths: loadRegistry(home).denyPaths ?? [], note: str(args.path)!,
+      ...(typeof args.limit === "number" ? { limit: args.limit } : {}), ...(str(args.cursor) ? { cursor: str(args.cursor)! } : {}) }),
+    vmem_changes: args => readChanges({ vault: pick(args), home, denyPaths: loadRegistry(home).denyPaths ?? [], from: str(args.from)!, to: str(args.to)!,
+      ...(typeof args.limit === "number" ? { limit: args.limit } : {}), ...(str(args.cursor) ? { cursor: str(args.cursor)! } : {}) }),
     vmem_mocs: args => read(args, index => ({ mocs: index.mocs() })),
     vmem_check: args => write(args, { op: "check", path: notePath(str(args.path) ?? "checked-note"), text: str(args.text)! }),
     vmem_log_tail: args => readLog(home, { vault: pick(args).id, limit: (args.n as number | undefined) ?? 50, ...(str(args.type) ? { type: str(args.type) } : {}), ...(str(args.grep) ? { grep: str(args.grep) } : {}) }),

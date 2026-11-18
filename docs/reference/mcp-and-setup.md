@@ -44,7 +44,7 @@ The vault set is read once at startup: every tool's `vault` property is an enum 
 
 <!-- facts:mcp-tools -->
 
-`vmem mcp` lists 40 tools: `vmem_status`, `vmem_search`, `vmem_brief`, `vmem_read`, `vmem_read_many`, `vmem_list`, `vmem_links`, `vmem_mocs`, `vmem_check`, `vmem_log_tail`, `vmem_create`, `vmem_patch`, `vmem_append`, `vmem_set_frontmatter`, `vmem_link`, `vmem_supersede`, `vmem_log_append`, `vmem_move`, `vmem_merge`, `vmem_delete`, `vmem_promote_from_amem`, `vmem_lint`, `vmem_graph_build`, `vmem_graph_neighbors`, `vmem_graph_path`, `vmem_graph_explain`, `vmem_promote`, `vmem_skills_mine`, `vmem_read_file`, `vmem_list_files`, `vmem_report`, `vmem_evidence`, `vmem_stats`, `vmem_spec_get`, `vmem_spec_graph`, `vmem_spec_grep`, `vmem_spec_validate`, `vmem_spec_create`, `vmem_spec_update`, `vmem_spec_delete`.
+`vmem mcp` lists 42 tools: `vmem_status`, `vmem_search`, `vmem_brief`, `vmem_read`, `vmem_read_many`, `vmem_list`, `vmem_links`, `vmem_history`, `vmem_changes`, `vmem_mocs`, `vmem_check`, `vmem_log_tail`, `vmem_create`, `vmem_patch`, `vmem_append`, `vmem_set_frontmatter`, `vmem_link`, `vmem_supersede`, `vmem_log_append`, `vmem_move`, `vmem_merge`, `vmem_delete`, `vmem_promote_from_amem`, `vmem_lint`, `vmem_graph_build`, `vmem_graph_neighbors`, `vmem_graph_path`, `vmem_graph_explain`, `vmem_promote`, `vmem_skills_mine`, `vmem_read_file`, `vmem_list_files`, `vmem_report`, `vmem_evidence`, `vmem_stats`, `vmem_spec_get`, `vmem_spec_graph`, `vmem_spec_grep`, `vmem_spec_validate`, `vmem_spec_create`, `vmem_spec_update`, `vmem_spec_delete`.
 
 <!-- /facts:mcp-tools -->
 
