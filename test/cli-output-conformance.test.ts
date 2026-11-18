@@ -10,6 +10,9 @@ test("shared roles and markers render a report with and without color", () => {
   expect(stripTerminal(report(color))).toBe(report(plain));
   expect(report(color)).toBe([paint("vmem report", "header", color), `${paint("ok", "success", color)} healthy`, `${paint("x ", "error", color)} failed`].join("\n"));
   expect(new Set(["header", "section", "key", "success", "warning", "error", "hint", "accent"].map(role => paint("x", role as "header", color))).size).toBe(8);
+  const roles = ["header", "section", "key", "value", "success", "warning", "error", "hint", "accent"] as const;
+  const codes = roles.map(role => paint("sample", role, color).match(/\[([0-9;]+)m/)?.[1] ?? "default");
+  expect(codes).toEqual(["1;34", "1;35", "34", "default", "1;32", "1;33", "1;31", "90", "36"]);
 });
 test("color precedence and JSON on pipes", () => {
   const env = { isTTY: false, TERM: "dumb", FORCE_COLOR: "1" };
