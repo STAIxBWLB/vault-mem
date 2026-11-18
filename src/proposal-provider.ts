@@ -1,16 +1,42 @@
 /** Internal submission entry point. CLI/MCP and decision operations are intentionally not exposed yet. */
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
+import { join } from "node:path";
 import { loadRegistry } from "./registry.ts";
 import { logBinding, matchesBinding } from "./vault-log.ts";
 import { applyWrite } from "./writer.ts";
 import { screenMetadata } from "./write-validation.ts";
-import { createStoredProposal } from "./proposal-storage.ts";
+import { checkStoredBinding, createStoredProposal, listStoredProposalIds, readStoredProposal } from "./proposal-storage.ts";
 import { encodeProposalRecord, parseProposalOperation, proposalPayloadDigest, type ProposalRecord } from "./proposals.ts";
+import { unenforceablePii } from "./config.ts";
+import { canonicalPath, isDenied } from "./platform.ts";
 
 export interface ProposalSubmitRequest { vault: string; operation: unknown; agentLabel?: string }
 export interface ProposalContext { channel: "cli" | "mcp"; env?: NodeJS.ProcessEnv; now?: Date }
 export interface ProposalSubmitted { id: string; vault: string; path: string; state: "pending"; createdAt: string; payloadDigest: string }
+export interface ProposalSummary { id: string; vault: string; path: string; state: ProposalRecord["state"]; createdAt: string }
+export interface ProposalListRequest { vault: string; state?: ProposalRecord["state"]; limit?: number; after?: string }
+export interface ProposalPage { items: ProposalSummary[]; nextCursor: string | null }
+
+function currentBinding(home: string, id: string, channel: ProposalContext["channel"]) {
+  if (channel !== "cli" && channel !== "mcp") throw new Error("proposal: invalid write channel; use CLI or MCP");
+  const config = loadRegistry(home), vault = config.vaults.find(item => item.id === id);
+  if (!vault) throw new Error("proposal: unknown vault; choose a registered vault");
+  if (vault.write === "none" || (channel === "mcp" && vault.write !== "mcp")) throw new Error("proposal: vault write policy refuses this channel; choose an authorized vault or channel");
+  if (realpathSync(vault.path) !== vault.path || isDenied(vault.path, config.denyPaths ?? [])) throw new Error("proposal: vault root is denied, changed or linked; inspect the registered vault");
+  if (unenforceablePii(vault)) throw new Error("proposal: vault PII policy cannot be enforced; inspect the vault policy");
+  const homePath = canonicalPath(home);
+  if (config.vaults.some(item => homePath === item.path || homePath.startsWith(`${item.path}/`))) throw new Error("proposal: configured home is inside a registered vault; move the home outside vaults");
+  const binding = logBinding(vault, config);
+  const bindingDigest = createHash("sha256").update(JSON.stringify([vault.id, vault.path, binding.dev, binding.ino]), "utf8").digest("hex");
+  return { config, vault, binding, bindingDigest };
+}
+function screenForRead(record: ProposalRecord, context: ReturnType<typeof currentBinding>): void {
+  if (record.vault !== context.vault.id || record.bindingDigest !== context.bindingDigest || isDenied(join(context.vault.path, record.operation.path), context.config.denyPaths ?? []))
+    throw new Error("proposal: stored binding or target is denied or changed; inspect the registered vault and policy");
+  const issues = screenMetadata({ operation: record.operation, agentLabel: record.agentLabel, decisionReason: record.decisionReason }, { vault: context.vault, config: context.config }, record.operation.path);
+  if (issues.some(issue => issue.severity === "error")) throw new Error("proposal: current disclosure policy refuses stored content; inspect the vault policy");
+}
 
 /** Screen and validate a proposal before any persistent record is created. */
 export function submitProposal(home: string, request: ProposalSubmitRequest, options: ProposalContext): ProposalSubmitted {
@@ -19,20 +45,40 @@ export function submitProposal(home: string, request: ProposalSubmitRequest, opt
   if (options.channel !== "cli" && options.channel !== "mcp") throw new Error("proposal: invalid write channel; use CLI or MCP");
   if (request.agentLabel !== undefined && (typeof request.agentLabel !== "string" || !request.agentLabel.trim() || Buffer.byteLength(request.agentLabel) > 256 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(request.agentLabel)))
     throw new Error("proposal: agent label must be nonempty text without controls and at most 256 bytes; correct the label");
-  const operation = parseProposalOperation(request.operation), config = loadRegistry(home), vault = config.vaults.find(item => item.id === request.vault);
-  if (!vault) throw new Error("proposal: unknown vault; choose a registered vault");
-  if (vault.write === "none" || (options.channel === "mcp" && vault.write !== "mcp")) throw new Error("proposal: vault write policy refuses this channel; choose an authorized vault or channel");
-  if (realpathSync(vault.path) !== vault.path) throw new Error("proposal: vault root changed or is linked; inspect the registered vault");
-  const binding = logBinding(vault, config);
+  const operation = parseProposalOperation(request.operation), { config, vault, binding, bindingDigest } = currentBinding(home, request.vault, options.channel);
   const screen = screenMetadata({ operation, ...(request.agentLabel !== undefined ? { agentLabel: request.agentLabel } : {}) }, { vault, config }, operation.path);
   if (screen.some(issue => issue.severity === "error")) throw new Error(`proposal: payload screening refused (${[...new Set(screen.filter(issue => issue.severity === "error").map(issue => issue.code))].join(", ")}); remove prohibited content or correct the vault policy`);
   const preview = applyWrite(home, { vault: vault.id, operation, channel: options.channel, dryRun: true }, { env: options.env, binding, now: options.now });
   if (!preview.ok) throw new Error(`proposal: validation refused (${[...new Set(preview.issues.filter(issue => issue.severity === "error").map(issue => issue.code))].join(", ") || "unknown"}); correct the proposal and retry`);
-  const bindingDigest = createHash("sha256").update(JSON.stringify([vault.id, vault.path, binding.dev, binding.ino]), "utf8").digest("hex");
   const createdAt = (options.now ?? new Date()).toISOString();
   const record: ProposalRecord = { schemaVersion: 1, id: randomUUID(), vault: vault.id, bindingDigest, state: "pending", createdAt, updatedAt: createdAt, operation, payloadDigest: proposalPayloadDigest(operation), ...(request.agentLabel !== undefined ? { agentLabel: request.agentLabel } : {}) };
   encodeProposalRecord(record);
   if (!matchesBinding(loadRegistry(home), vault.id, binding)) throw new Error("proposal: vault binding or policy changed during submit; request a new preview");
   createStoredProposal(home, record);
+  if (!matchesBinding(loadRegistry(home), vault.id, binding)) throw new Error("proposal: record was stored but the vault binding or policy changed; inspect the proposal store and current vault policy");
   return { id: record.id, vault: record.vault, path: operation.path, state: "pending", createdAt, payloadDigest: record.payloadDigest };
+}
+
+/** Returns screened summaries, examining at most 512 records per call. The cursor is a record id, never a path. */
+export function listProposals(home: string, request: ProposalListRequest, options: ProposalContext): ProposalPage {
+  if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "state", "limit", "after"].includes(key)) || typeof request.vault !== "string") throw new Error("proposal: invalid list request; provide a registered vault");
+  const limit = request.limit ?? 50, state = request.state ?? "pending";
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !["pending", "applied", "rejected", "apply_unknown"].includes(state) || (request.after !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.after)))
+    throw new Error("proposal: invalid list state, cursor or limit; use a returned cursor and limit 1..100");
+  const context = currentBinding(home, request.vault, options.channel);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) {
+    if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding)) throw new Error("proposal: vault binding or policy changed during listing; retry with the current policy");
+    return { items: [], nextCursor: null };
+  }
+  const ids = listStoredProposalIds(home, context.bindingDigest).filter(id => request.after === undefined || id > request.after);
+  const items: ProposalSummary[] = []; let scanned = 0, cursor: string | null = null;
+  for (const id of ids) {
+    if (scanned >= 512 || items.length >= limit) break;
+    const record = readStoredProposal(home, context.bindingDigest, id); scanned++; cursor = id;
+    screenForRead(record, context);
+    if (record.state !== state) continue;
+    items.push({ id: record.id, vault: record.vault, path: record.operation.path, state: record.state, createdAt: record.createdAt });
+  }
+  if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding)) throw new Error("proposal: vault binding or policy changed during listing; retry with the current policy");
+  return { items, nextCursor: scanned < ids.length ? cursor : null };
 }

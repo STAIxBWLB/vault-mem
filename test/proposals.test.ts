@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalPayloadDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
 import { checkStoredBinding, createStoredProposal, readStoredProposal } from "../src/proposal-storage.ts";
-import { submitProposal } from "../src/proposal-provider.ts";
-import { addVault, removeVault } from "../src/registry.ts";
+import { listProposals, submitProposal } from "../src/proposal-provider.ts";
+import { addVault, removeVault, setVaultPii } from "../src/registry.ts";
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -83,6 +83,18 @@ test("submission screens and validates before storing without changing the vault
     const stored = readdirSync(join(store, bucket));
     expect(() => submitProposal(home, { vault: "test", operation: { ...operation, body: "password: syntheticsecret" } }, { channel: "mcp" })).toThrow("screening refused");
     expect(readdirSync(join(store, bucket))).toEqual(stored);
+    const listed = listProposals(home, { vault: "test" }, { channel: "mcp" });
+    expect(listed.items).toHaveLength(1);
+    expect(listed.items[0]).toMatchObject({ id: result.id, state: "pending" });
+    expect(JSON.stringify(listed)).not.toContain("Synthetic body");
+    const second = submitProposal(home, { vault: "test", operation: { ...operation, path: "proposed-two", body: operation.body.replace("Synthetic body.", "Contact synthetic@example.invalid.") } }, { channel: "mcp" });
+    const firstPage = listProposals(home, { vault: "test", limit: 1 }, { channel: "mcp" });
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.nextCursor).not.toBeNull();
+    const secondPage = listProposals(home, { vault: "test", limit: 1, after: firstPage.nextCursor! }, { channel: "mcp" });
+    expect(new Set([firstPage.items[0]!.id, secondPage.items[0]!.id])).toEqual(new Set([result.id, second.id]));
+    setVaultPii(home, "test", "deny", true);
+    expect(() => listProposals(home, { vault: "test" }, { channel: "mcp" })).toThrow("disclosure policy");
     expect(readdirSync(notes)).toEqual(before);
     expect(existsSync(join(notes, "proposed.md"))).toBe(false);
     const lockedVault = join(root, "locked"); mkdirSync(join(lockedVault, "notes"), { recursive: true });
@@ -94,6 +106,7 @@ test("submission screens and validates before storing without changing the vault
     mkdirSync(replacementNotes, { recursive: true });
     writeFileSync(join(replacementNotes, "research.md"), "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n");
     addVault(home, { id: "test", path: replacement, kind: "personal", write: "mcp" });
+    expect(() => listProposals(home, { vault: "test" }, { channel: "mcp" })).toThrow("different root");
     expect(() => submitProposal(home, { vault: "test", operation }, { channel: "mcp" })).toThrow("different root");
     expect(readdirSync(store)).toEqual([bucket]);
   } finally { rmSync(root, { recursive: true, force: true }); }

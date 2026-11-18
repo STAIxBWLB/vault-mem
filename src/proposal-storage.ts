@@ -118,6 +118,29 @@ export function readStoredProposal(home: string, binding: string, id: string): P
     return record;
   } finally { closeSync(fd); }
 }
+/** Enumerate only generated record names, with bounded directory traversal and parent identity checks. */
+export function listStoredProposalIds(home: string, binding: string): string[] {
+  const root = resolve(home), dir = directory(root, binding, false), target = join(dir, ".scan"), captured = capturePublicationPath(root, target);
+  const fd = openSync(dir, constants.O_RDONLY | constants.O_NOFOLLOW), before = fstatSync(fd);
+  let entries;
+  try { entries = opendirSync(dir); } catch (error) { closeSync(fd); throw error; }
+  const ids: string[] = [];
+  try {
+    let item, count = 0;
+    while ((item = entries.readSync()) !== null) {
+      if (++count > 10001) throw new Error("proposal: store exceeds the listing bound; inspect the proposal store");
+      if (item.name === "binding.json") continue;
+      const id = item.name.endsWith(".json") ? item.name.slice(0, -5) : "";
+      if (!ID.test(id)) throw new Error("proposal: unexpected entry in proposal store; inspect the proposal store");
+      ids.push(id);
+    }
+    const after = fstatSync(fd), named = lstatSync(dir), parents = capturePublicationPath(root, target);
+    validateDirectory(dir);
+    if (!named.isDirectory() || named.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino || after.dev !== named.dev || after.ino !== named.ino || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || JSON.stringify(captured.parents) !== JSON.stringify(parents.parents))
+      throw new Error("proposal: store changed during listing; retry after concurrent writes stop");
+  } finally { try { entries.closeSync(); } finally { closeSync(fd); } }
+  return ids.sort();
+}
 /** Publishes a new record atomically without overwriting any existing proposal. */
 export function createStoredProposal(home: string, record: ProposalRecord): void {
   const bytes = encodeProposalRecord(record), root = resolve(home), base = join(root, "proposals");
@@ -126,7 +149,13 @@ export function createStoredProposal(home: string, record: ProposalRecord): void
   try { mkdirSync(base, { mode: 0o700 }); made = true; } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   if (made) syncDirectory(root);
   validateDirectory(base);
-  const lock = join(base, ".binding.lock"), fd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  const lock = join(base, ".binding.lock");
+  let fd: number;
+  try { fd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("proposal: binding store is locked; stop concurrent submissions and inspect the proposal store");
+    throw error;
+  }
   try {
     writeFileSync(fd, JSON.stringify({ pid: process.pid, token: randomUUID() })); fsyncSync(fd); syncDirectory(base);
     const found = checkStoredBinding(root, record.vault, record.bindingDigest);
