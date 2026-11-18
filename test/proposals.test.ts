@@ -516,6 +516,26 @@ test("patch proposals verify the target note's existing evidence at submit and p
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("submit target drift during evidence inspection leaves no registry lock", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-submit-drift-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
+  try {
+    mkdirSync(notes, { recursive: true });
+    const original = "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n";
+    writeFileSync(join(notes, "research.md"), original);
+    addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp" });
+    const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures", "proposal-submit-drift.ts"), home, vaultPath, sha256(original)], { stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    const result = JSON.parse(child.stdout.toString());
+    expect(result).toMatchObject({ refused: true, targetOpens: 2, lockOpens: 0, lockExists: false });
+    expect(result.message).toContain("proposal submit: the patch target is unavailable");
+    expect(result.message).toContain("submit again");
+    expect(result.message).not.toContain("reconciliation");
+    expect(existsSync(join(home, "proposals"))).toBe(false);
+    const update = setVaultPii(home, "test", "deny", true);
+    expect("applied" in update && update.applied).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("newly denied store metadata is refused before the file is opened", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-deny-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
   try {

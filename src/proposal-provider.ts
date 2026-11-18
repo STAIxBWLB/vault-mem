@@ -117,13 +117,20 @@ export function submitProposal(home: string, request: ProposalSubmitRequest, opt
   encodeProposalRecord(record);
   const placeholder = "0".repeat(64);
   encodeProposalRecord({ ...record, state: "applied", intent: { fingerprint: placeholder, beforeSha: placeholder, afterSha: placeholder }, receipt: { applied: true, logged: false, beforeSha: placeholder, afterSha: placeholder } });
+  let evidence: WriteIssue[];
+  try { evidence = evidenceWarnings(home, operation, context); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    const cause = /denied/i.test(message) ? "the target or evidence path is denied; inspect the vault deny paths" : /binding|policy/i.test(message) ? "the vault binding or policy changed; inspect the registered vault" : /changed during read/i.test(message) ? "the patch target changed while being read; stop concurrent edits and inspect the target note" : /missing|unavailable/i.test(message) ? "the patch target is unavailable; restore or inspect the target note" : "the target evidence could not be read; inspect the target note";
+    throw new Error(`proposal submit: ${cause}, then submit again`, { cause: error });
+  }
+  const issues: WriteIssue[] = warningsOf(screen, preview.issues, evidence);
   const lock = join(home, LOCK_FILE);
   if (isDenied(lock, config.denyPaths ?? [])) throw new Error("proposal: registry lock path is denied; inspect the configured deny paths");
   let fd: number;
   try { fd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
   catch { throw new Error("proposal: registry lock is unavailable; stop concurrent registry updates and inspect the lock"); }
   let attempted = false, stored: boolean | null = false, primary: unknown;
-  const issues: WriteIssue[] = warningsOf(screen, preview.issues, evidenceWarnings(home, operation, context));
   try {
     writeFileSync(fd, JSON.stringify({ pid: process.pid, host: hostname(), created: new Date().toISOString() }) + "\n"); fsyncSync(fd);
     if (!matchesBinding(loadRegistry(home), vault.id, binding)) throw new Error("proposal: vault binding or policy changed during submit; request a new preview");
