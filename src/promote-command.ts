@@ -6,7 +6,7 @@ import { loadRegistry } from "./registry.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { MAX_WRITE_BYTES } from "./writer.ts";
 import { listPromotionCandidates, promoteFromAmem, type PromoteRequest } from "./promote.ts";
-import { PLAIN, type TextOptions } from "./text-output.ts";
+import { PLAIN, UsageError, type TextOptions } from "./text-output.ts";
 import { renderCandidates, renderPromote } from "./write-output.ts";
 
 const VALUES = ["--project", "--limit", "--stem", "--type", "--domain", "--topics", "--description", "--title", "--body", "--link-to", "--log-project", "--fingerprint"];
@@ -42,24 +42,24 @@ export async function runPromoteCommand(args: string[], home: string, env: NodeJ
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (!arg.startsWith("--")) { positional.push(arg); continue; }
-    if (Object.hasOwn(flags, arg) || (!VALUES.includes(arg) && !BOOLEANS.includes(arg))) throw new Error(`promote-from-amem: unknown or repeated option ${arg}`);
+    if (Object.hasOwn(flags, arg) || (!VALUES.includes(arg) && !BOOLEANS.includes(arg))) throw new UsageError(`promote-from-amem: unknown or repeated option ${arg}`);
     if (BOOLEANS.includes(arg)) { flags[arg] = true; continue; }
     const value = args[++i];
-    if (value === undefined || (value.startsWith("--") && value !== "-")) throw new Error(`${arg}: value required`);
+    if (value === undefined || (value.startsWith("--") && value !== "-")) throw new UsageError(`${arg}: value required`);
     flags[arg] = value;
   }
   const value = (name: string) => typeof flags[name] === "string" ? flags[name] as string : undefined;
   const json = flags["--json"] === true, ctx = { argv: ["promote-from-amem", ...args], positional };
-  if (positional.length < 1 || positional.length > 2) throw new Error("promote-from-amem: requires vault id and optional mem id");
+  if (positional.length < 1 || positional.length > 2) throw new UsageError("promote-from-amem: requires vault id and optional mem id");
   const [vault, rawId] = positional as [string, string | undefined];
   if (!loadRegistry(home).vaults.some(v => v.id === vault)) throw new Error("promote-from-amem: unknown vault id");
   if (rawId === undefined) {
-    if (flags["--all-projects"] && value("--project")) throw new Error("choose either --all-projects or --project");
+    if (flags["--all-projects"] && value("--project")) throw new UsageError("choose either --all-projects or --project");
     const limit = value("--limit") === undefined ? undefined : /^[0-9]+$/.test(value("--limit")!) ? Number(value("--limit")) : NaN;
     const list = await listPromotionCandidates({ env, allProjects: flags["--all-projects"] === true, ...(value("--project") ? { project: value("--project") } : {}), ...(limit !== undefined ? { limit } : {}), piiPatterns: loadRegistry(home).piiPatterns });
     return { text: json ? JSON.stringify(list) : renderCandidates(list, text, ctx), code: 0 };
   }
-  if (flags["--all-projects"]) throw new Error("--all-projects lists candidates only");
+  if (flags["--all-projects"]) throw new UsageError("--all-projects lists candidates only");
   const request: PromoteRequest = { vault, id: rawId.replace(/^mem:/, ""), channel: "cli", confirm: flags["--confirm"] === true };
   for (const [flag, key] of [["--stem", "stem"], ["--type", "type"], ["--domain", "domain"], ["--description", "description"], ["--title", "title"], ["--link-to", "linkTo"], ["--log-project", "logProject"], ["--fingerprint", "fingerprint"]] as const) {
     if (value(flag) !== undefined) (request as unknown as Record<string, unknown>)[key] = value(flag);

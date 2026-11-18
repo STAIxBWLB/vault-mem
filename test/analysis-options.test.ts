@@ -27,13 +27,13 @@ test("lint and graph build name the option they refuse and where it applies (#12
   expect(() => runAnalysisCommand("graph", ["neighbors", "v", "a", "--via-hubs"], home)).toThrow("graph neighbors: --via-hubs applies only to graph path");
 });
 
-test("a refused option exits 1 through the CLI with the named message (#121)", () => {
+test("a refused option exits 2 through the CLI with the named message (#121)", () => {
   const r = vmem(["graph", "build", "v", "--relation", "supports"], { ...process.env, VMEM_HOME: home });
-  expect(r.exitCode).toBe(1);
+  expect(r.exitCode).toBe(2);
   expect(r.stderr.toString()).toContain("graph build: --relation applies only to graph neighbors");
 });
 
-test("graph neighbors refuses --dry-run, exits 1 and writes nothing (#127)", () => {
+test("graph neighbors refuses --dry-run, exits 2 and writes nothing (#127)", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-127-")));
   try {
     const vmemHome = join(root, "state"), vault = join(root, "v");
@@ -44,7 +44,7 @@ test("graph neighbors refuses --dry-run, exits 1 and writes nothing (#127)", () 
     expect(vmem(["vaults", "add", "v", vault, "--kind", "personal", "--write", "cli"], env).exitCode).toBe(0);
     const before = readdirSync(vault, { recursive: true }).map(String).sort();
     const r = vmem(["graph", "neighbors", "v", "a", "--dry-run"], env);
-    expect(r.exitCode).toBe(1);
+    expect(r.exitCode).toBe(2);
     expect(r.stderr.toString()).toContain("graph neighbors: --dry-run applies only to lint --write and graph build");
     expect(readdirSync(vault, { recursive: true }).map(String).sort()).toEqual(before);
   } finally { rmSync(root, { recursive: true, force: true }); }

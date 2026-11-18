@@ -6,13 +6,39 @@
 import type { WriteIssue } from "./write-types.ts";
 
 export type Tone = "ok" | "warn" | "fail" | "muted" | "info" | "accent" | "bold";
-export interface TextOptions { color: boolean; columns?: number }
+export type Role = "header" | "section" | "key" | "value" | "success" | "warning" | "error" | "hint" | "accent";
+export type Marker = "ok" | "fail" | "warn" | "absent" | "unknown" | "pending" | "active" | "next";
+export interface TextOptions { color: boolean; columns?: number; ascii?: boolean }
 export interface Cell { text: string; tone?: Tone }
 export type CellInput = string | number | boolean | null | undefined | Cell;
 
 /** Plain text, no wrapping: the default for library callers and tests. */
 export const PLAIN: TextOptions = { color: false };
-const CODES: Record<Tone, string> = { ok: "32", warn: "33", fail: "31", muted: "2", info: "36", accent: "35", bold: "1" };
+const ROLE_CODES: Record<Role, string> = { header: "1;34", section: "1;35", key: "34", value: "", success: "1;32", warning: "1;33", error: "1;31", hint: "90", accent: "36" };
+const TONE_ROLES: Record<Tone, Role> = { ok: "success", warn: "warning", fail: "error", muted: "hint", info: "accent", accent: "accent", bold: "header" };
+export const MARKERS: Record<Marker, { glyph: string; ascii: string; role: Role }> = {
+  ok: { glyph: "✓", ascii: "ok", role: "success" }, fail: { glyph: "✗", ascii: "x", role: "error" }, warn: { glyph: "⚠", ascii: "!", role: "warning" },
+  absent: { glyph: "-", ascii: "-", role: "hint" }, unknown: { glyph: "?", ascii: "?", role: "hint" }, pending: { glyph: "~", ascii: "~", role: "hint" },
+  active: { glyph: "*", ascii: "*", role: "success" }, next: { glyph: "→", ascii: "->", role: "accent" },
+};
+export function marker(name: Marker, o: TextOptions): string {
+  const item = MARKERS[name], text = o.ascii ? item.ascii : item.glyph;
+  return paint(text + " ".repeat(Math.max(0, 2 - width(text))), item.role, o);
+}
+/** A status marker with its state word or finding; padding remains visible without color. */
+export function status(name: "ok" | "warn" | "fail" | "unknown" | "pending" | "absent" | "active", text: string, o: TextOptions): string {
+  return `${marker(name, o)} ${paint(clean(text), MARKERS[name].role, o)}`;
+}
+/** Invocation errors use a marker only for a terminal, with color resolved for stderr. */
+export function errorLine(message: string, o: TextOptions, isTTY: boolean): string {
+  const text = `vmem: ${clean(message)}`;
+  return isTTY ? status("fail", text, o) : paint(text, "error", o);
+}
+export function summary(counts: { failed?: number; warnings?: number; ok?: number; unknown?: number }, o: TextOptions): string {
+  const entries = [["fail", counts.failed, "failed"], ["warn", counts.warnings, "warnings"], ["ok", counts.ok, "ok"], ["unknown", counts.unknown, "unknown"]] as const;
+  return entries.filter(([, count]) => count).map(([name, count, label]) => `${marker(name, o)} ${count} ${label}`).join("  ") || `${marker("ok", o)} 0 ok`;
+}
+export class UsageError extends Error {}
 const COLOR_USAGE = "--color: expected --color=auto, --color=always or --color=never";
 
 /** Removes the one allowed `--color=` flag from args. It may appear anywhere before a `--` separator. */
@@ -20,37 +46,41 @@ export function takeColorFlag(args: string[]): { args: string[]; color?: string 
   const end = args.includes("--") ? args.indexOf("--") : args.length;
   const found = args.slice(0, end).filter(arg => arg === "--color" || arg.startsWith("--color="));
   if (!found.length) return { args };
-  if (found.length > 1 || found[0] === "--color") throw new Error(`${COLOR_USAGE}, given once`);
+  if (found.length > 1 || found[0] === "--color") throw new UsageError(`${COLOR_USAGE}, given once`);
   return { args: args.filter((arg, i) => i >= end || arg !== found[0]), color: found[0]!.slice("--color=".length) };
 }
-export function resolveColor(flag: string | undefined, env: { isTTY: boolean; TERM?: string; NO_COLOR?: string }): boolean {
+export function resolveColor(flag: string | undefined, env: { isTTY: boolean; TERM?: string; NO_COLOR?: string; FORCE_COLOR?: string; CLICOLOR_FORCE?: string; CLICOLOR?: string }): boolean {
   if (flag === "always") return true;
   if (flag === "never") return false;
-  if (flag === undefined || flag === "auto") return env.isTTY && env.TERM !== "dumb" && !env.NO_COLOR;
-  throw new Error(COLOR_USAGE);
+  if (flag !== undefined && flag !== "auto") throw new UsageError(COLOR_USAGE);
+  if (env.NO_COLOR) return false;
+  if ((env.FORCE_COLOR && env.FORCE_COLOR !== "0") || (env.CLICOLOR_FORCE && env.CLICOLOR_FORCE !== "0")) return true;
+  if (env.FORCE_COLOR === "0" || env.CLICOLOR === "0") return false;
+  return env.isTTY && env.TERM !== "dumb";
 }
 /** Terminal width on a TTY (at least 80), else `COLUMNS` when set, else no wrapping. */
 export function outputWidth(env: { isTTY: boolean; columns?: number; COLUMNS?: string }): number | undefined {
-  if (env.isTTY) return Math.max(80, env.columns && Number.isFinite(env.columns) ? env.columns : 80);
+  if (env.isTTY) return env.columns && Number.isFinite(env.columns) && env.columns > 0 ? env.columns : 80;
   return env.COLUMNS && /^[1-9][0-9]*$/.test(env.COLUMNS) ? Number(env.COLUMNS) : undefined;
 }
 /** Options for a stdout; the default is a non-terminal, so library calls and tests get the same text everywhere. */
 export function textOptions(flag: string | undefined, env: NodeJS.ProcessEnv = process.env, stdout: { isTTY?: boolean; columns?: number } = {}): TextOptions {
-  const isTTY = stdout.isTTY === true, color = resolveColor(flag, { isTTY, TERM: env.TERM, NO_COLOR: env.NO_COLOR });
+  const isTTY = stdout.isTTY === true, color = resolveColor(flag, { ...env, isTTY });
   const columns = outputWidth({ isTTY, columns: stdout.columns, COLUMNS: env.COLUMNS });
-  return { color, ...(columns !== undefined ? { columns } : {}) };
+  return { color, ascii: !/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || ""), ...(columns !== undefined ? { columns } : {}) };
 }
 
 const cell = (value: CellInput): Cell => typeof value === "object" && value !== null ? value : { text: value === null || value === undefined ? "" : String(value) };
 /** Control characters (terminal escapes, tabs, newlines) never reach the terminal from data. */
 export const clean = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
-export const width = (text: string) => Bun.stringWidth(text);
+export const width = (text: string) => Bun.stringWidth(text, { ambiguousIsNarrow: true });
 /** Note and spec bodies printed as is, minus terminal escape sequences (OSC, CSI, C1) and control characters other than tab and newline. */
 export const stripTerminal = (text: string) => text
   .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b\[[0-?]*[ -/]*[@-~]?|\u009b[0-?]*[ -/]*[@-~]?|\u001b[^[\]]?/g, "")
   .replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
-export function paint(text: string, tone: Tone | undefined, o: TextOptions): string {
-  return o.color && tone && text ? `\u001b[${CODES[tone]}m${text}\u001b[0m` : text;
+export function paint(text: string, tone: Tone | Role | undefined, o: TextOptions): string {
+  const role = tone && (TONE_ROLES[tone as Tone] ?? tone as Role), code = role && ROLE_CODES[role];
+  return o.color && code && text ? `\u001b[${code}m${text}\u001b[0m` : text;
 }
 export const tone = (text: CellInput, t: Tone): Cell => ({ text: cell(text).text, tone: t });
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -59,7 +89,7 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 export function wrap(text: string, columns: number | undefined, indent = ""): string[] {
   const flat = clean(text);
   if (columns === undefined) return [indent + flat];
-  const room = Math.max(10, columns - width(indent)), lines: string[] = [];
+  const room = Math.max(1, columns - width(indent)), lines: string[] = [];
   let line = "";
   for (const word of flat.split(/ +/).filter(Boolean)) {
     const pieces: string[] = [];
@@ -80,16 +110,51 @@ const pad = (text: string, size: number) => text + " ".repeat(Math.max(0, size -
  * wraps under itself; with no width (pipes, tests) rows stay on one line.
  */
 export function table(headers: string[], rows: CellInput[][], o: TextOptions): string {
+  return tableParts(headers, rows, o).join("\n");
+}
+/** Table blocks retain the row boundaries when a cell wraps across several lines. */
+export function tableParts(headers: string[], rows: CellInput[][], o: TextOptions): string[] {
   const data = rows.map(row => headers.map((_, i) => { const c = cell(row[i]); return { ...c, text: clean(c.text) }; }));
-  const sizes = headers.map((header, i) => Math.max(width(header), ...data.map(row => width(row[i]!.text))));
-  const last = headers.length - 1, lead = sizes.slice(0, last).reduce((sum, size) => sum + size + 2, 0);
-  const lastRoom = o.columns !== undefined && lead + sizes[last]! > o.columns ? Math.max(20, o.columns - lead) : undefined;
-  const line = (cells: Cell[], bold = false) => {
-    const tail = wrap(cells[last]!.text, lastRoom);
-    const head = cells.slice(0, last).map((c, i) => paint(pad(c.text, sizes[i]!), bold ? "bold" : c.tone, o)).join("  ");
-    return tail.map((part, i) => (i ? " ".repeat(lead) : head + (last ? "  " : "")) + paint(part, bold ? "bold" : cells[last]!.tone, o)).join("\n").replace(/ +$/gm, "");
+  const last = headers.length - 1;
+  const sizes = headers.map((header, i) => Math.min(i === last ? Infinity : 32, Math.max(width(header), ...data.map(row => width(row[i]!.text)))));
+  if (o.columns !== undefined) {
+    while (sizes.slice(0, last).reduce((sum, size) => sum + size + 2, 0) + 10 > o.columns) {
+      let largest = -1;
+      for (let i = 0; i < last; i++) if (sizes[i]! > 4 && (largest < 0 || sizes[i]! > sizes[largest]!)) largest = i;
+      if (largest < 0) break;
+      sizes[largest]!--;
+    }
+  }
+  const lead = sizes.slice(0, last).reduce((sum, size) => sum + size + 2, 0);
+  const lastRoom = o.columns !== undefined && lead + sizes[last]! > o.columns ? Math.max(1, o.columns - lead) : undefined;
+  const shorten = (text: string, size: number) => {
+    if (width(text) <= size) return text;
+    let start = "", end = "";
+    const parts = [...graphemes.segment(text)].map(part => part.segment);
+    while (parts.length && width(start + "..." + end) < size) {
+      const part = parts.shift()!;
+      if (width(start + part + "..." + end) > size) break;
+      start += part;
+      if (parts.length) {
+        const tail = parts.pop()!;
+        if (width(start + "..." + tail + end) <= size) end = tail + end;
+      }
+    }
+    return start + "..." + end;
   };
-  return [line(headers.map(text => ({ text })), true), ...data.map(row => line(row))].join("\n");
+  const line = (cells: Cell[], bold = false) => {
+    const columns = cells.map((c, i) => {
+      if (i === last) return wrap(c.text, lastRoom);
+      if (/PATH|^(ID|STATE)$/i.test(headers[i]!)) return [shorten(c.text, sizes[i]!)];
+      return width(c.text) <= sizes[i]! ? [c.text] : wrap(c.text, sizes[i]!);
+    });
+    const height = Math.max(...columns.map(parts => parts.length));
+    return Array.from({ length: height }, (_, row) => cells.map((c, i) => {
+      const part = columns[i]![row] ?? "";
+      return paint(i === last ? part : pad(part, sizes[i]!), bold ? "key" : c.tone, o);
+    }).join("  ").replace(/ +$/, "")).join("\n");
+  };
+  return [line(headers.map(text => ({ text })), true), ...data.map(row => line(row))];
 }
 /** `label  value` lines with aligned values, indented by two spaces. Empty values are left out. */
 export function fields(pairs: [label: string, value: CellInput][], o: TextOptions, indent = "  "): string {
@@ -112,7 +177,7 @@ export const plural = (count: number, one: string, many = `${one}s`) => `${count
 export function issueTable(issues: readonly WriteIssue[], o: TextOptions): string | undefined {
   if (!issues.length) return undefined;
   const sorted = [...issues].sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1));
-  return table(["LEVEL", "CODE", "PATH", "MESSAGE"], sorted.map(issue => [tone(issue.severity, issue.severity === "error" ? "fail" : "warn"), issue.code, issue.path ?? "-", issue.message]), o);
+  return table(["LEVEL", "CODE", "PATH", "MESSAGE"], sorted.map(issue => [tone(`${marker(issue.severity === "error" ? "fail" : "warn", { ...o, color: false })} ${issue.severity}`, issue.severity === "error" ? "fail" : "warn"), issue.code, issue.path ?? "-", issue.message]), o);
 }
 /** The command a person runs next, for example to confirm a preview or read the next page. */
 export const nextCommand = (label: string, command: string, o: TextOptions) => `${label}: ${paint(clean(command), "info", o)}`;

@@ -10,14 +10,14 @@ import type { LogEvent } from "./log-types.ts";
 import { LOG_EVENT_SCHEMA } from "./log-format.ts";
 import { argumentError } from "./mcp.ts";
 import { parseTidyMap, tidyVault, TIDY_RULES } from "./tidy.ts";
-import { PLAIN, type TextOptions } from "./text-output.ts";
+import { PLAIN, UsageError, type TextOptions } from "./text-output.ts";
 import { renderTidy, renderWriteReceipt } from "./write-output.ts";
 const COMMANDS = new Set(["new", "patch", "append", "frontmatter", "link", "supersede", "merge", "move", "delete", "tidy", "report", "check"]);
 export function isWriteCommand(command: string): boolean { return COMMANDS.has(command); }
 function object(text: string, label: string): Record<string, unknown> {
   let value: unknown;
-  try { value = JSON.parse(text); } catch { throw new Error(`${label}: invalid JSON`); }
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label}: expected object`);
+  try { value = JSON.parse(text); } catch { throw new UsageError(`${label}: invalid JSON`); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new UsageError(`${label}: expected object`);
   return value as Record<string, unknown>;
 }
 function input(file: string, home: string): string {
@@ -38,9 +38,9 @@ function input(file: string, home: string): string {
 function logOption(text: string | undefined): { log?: LogEvent } {
   if (text === undefined) return {};
   let value: unknown;
-  try { value = JSON.parse(text); } catch { throw new Error("--log: invalid JSON; expected {\"type\", \"project\", \"source\", \"note\"[, \"dest\"]}"); }
+  try { value = JSON.parse(text); } catch { throw new UsageError("--log: invalid JSON; expected {\"type\", \"project\", \"source\", \"note\"[, \"dest\"]}"); }
   const error = argumentError(value, LOG_EVENT_SCHEMA, "--log");
-  if (error) throw new Error(`${error}; expected {"type", "project", "source", "note"[, "dest"]} as for log append`);
+  if (error) throw new UsageError(`${error}; expected {"type", "project", "source", "note"[, "dest"]} as for log append`);
   return { log: value as LogEvent };
 }
 export function runWriteCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv = process.env, text: TextOptions = PLAIN): { text: string; code: number } {
@@ -59,28 +59,28 @@ export function runWriteCommand(command: string, args: string[], home: string, e
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (!arg.startsWith("--")) { positional.push(arg); continue; }
-    if (Object.hasOwn(flags, arg) || (!values.includes(arg) && !booleans.includes(arg))) throw new Error(`${command}: unknown or repeated option: ${arg}`);
+    if (Object.hasOwn(flags, arg) || (!values.includes(arg) && !booleans.includes(arg))) throw new UsageError(`${command}: unknown or repeated option: ${arg}`);
     if (booleans.includes(arg)) flags[arg] = true;
     else {
       const value = args[++i];
-      if (value === undefined || value.startsWith("--")) throw new Error(`${arg}: value required`);
+      if (value === undefined || value.startsWith("--")) throw new UsageError(`${arg}: value required`);
       flags[arg] = value;
     }
   }
-  const required = (name: string): string => { if (typeof flags[name] !== "string") throw new Error(`${name}: required`); return flags[name] as string; };
+  const required = (name: string): string => { if (typeof flags[name] !== "string") throw new UsageError(`${name}: required`); return flags[name] as string; };
   const optional = (name: string): string | undefined => typeof flags[name] === "string" ? flags[name] as string : undefined;
   const usage = COMMAND_USAGE.find(item => item.name === command)!.usage;
   const targets = usage.slice(command.length).split(/\s+(?:--|\[)/, 1)[0]!.match(/<[^>]+>/g) ?? [];
   if (positional.length !== targets.length) {
     const expected = targets.length === 2 ? `${targets[0]} and one ${targets[1]}` : targets.join(" and ");
-    throw new Error(`${command}: takes ${expected}; got ${Math.max(0, positional.length - 1)} targets`);
+    throw new UsageError(`${command}: takes ${expected}; got ${Math.max(0, positional.length - 1)} targets`);
   }
   const vault = positional[0]!, target = positional[1]!;
   if (command === "tidy") {
     const all = flags["--all"] === true, rules = TIDY_RULES.filter(rule => all || flags[`--${rule}`] === true);
-    if (all && TIDY_RULES.some(rule => flags[`--${rule}`] === true)) throw new Error("tidy: use rule flags or --all, not both");
-    if (!rules.length) throw new Error("tidy: select at least one rule (--connections --escapes --enums --keys --sources --topics --secrets --log) or --all");
-    if (flags["--dry-run"] && flags["--confirm"]) throw new Error("tidy: --dry-run and --confirm are exclusive");
+    if (all && TIDY_RULES.some(rule => flags[`--${rule}`] === true)) throw new UsageError("tidy: use rule flags or --all, not both");
+    if (!rules.length) throw new UsageError("tidy: select at least one rule (--connections --escapes --enums --keys --sources --topics --secrets --log) or --all");
+    if (flags["--dry-run"] && flags["--confirm"]) throw new UsageError("tidy: --dry-run and --confirm are exclusive");
     const mapText = optional("--map") !== undefined ? input(required("--map"), home) : undefined;
     const result = tidyVault(home, { vault, rules, ...(mapText !== undefined ? { map: parseTidyMap(mapText), mapText } : {}), confirm: flags["--confirm"] === true && !flags["--dry-run"], fingerprint: optional("--fingerprint"), channel: "cli" }, { env });
     return { text: flags["--json"] ? JSON.stringify(result) : renderTidy(result, text, { argv: [command, ...args], positional }), code: result.ok ? 0 : 1 };
@@ -90,18 +90,18 @@ export function runWriteCommand(command: string, args: string[], home: string, e
     case "new": {
       const frontmatter = optional("--extra") ? object(required("--extra"), "extra") : {};
       for (const key of ["type", "domain", "description", "title", "source", "confidence", "status"]) if (optional(`--${key}`) !== undefined) frontmatter[key] = optional(`--${key}`);
-      if(optional("--source")?.trim().startsWith("["))try{frontmatter.source=JSON.parse(required("--source"));}catch{throw new Error("--source: expected a string or JSON array of strings");}
+      if(optional("--source")?.trim().startsWith("["))try{frontmatter.source=JSON.parse(required("--source"));}catch{throw new UsageError("--source: expected a string or JSON array of strings");}
       if (optional("--topics") !== undefined) frontmatter.topics = required("--topics").split(",").filter(Boolean).map(value => value.startsWith("[[") ? value : `[[${value}]]`);
       operation = { op: "create", path: target, frontmatter, ...(optional("--body") ? { body: input(required("--body"), home) } : {}) }; break;
     }
     case "patch": {
       // --edits takes the same JSON array as the MCP `edits` argument.
       if (optional("--edits") === undefined) { operation = { op: "patch", path: target, oldString: required("--old"), newString: required("--new"), expectedSha: optional("--expected-sha") }; break; }
-      if (optional("--old") !== undefined || optional("--new") !== undefined) throw new Error("patch: use --old/--new or --edits, not both");
+      if (optional("--old") !== undefined || optional("--new") !== undefined) throw new UsageError("patch: use --old/--new or --edits, not both");
       const text = input(required("--edits"), home);
       let edits: unknown;
-      try { edits = JSON.parse(text); } catch { throw new Error("--edits: invalid JSON; expected an array of {oldString, newString}"); }
-      if (!Array.isArray(edits)) throw new Error("--edits: expected a JSON array of {oldString, newString}");
+      try { edits = JSON.parse(text); } catch { throw new UsageError("--edits: invalid JSON; expected an array of {oldString, newString}"); }
+      if (!Array.isArray(edits)) throw new UsageError("--edits: expected a JSON array of {oldString, newString}");
       operation = { op: "patch", path: target, edits: edits as PatchEdit[], expectedSha: optional("--expected-sha") }; break;
     }
     case "append": operation = { op: "append", path: target, section: required("--section"), markdown: required("--markdown"), expectedSha: optional("--expected-sha") }; break;

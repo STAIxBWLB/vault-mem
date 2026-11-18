@@ -9,7 +9,7 @@ import type { SpecEdge, SpecNode } from "./spec-graph.ts";
 import type { SpecFreshnessEntry } from "./spec-freshness.ts";
 import type { SpecValidationIssue, SpecValidationReport } from "./spec-validate.ts";
 import type { SpecDiagnostic } from "./spec-source.ts";
-import { blocks, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
+import { blocks, fields, heading, issueTable, marker, nextCommand, paragraph, plural, shellWord, status, table, tableParts, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
 
 /** What the renderers need from the command line: the spec arguments (`get root --body`) and their parsed values. */
 export interface SpecTextContext { args: readonly string[]; values: Record<string, unknown>; repo?: string }
@@ -25,7 +25,8 @@ export interface SpecGrepResult { source: string; worktree: string; hits: SpecGr
 export type SpecValidateResult = SpecValidationReport & { source?: string; worktree?: string };
 
 const value = (data: unknown): string => typeof data === "string" ? data : Array.isArray(data) ? data.map(value).join(", ") : data === undefined || data === null ? "" : JSON.stringify(data);
-const statusTone = (status: string | undefined): CellInput => status === "active" ? tone(status, "ok") : status === "deprecated" ? tone(status, "warn") : status ?? "-";
+const markedCell = (name: "ok" | "warn" | "fail", text: string, o: TextOptions) => tone(`${marker(name, { ...o, color: false })} ${text}`, name);
+const statusTone = (value: string | undefined, o: TextOptions): CellInput => value === "active" ? markedCell("ok", value, o) : value === "deprecated" ? markedCell("warn", value, o) : value ?? "-";
 const counted = (shown: number, total: number) => shown < total ? ` (${shown} of ${total})` : "";
 /** The same command with `--offset` set, inserted before a `--` separator so it stays an option. */
 export function offsetCommand(args: readonly string[], offset: number): string {
@@ -33,19 +34,19 @@ export function offsetCommand(args: readonly string[], offset: number): string {
   const head = args.slice(0, end).filter((arg, i, all) => arg !== "--offset" && all[i - 1] !== "--offset");
   return ["vmem", "spec", ...head, "--offset", String(offset), ...args.slice(end)].map(shellWord).join(" ");
 }
-function freshnessText(entry: SpecFreshnessEntry | null): CellInput {
+function freshnessText(entry: SpecFreshnessEntry | null, o: TextOptions): CellInput {
   if (!entry) return undefined;
-  if (entry.state === "fresh") return tone(entry.dirty ? "fresh, uncommitted changes" : "fresh", entry.dirty ? "warn" : "ok");
-  return tone(`stale: ${staleText(entry)}`, "warn");
+  if (entry.state === "fresh") return markedCell(entry.dirty ? "warn" : "ok", entry.dirty ? "fresh, uncommitted changes" : "fresh", o);
+  return markedCell("warn", `stale: ${staleText(entry)}`, o);
 }
 const staleText = (entry: SpecFreshnessEntry) => [entry.commits > 0 && `${plural(entry.commits, "commit")} since verified-against`, entry.dirty && "uncommitted changes"].filter(Boolean).join(", ") || "source scope changed";
 
 export function renderSpecGet(r: SpecGetResult, o: TextOptions, context: SpecTextContext): string {
   const data = r.frontmatter, title = typeof data.title === "string" ? data.title : "";
   const info = fields([
-    ["type", value(data.type)], ["status", typeof data.status === "string" ? statusTone(data.status) : value(data.status)],
+    ["type", value(data.type)], ["status", typeof data.status === "string" ? statusTone(data.status, o) : value(data.status)],
     ["parent", value(data.parent)], ["depends-on", value(data["depends-on"])], ["covers", value(data.covers)], ["paths", value(data.paths)],
-    ["path", r.path], ["source", r.source], ["freshness", freshnessText(r.freshness)],
+    ["path", r.path], ["source", r.source], ["freshness", freshnessText(r.freshness, o)],
     ["links", r.links.map(edge => `${edge.kind} ${edge.target}`).join(", ") + counted(r.links.length, r.totals.links)],
     ["backlinks", r.backlinks.map(edge => `${edge.kind} ${edge.source}`).join(", ") + counted(r.backlinks.length, r.totals.backlinks)],
     ["children", r.children.map(node => node.id).join(", ") + counted(r.children.length, r.totals.children)],
@@ -72,7 +73,7 @@ export function renderSpecGraph(r: SpecGraphResult, o: TextOptions, context: Spe
   }
   const order = (node: SpecNode) => reached.get(node.id)?.depth ?? 9;
   const nodes = [...r.nodes].sort((a, b) => order(a) - order(b));
-  const rows = nodes.map(node => { const how = reached.get(node.id); return [tone(node.id, "info"), node.type || "-", statusTone(node.status), how?.edge?.kind ?? "-", how ? how.depth : "-", node.title]; });
+  const rows = nodes.map(node => { const how = reached.get(node.id); return [tone(node.id, "info"), node.type || "-", statusTone(node.status, o), how?.edge?.kind ?? "-", how ? how.depth : "-", node.title]; });
   const tree = new Set([...reached.values()].flatMap(how => how.edge ? [how.edge] : []));
   const other = r.edges.filter(edge => !tree.has(edge));
   const edge = typeof context.values.edge === "string" ? `${context.values.edge} edges` : direction === "neighbors" ? "all edges" : "parent edges";
@@ -86,7 +87,7 @@ export function renderSpecGraph(r: SpecGraphResult, o: TextOptions, context: Spe
 /** One hit per row, its snippet on the next line; rows never wrap so each snippet stays under its row. */
 export function renderSpecGrep(r: SpecGrepResult, o: TextOptions, context: SpecTextContext): string {
   if (!r.hits.length) return paragraph(r.offset ? `no more hits after offset ${r.offset}` : "no specs matched", o);
-  const lines = table(["ID", "TYPE", "STATUS", "TITLE"], r.hits.map(hit => [tone(hit.id, "info"), hit.type || "-", statusTone(hit.status), hit.title]), { color: o.color }).split("\n");
+  const lines = tableParts(["ID", "TYPE", "STATUS", "TITLE"], r.hits.map(hit => [tone(hit.id, "info"), hit.type || "-", statusTone(hit.status, o), hit.title]), { ...o, columns: undefined });
   const body = [lines[0]!, ...r.hits.flatMap((hit, i) => [lines[i + 1]!, paragraph(stripTerminal(hit.snippet).replace(/\s+/g, " ").trim(), o, "muted", "  ")])].join("\n");
   const range = r.offset || r.truncated ? `hits ${r.offset + 1}-${r.offset + r.hits.length}` : plural(r.hits.length, "hit");
   return blocks(body, [paragraph(range + (r.truncated ? ", more remain" : ""), o),
@@ -95,7 +96,7 @@ export function renderSpecGrep(r: SpecGrepResult, o: TextOptions, context: SpecT
 
 const finding = (item: { path: string; field?: string; target?: string; firstPath?: string; message: string }) =>
   `${item.path}${item.field ? ` ${item.field}` : ""}${item.target ?? item.firstPath ? ` -> ${item.target ?? item.firstPath}` : ""}: ${item.message}`;
-const levelCell = (severity: SpecValidationIssue["severity"]) => tone(severity, severity === "error" ? "fail" : "warn");
+const levelCell = (severity: SpecValidationIssue["severity"], o: TextOptions) => markedCell(severity === "error" ? "fail" : "warn", severity, o);
 
 /** LEVEL/CHECK/FINDING rows per section, then a verdict line. Stale scopes are their own section unless --require-fresh made them errors. */
 export function renderSpecValidate(r: SpecValidateResult, o: TextOptions, context: SpecTextContext): string {
@@ -104,12 +105,12 @@ export function renderSpecValidate(r: SpecValidateResult, o: TextOptions, contex
   const target = context.repo !== undefined ? `--repo ${context.repo}` : r.source ?? "";
   const verdict = `${r.ok ? "ok" : "fail"}: ${plural(r.errors, "error")}, ${plural(r.warnings, "warning")}, ${plural(stale.length, "stale scope")}`;
   return blocks(heading(`spec validate ${target}`.trim(), o),
-    section("Findings", r.items.map(item => [levelCell(item.severity), item.code, finding(item)])),
+    section("Findings", r.items.map(item => [levelCell(item.severity, o), item.code, finding(item)])),
     section("Discovery", r.diagnostics.map((item: SpecDiagnostic) => [tone("note", "muted"), item.code, finding(item)])),
-    context.values.requireFresh !== true && section("Freshness", stale.map(entry => [tone("warning", "warn"), "stale",
+    context.values.requireFresh !== true && section("Freshness", stale.map(entry => [markedCell("warn", "warning", o), "stale",
       `${entry.path}${entry.id ? ` (${entry.id})` : ""}: ${staleText(entry)}; review the scope and refresh verified-against`])),
     [r.truncated && paragraph(`truncated: ${r.items.length} of ${r.errors + r.warnings} findings shown; raise --limit (up to 500) or fix the listed findings and rerun`, o, "warn"),
-      paint(verdict, r.ok ? "ok" : "fail", o)].filter(Boolean).join("\n"));
+      status(r.ok ? "ok" : "fail", verdict, o)].filter(Boolean).join("\n"));
 }
 
 /** A frontmatter mutation receipt shows the verdict and SHA without repeating authored content. */
