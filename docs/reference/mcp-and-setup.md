@@ -17,10 +17,12 @@ The vault set is read once at startup: every tool's `vault` property is an enum 
 | `vmem_status` | none; vaults with health, write policy, effective pii and `piiPolicy` (read-only) |
 | `vmem_brief` | `intent`<=1024 bytes, optional `vault`, `paths[]`<=16 (1024 bytes each), `bytes` 256..4096 (default 1024); ranked screened pointers and one-hop neighbors, no bodies |
 | `vmem_search` | `query`<=1000, `vault`, `limit`<=50, `type`, `domain` |
-| `vmem_read` | `path` (stem, alias or `notes/` path), `vault`, `maxBytes`<=65536; returns `{path, frontmatter, body, sha256, truncated}` |
+| `vmem_read` | `path` (stem, alias or `notes/` path), `vault`, `maxBytes`<=65536, `section`, `offset`, `revision` (one full commit id); returns `{path, frontmatter, body, sha256, truncated}`, or that commit's blob with `revision`, `blob` and `basis: "git_snapshot"` |
 | `vmem_read_many` | `paths`<=20 (8 KiB each), `vault` |
 | `vmem_list` | `vault`, `prefix`, `limit`<=500, `cursor`; rows in path order with `mtime`, the filtered `total` and `nextCursor` while more remain |
 | `vmem_links` | `path`, `vault`, `direction` out/in/both, `limit`<=200; returns `{out, dead, in}`, each `dead` entry with `suggested` (the closest title and its score, or null; a hint, never a rewrite) |
+| `vmem_history` | `path` (stem, alias or `notes/` path), `vault`, `limit`<=100, `cursor`; first-parent snapshot revisions with blob ids, sizes and the pinned `head`, see [Git snapshot history](reads.md#git-snapshot-history) |
+| `vmem_changes` | `vault`, `from` and `to` (full commit ids reachable from HEAD), `limit`<=500, `cursor`; notes-only path, status and before/after blob ids |
 | `vmem_mocs` | `vault`; MOC notes with incoming link counts |
 | `vmem_check` | `vault`, `path`, `text`<=256 KiB; validation only |
 | `vmem_log_tail` | `vault`, `n`<=200, `type`, `grep`<=256 |
