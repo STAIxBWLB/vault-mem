@@ -8,6 +8,12 @@ import type { WriteIssue } from "./write-types.ts";
 
 /** Paths sync may stage; everything else in the clone is left alone (and reported). */
 const STAGE_PREFIXES = ["notes/", "reports/"];
+/**
+ * The assertion journal's segments, `assertions/<16 lowercase hex>.jsonl` directly under `assertions/`. A prefix
+ * would stage the journal's `assertions.lock` and any stray or nested path with it, so the file's shape decides.
+ */
+const ASSERTION_SEGMENT = /^assertions\/[0-9a-f]{16}\.jsonl$/;
+const STAGE_PATTERNS = ["assertions/<segment>.jsonl"];
 const STAGE_FILES = ["log"];
 const GIT_TIMEOUT_MS = 60_000;
 export interface SyncResult {
@@ -19,7 +25,7 @@ export interface SyncResult {
   branch: string | null;
   /** Planned changed paths that will be staged and committed. */
   paths: string[];
-  /** Changed paths outside STAGE_PREFIXES and STAGE_FILES: never staged. */
+  /** Changed paths outside the staged prefixes, patterns and files: never staged. */
   ignored: string[];
   ahead: number;
   behind: number;
@@ -46,8 +52,8 @@ export function sameRemote(a: string, b: string): boolean {
 }
 /** Time budget of the console's local sync check. */
 const GIT_TIMEOUT_BUDGET_MS = 1000;
-/** The paths `vmem sync` stages (STAGE_PREFIXES, then STAGE_FILES), as people read them. */
-export const STAGED_DESCRIPTION = ((items: string[]) => items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items.join(""))([...STAGE_PREFIXES, ...STAGE_FILES]);
+/** The paths `vmem sync` stages (STAGE_PREFIXES, STAGE_PATTERNS, then STAGE_FILES), as people read them. */
+export const STAGED_DESCRIPTION = ((items: string[]) => items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : items.join(""))([...STAGE_PREFIXES, ...STAGE_PATTERNS, ...STAGE_FILES]);
 type SpawnResult = { exitCode: number | null; signalCode?: string | number | null; exitedDueToTimeout?: boolean; stderr: { toString(): string } };
 /** Why a git call failed: its timeout or signal when it left no exit code, else the last stderr line. */
 function failureCause(result: SpawnResult, budgetMs: number): string {
@@ -94,7 +100,7 @@ export function originCheck(root: string, remote: string, env: NodeJS.ProcessEnv
   const ok = originUrl !== null && rewrites.length === 0 && fetchUrls.length > 0 && pushUrls.length > 0 && [...fetchUrls, ...pushUrls].every(url => sameRemote(url, remote));
   return { ok, origin: originUrl, fetchUrls, pushUrls, ...(!ok ? { issue: originUrl === null ? "repository has no origin remote" : rewrites.length ? `git url rewrite ${rewrites[0]} applies to the vault remote; refusing because the push destination cannot be verified` : "an origin fetch or push URL does not match the configured remote; nothing was fetched or pushed" } : {}) };
 }
-function planned(path: string): boolean { return STAGE_FILES.includes(path) || STAGE_PREFIXES.some(prefix => path.startsWith(prefix)); }
+function planned(path: string): boolean { return STAGE_FILES.includes(path) || STAGE_PREFIXES.some(prefix => path.startsWith(prefix)) || ASSERTION_SEGMENT.test(path); }
 /** Parse `status --porcelain=v1 -z` into one entry per change; a rename or copy is one entry with both sides. */
 function changedEntries(git: Git): string[][] {
   const parts = git(["status", "--porcelain=v1", "-z", "--untracked-files=all"]).stdout.split("\0").filter(Boolean), entries: string[][] = [];
@@ -136,9 +142,10 @@ export function localSyncPending(root: string, env: NodeJS.ProcessEnv = process.
 /**
  * Explicit, never scheduled publication of one vault clone. Without `confirm` it fetches, checks the
  * configured remote against `origin`, and previews what would be staged; nothing is committed or pushed.
- * With `confirm` and the current fingerprint it stages only notes/, reports/ and log, commits, rebases on
- * the upstream and pushes. Any failure (remote mismatch, divergence that cannot rebase, push refused,
- * missing credentials) is reported with `ok: false`; it never reports success it did not observe.
+ * With `confirm` and the current fingerprint it stages only notes/, reports/, assertion journal segments
+ * and log, commits, rebases on the upstream and pushes. Any failure (remote mismatch, divergence that
+ * cannot rebase, push refused, missing credentials) is reported with `ok: false`; it never reports
+ * success it did not observe.
  */
 export function syncVault(home: string, request: { vault: string; confirm?: boolean; fingerprint?: string; message?: string }, options: { env?: NodeJS.ProcessEnv } = {}): SyncResult {
   const config = loadRegistry(home), spec = config.vaults.find(v => v.id === request.vault);

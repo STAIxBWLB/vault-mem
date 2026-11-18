@@ -7,7 +7,7 @@ import type { ChangeReceipt, WriteIssue, WriteReceipt } from "./write-types.ts";
 import type { LogReceipt } from "./log-types.ts";
 import type { TidyResult } from "./tidy.ts";
 import type { OrgPromoteResult } from "./org-promote.ts";
-import type { SyncResult } from "./sync.ts";
+import { STAGED_DESCRIPTION, type SyncResult } from "./sync.ts";
 import type { PromoteResult } from "./promote.ts";
 import { notePath } from "./write-operations.ts";
 import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paragraph, plural, shellWord, summary, table, type TextOptions, type Tone } from "./text-output.ts";
@@ -132,7 +132,7 @@ export function renderSync(r: SyncResult, o: TextOptions, ctx: WriteContext): st
   const info = r.branch === null ? "" : fields([["vault", r.vault], ["branch", r.branch], ["remote", r.remote.configured], ["origin", r.remote.origin], ["ahead", r.ahead], ["behind", r.behind]], o);
   const paths = r.paths.length ? table(["PATH"], r.paths.map(path => [path]), o) : undefined;
   const confirm = r.ok && r.preview && work && r.fingerprint ? nextCommand("confirm", confirmCommand(ctx.argv, r.fingerprint), o) : undefined;
-  return blocks([line(head, o, t), info].filter(Boolean).join("\n"), paths, list("not synced (outside notes/, reports/ and log)", r.ignored), issueTable(r.issues, o), confirm);
+  return blocks([line(head, o, t), info].filter(Boolean).join("\n"), paths, list(`not synced (outside ${STAGED_DESCRIPTION})`, r.ignored), issueTable(r.issues, o), confirm);
 }
 
 /** `promote-from-amem <vault>`: the candidate table per project. */
