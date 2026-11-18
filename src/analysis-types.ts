@@ -13,6 +13,8 @@ export interface AnalysisSnapshot {
   sourceWarnings?: Record<string,string[]>;
   /** Evidence entries that are not verified (status and reason only), keyed by note path relative to notes/. */
   evidenceWarnings?: Record<string,string[]>;
+  /** L17 input: notes whose workspace source changed after their `updated` date, plus the unknown-age and skipped counts. */
+  sourceAge?: { findings: Record<string,string[]>; unknownAge: number; skipped: number; gitUnavailable?: string };
   /**
    * At most one title hint per dead link text, captured with an open index outside the pure lint transform.
    * Link text is arbitrary (`__proto__` included), so a producer stores it in a null-prototype record and a reader
@@ -25,7 +27,7 @@ export interface AnalysisSnapshot {
    */
   linkHintBound?: { cap: number; attempted: readonly string[]; skipped: number };
 }
-export type LintCode = "L01" | "L02" | "L03" | "L09" | "L10" | "L11" | "L12" | "L13" | "L14" | "L15" | "L16";
+export type LintCode = "L01" | "L02" | "L03" | "L09" | "L10" | "L11" | "L12" | "L13" | "L14" | "L15" | "L16" | "L17";
 export interface LintReport {
   findings: Record<LintCode, string[]>;
   errors: number;

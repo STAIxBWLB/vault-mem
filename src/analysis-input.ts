@@ -11,6 +11,7 @@ import { deadLinkScan } from "./vault-lint.ts";
 import type { TitleSuggestion } from "./links.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { verifyNoteEvidence, type EvidenceReads } from "./evidence.ts";
+import { sourceAgeFindings } from "./source-age.ts";
 import { loadRegistry } from "./registry.ts";
 import { VaultIndex } from "./vault-index.ts";
 /** Largest auxiliary input one read takes, and the default bound of `analysisRead` and `analysisReadWithSize`. */
@@ -99,6 +100,8 @@ export function analysisInput(home: string, id: string, options: { today?: strin
       if(found.length)drift[note.path]=found;
     }catch{ /* Invalid frontmatter remains visible to L02. */ }
     if(Object.keys(drift).length)snapshot.evidenceWarnings=drift;
+    // L17 runs git, so only lint (the hint pass) pays for it; graph reads never do.
+    if(options.hints&&sourceRoot)snapshot.sourceAge=sourceAgeFindings(snapshot.notes,sourceRoot,config.denyPaths??[]);
     if(options.hints){
       // A null prototype keeps the link text `__proto__` a stored key: on a plain object it would set the prototype,
       // drop the hint and leave the object answering inherited members.
