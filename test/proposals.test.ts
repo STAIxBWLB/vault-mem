@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
 import { checkStoredBinding, createStoredProposal, readStoredProposal, replaceStoredProposal } from "../src/proposal-storage.ts";
 import { applyProposal, listProposals, previewProposalApply, previewProposalReject, proposalReplyBytes, reconcileProposal, rejectProposal, showProposal, submitProposal } from "../src/proposal-provider.ts";
-import { addVault, loadRegistry, removeVault, setVaultPii } from "../src/registry.ts";
+import { addVault, loadRegistry, LOCK_FILE, removeVault, setVaultPii } from "../src/registry.ts";
 import { logBinding } from "../src/vault-log.ts";
 import { applyProposalWrite, applyWrite, sha256, snapshot } from "../src/writer.ts";
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -175,6 +175,11 @@ test("writer guard records intent under the mutation lock and refuses a stale de
     const missing = applyProposalWrite(home, request, { binding } as Parameters<typeof applyProposalWrite>[2]);
     expect(missing.applied).toBe(false);
     expect(existsSync(join(notes, "proposed.md"))).toBe(false);
+    const registryLock = join(home, LOCK_FILE); writeFileSync(registryLock, "synthetic lock", { mode: 0o600 });
+    expect(applyProposalWrite(home, request, { binding, proposal: decision }).applied).toBe(false);
+    expect(readFileSync(registryLock, "utf8")).toBe("synthetic lock");
+    expect(readStoredProposal(home, bindingDigest, record.id).state).toBe("pending");
+    rmSync(registryLock);
     const stale = applyProposalWrite(home, request, { binding, proposal: { ...decision, fingerprint: "0".repeat(64) } });
     expect(stale.ok).toBe(false);
     expect(existsSync(join(notes, "proposed.md"))).toBe(false);
@@ -237,6 +242,9 @@ test("rejection binds the reason and current vault snapshot without changing not
     const submitted = submitProposal(home, { vault: "test", operation }, { channel: "mcp" });
     const preview = previewProposalReject(home, { vault: "test", id: submitted.id, reason: "not needed" }, { channel: "mcp" });
     expect(existsSync(join(vaultPath, "mutation.lock"))).toBe(false);
+    const registryLock = join(home, LOCK_FILE); writeFileSync(registryLock, "synthetic lock", { mode: 0o600 });
+    expect(rejectProposal(home, { vault: "test", id: submitted.id, reason: "not needed", fingerprint: preview.fingerprint }, { channel: "mcp" }).rejected).toBe(false);
+    expect(readFileSync(registryLock, "utf8")).toBe("synthetic lock"); rmSync(registryLock);
     expect(() => snapshot(vaultPath, [], 1)).toThrow("read bound");
     const budget = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures", "proposal-budget.ts"), vaultPath], { stdout: "pipe", stderr: "pipe" });
     expect(budget.exitCode).toBe(0);
@@ -275,6 +283,29 @@ test("a stale patch can still be rejected against a fresh rejection preview", ()
     expect(rejectProposal(home, { vault: "test", id: submitted.id, reason: "superseded", fingerprint: preview.fingerprint }, { channel: "mcp" })).toMatchObject({ ok: true, rejected: true });
     expect(readFileSync(research, "utf8")).toBe(changed);
     expect(existsSync(join(vaultPath, "log"))).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("changed evidence source or vault policy invalidates an apply preview", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-evidence-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
+  try {
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(root, "workspace.config.yaml"), "name: synthetic\n");
+    const registry = join(root, "projects.yaml"); writeFileSync(registry, "projects: []\n");
+    const source = join(notes, "research.md"), original = "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n";
+    writeFileSync(source, original);
+    addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp", registry });
+    const reference = "vault/notes/research.md", operation = { op: "create", path: "proposed", frontmatter: { type: "insight", domain: "research", description: "Synthetic finding.", topics: ["[[research]]"], source: [reference], evidence: [{ source: reference, sha256: sha256(original), quote: "# Research" }] }, body: "# Proposed\n\nSynthetic body.\n\n## Topics\n\n- [[research]]\n" };
+    const submitted = submitProposal(home, { vault: "test", operation }, { channel: "mcp" });
+    const preview = previewProposalApply(home, { vault: "test", id: submitted.id }, { channel: "mcp" });
+    writeFileSync(source, `${original}\nchanged source\n`);
+    expect(applyProposal(home, { vault: "test", id: submitted.id, fingerprint: preview.fingerprint }, { channel: "mcp" }).applied).toBe(false);
+    expect(existsSync(join(notes, "proposed.md"))).toBe(false);
+    writeFileSync(source, original);
+    const fresh = previewProposalApply(home, { vault: "test", id: submitted.id }, { channel: "mcp" });
+    setVaultPii(home, "test", "deny", true);
+    expect(applyProposal(home, { vault: "test", id: submitted.id, fingerprint: fresh.fingerprint }, { channel: "mcp" }).applied).toBe(false);
+    expect(existsSync(join(notes, "proposed.md"))).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

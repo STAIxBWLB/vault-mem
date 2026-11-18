@@ -8,7 +8,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { hostname } from "node:os";
 import { Database } from "bun:sqlite";
-import { loadRegistry, syncDirectory } from "./registry.ts";
+import { loadRegistry, LOCK_FILE, syncDirectory } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES, GRAMS_COLUMNS, gramPhrase, grams, splitTerms } from "./vault-index.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
@@ -188,7 +188,7 @@ export function applyProposalWrite(home: string, request: WriteRequest, options:
 }
 /** Reject under the same vault mutation lock, without publishing a note or opening the index. */
 export function rejectProposalWrite(home: string, vaultId: string, channel: "cli" | "mcp", binding: LogBinding, decision: ProposalRejectDecision, now = new Date()): ProposalRejectReceipt {
-  let fd: number | undefined, file: string | undefined, rejected = false;
+  let fd: number | undefined, file: string | undefined, registryFd: number | undefined, rejected = false;
   const result: ProposalRejectReceipt = { ok: false, rejected: false, issues: [] };
   try {
     if (channel !== "cli" && channel !== "mcp") throw new Error("invalid write channel; use CLI or MCP");
@@ -200,6 +200,9 @@ export function rejectProposalWrite(home: string, vaultId: string, channel: "cli
     try { fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
     catch { file = undefined; throw new Error("vault mutation lock is unavailable; stop concurrent writers and inspect the lock"); }
     writeFileSync(fd, JSON.stringify({ pid: process.pid, host: hostname(), token: randomUUID(), created: new Date().toISOString() }) + "\n"); fsyncSync(fd);
+    try { registryFd = openSync(join(home, LOCK_FILE), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+    catch { throw new Error("registry lock is unavailable; stop concurrent registry updates and inspect the lock"); }
+    writeFileSync(registryFd, JSON.stringify({ pid: process.pid, host: hostname(), created: new Date().toISOString() }) + "\n"); fsyncSync(registryFd);
     const plan = proposalRejectionPlan(home, vaultId, channel, binding), config = loadRegistry(home), currentVault = config.vaults.find(item => item.id === vaultId);
     if (!currentVault || !matchesBinding(config, vaultId, binding)) throw new Error("vault binding or policy changed; request a new rejection preview");
     const record = readStoredProposal(home, decision.bindingDigest, decision.id), recordDigest = proposalRecordDigest(record);
@@ -219,6 +222,11 @@ export function rejectProposalWrite(home: string, vaultId: string, channel: "cli
   } catch (error) {
     result.issues.push({ code: "PROPOSAL_REJECT", severity: "error", message: `proposal rejection ${rejected ? "was recorded but finalization failed" : "failed"}: ${error instanceof Error ? error.message : "unknown failure"}; inspect the proposal before retrying` });
   } finally {
+    if (registryFd !== undefined) {
+      try { cleanupOwnedFile(join(home, LOCK_FILE), registryFd); }
+      catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `proposal rejection ${rejected ? "was recorded but " : ""}registry lock cleanup failed; inspect the lock before retrying` }); }
+      finally { try { closeSync(registryFd); } catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "registry lock descriptor close failed; inspect the lock before retrying" }); } }
+    }
     if (fd !== undefined) {
       try { cleanupOwnedFile(file!, fd); }
       catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `proposal rejection ${rejected ? "was recorded but " : ""}mutation lock cleanup failed; inspect the lock before retrying` }); }
@@ -229,6 +237,7 @@ export function rejectProposalWrite(home: string, vaultId: string, channel: "cli
 }
 function runWrite(home: string, request: WriteRequest, options: WriteOptions & { proposal?: ProposalWriteDecision }): WriteReceipt {
   let lockFd: number | undefined, lockFile: string | undefined;
+  let proposalRegistryFd: number | undefined;
   let index: VaultIndex | undefined;
   const temps = new Map<string, { fd: number; remove: boolean }>(), publicationPaths = new Map<string, PublicationPath>(), createdDirs: string[] = [], committed: PlannedChange[] = [];
   let changes: PlannedChange[] = [], issues: WriteIssue[] = [], fingerprint: string | undefined, root = "", applied = false, indexUpdated = false;
@@ -274,6 +283,12 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
       catch { lockFile = undefined; refuse("LOCKED", "vault mutation lock unavailable; existing lock is preserved"); }
       writeFileSync(lockFd, JSON.stringify({ pid: process.pid, host: hostname(), token: randomUUID(), created: new Date().toISOString() }) + "\n");
       fsyncSync(lockFd);
+    }
+    if (options.proposal) {
+      try { proposalRegistryFd = openSync(join(home, LOCK_FILE), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+      catch { refuse("LOCKED", "registry lock unavailable; stop concurrent registry updates and inspect the lock"); }
+      writeFileSync(proposalRegistryFd, JSON.stringify({ pid: process.pid, host: hostname(), created: new Date().toISOString() }) + "\n"); fsyncSync(proposalRegistryFd);
+      if (!options.binding || !matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("VAULT_DRIFT", "vault binding or policy changed after preview; request a new proposal preview");
     }
     const notes = snapshot(root, config.denyPaths);
     checkExpected(request, notes);
@@ -463,6 +478,11 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
     }
     // Only empty directories created by this invocation are eligible for removal on failure.
     if (!applied) for (const dir of createdDirs.reverse()) { try { rmdirSync(dir); } catch { recordError("CLEANUP", "owned empty directory cleanup failed"); } }
+    if (proposalRegistryFd !== undefined) {
+      try { cleanupOwnedFile(join(home, LOCK_FILE), proposalRegistryFd); }
+      catch (error) { recordError("CLEANUP", `proposal registry lock retained; inspect ownership before manual recovery: ${error instanceof Error ? error.message : String(error)}`); }
+      finally { try { closeSync(proposalRegistryFd); } catch { recordError("CLEANUP", "proposal registry lock descriptor close failed; inspect retained locks"); } }
+    }
     if (lockFd !== undefined) {
       try { cleanupOwnedFile(lockFile!, lockFd); }
       catch (error) { recordError("CLEANUP", `mutation lock retained; inspect ownership before manual recovery: ${error instanceof Error ? error.message : String(error)}`); }

@@ -93,6 +93,7 @@ export async function serveMcp(options: McpServerOptions): Promise<void> {
     if (msg.method !== "tools/call") { await error(id, -32601, "Method not found"); return; }
     const params = msg.params;
     if (!plain(params) || Object.keys(params).some(k => !["name", "arguments", "_meta"].includes(k)) || typeof params.name !== "string") { await error(id, -32602, "Invalid tool call"); return; }
+    if (params.name.startsWith("vmem_proposal_") && Buffer.byteLength(line, "utf8") + 1 > 48 * 1024) { await error(id, -32600, "Proposal request exceeds 48 KiB; shorten the request"); return; }
     const definition = options.tools.find(t => t.name === params.name), args = params.arguments ?? {};
     const handler = definition && options.handlers[definition.name];
     if (!definition || !handler) { await error(id, -32602, `unknown tool: ${params.name.slice(0, 200)}`); return; }

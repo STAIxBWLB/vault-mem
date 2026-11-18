@@ -1,4 +1,5 @@
 import { vaultBrief } from "./vault-brief.ts";
+import { applyProposal, listProposals, previewProposalApply, previewProposalReject, reconcileProposal, rejectProposal, showProposal, submitProposal, type ProposalContext } from "./proposal-provider.ts";
 import { evidenceReport } from "./evidence.ts";
 import { explainGraphPath } from "./graph-evidence.ts";
 import { createSpecMcp } from "./mcp-spec.ts";
@@ -13,7 +14,7 @@ import { loadRegistry, registryStatus } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
 import { CHANGES_PAGE_LIMIT, HISTORY_PAGE_LIMIT, SNAPSHOT_CURSOR_CHARS, readChanges, readHistory, readRevision } from "./vault-history.ts";
 import { listVaultFiles, readVaultFile } from "./vault-files.ts";
-import { appendLog, readLog } from "./vault-log.ts";
+import { appendLog, logBinding, readLog } from "./vault-log.ts";
 import { STATS_MAX_DAYS, vaultStats } from "./vault-stats.ts";
 import { applyWrite } from "./writer.ts";
 import { notePath } from "./write-operations.ts";
@@ -35,10 +36,13 @@ const oid = { type: "string", minLength: 40, maxLength: 64, pattern: "^(?:[0-9a-
 const logEvent = LOG_EVENT_SCHEMA;
 const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLength: 4096, maxItems: 64, items: { type: ["string", "number", "boolean"], maxLength: 1024 } };
 const metadata = { type: "object", maxProperties: 32, properties: { authors: { type: "array", minItems: 1, maxItems: 100, items: string(1024) } }, additionalProperties: scalar };
+const proposalMetadata = { ...metadata, properties: { ...metadata.properties, evidence: { type: "array", maxItems: 16, items: object({ source: string(512), sha256: sha, quote: string(2048), section: string(1024) }, ["source", "sha256", "quote"]) } } };
+const proposalOperation = object({ op: { type: "string", enum: ["create", "patch"] }, path: string(200), frontmatter: proposalMetadata, body: string(32768, 0), expectedSha: sha,
+  edits: { type: "array", minItems: 1, maxItems: 32, items: object({ oldString: string(8192), newString: string(8192, 0) }, ["oldString", "newString"]) } }, ["op", "path"]);
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_brief", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_history", "vmem_changes", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_graph_explain", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_evidence", "vmem_stats", ...SPEC_COMMANDS.map(item => item.name)] as const;
+  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_graph_explain", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_evidence", "vmem_stats", "vmem_proposal_submit", "vmem_proposal_list", "vmem_proposal_show", "vmem_proposal_apply", "vmem_proposal_reject", "vmem_proposal_reconcile", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Server `initialize` instructions: purpose, navigation order and the write contract. Pinned by a test, under 400 bytes. */
 export const VMEM_INSTRUCTIONS = "vmem is a vault of durable, linked knowledge: notes with frontmatter, wiki-links and an append-only log. Search first with vmem_search, then read the best match with vmem_read, using section for one H2. Writes are validated and receipted: a refusal lists issues, and a failure after publication can leave changes behind, so read the receipt and its issues before retrying.";
@@ -87,6 +91,12 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_report", "Write a screened report file under reports/ or ops/ (the MCP form of `vmem report`): same path rules, screening, write policy (write=mcp), receipt and EXTRACT log event; log overrides it, for example a LINT or GRAPH event. dryRun changes nothing.", object({ vault, path: string(200), body: string(65536, 0), dryRun: { type: "boolean" }, log: logEvent }, ["path", "body"]), "write"),
     tool("vmem_evidence", "Verify a note's version-1 evidence entries (source, sha256, quote, optional section): flat notes/*.md sources in the same vault are re-read on every call and reported verified, stale, missing, ambiguous or unsupported with UTF-8 byte offsets; other references are unverified_external without I/O. Proves that quoted bytes occur in a source version, not that a claim is true. Writes nothing, takes no lock, keeps no cache.", object({ vault, path: note }, ["path"])),
     tool("vmem_stats", "Read-only vault statistics: note counts by type, domain and status, note bytes and words in total and by type and domain, and the note-to-source byte ratio (median, p90 and the largest notes) over the workspace files the notes cite. A source counts at its own byte size on disk, so a decoded byte count never inflates a file that is not UTF-8; non-file, unreadable and over-cap sources are skipped and counted, and `truncatedNotes` counts the sourced notes the ratio's 10000-note cap left out. Also notes modified in the last 7 and 30 days, and log event counts by type over the last `days` (default 30). Writes no vault file or log and takes no vault or log lock.", object({ vault, days: integer(1, STATS_MAX_DAYS) })),
+    tool("vmem_proposal_submit", "Screen and save one create or exact-patch proposal without modifying vault notes or the log. Agent labels are unverified.", object({ vault, operation: proposalOperation, agentLabel: string(256) }, ["operation"]), "write"),
+    tool("vmem_proposal_list", "List screened proposal summaries, pending by default; pass nextCursor as after.", object({ vault, state: { type: "string", enum: ["pending", "applied", "rejected", "apply_unknown"] }, limit: integer(1, 100), after: string(36) })),
+    tool("vmem_proposal_show", "Read a screened proposal operation in UTF-8 pages, with the complete encoded response bounded to 48 KiB.", object({ vault, id: string(36), offset: integer(0, 32768), maxBytes: integer(1, 16384) }, ["id"])),
+    tool("vmem_proposal_apply", "Preview an apply, then confirm with its fingerprint. An interrupted apply remains apply_unknown and is never replayed automatically.", object({ vault, id: string(36), ...twoStep }, ["id"]), "confirm"),
+    tool("vmem_proposal_reject", "Preview rejection with a reason, then confirm with the returned fingerprint; rejection does not change vault notes or log.", object({ vault, id: string(36), reason: string(4096), ...twoStep }, ["id", "reason"]), "confirm"),
+    tool("vmem_proposal_reconcile", "Compare an uncertain apply to its recorded before/after hashes; matching content does not prove attribution.", object({ vault, id: string(36) }, ["id"])),
   ];
 }
 type Issue = { code: string; severity: "error"; message: string };
@@ -98,7 +108,8 @@ const str = (value: unknown): string | undefined => typeof value === "string" ? 
  * the default (first personal) are fixed when the server starts; later registry changes need a restart.
  */
 export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.env): { tools: McpTool[]; handlers: Record<string, McpHandler>; vaults: VaultSpec[]; defaultVault: string | undefined; instructions: string } {
-  const vaults = loadRegistry(home).vaults, ids = vaults.map(v => v.id);
+  const startup = loadRegistry(home), vaults = startup.vaults, ids = vaults.map(v => v.id);
+  const proposalBindings = new Map(vaults.map(v => { try { return [v.id, logBinding(v, startup)] as const; } catch { return [v.id, null] as const; } }));
   const defaultVault = (vaults.find(v => v.kind === "personal") ?? vaults[0])?.id;
   const pick = (args: Record<string, unknown>): VaultSpec => {
     const id = str(args.vault) ?? defaultVault;
@@ -123,6 +134,12 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     return { path, sha256: hash, truncated, frontmatter: parsed.data, body: parsed.body };
   };
   const handlers: Record<string, McpHandler> = {
+    vmem_proposal_submit: args => { const spec = pick(args), context: ProposalContext = { channel: "mcp", env, expectedVault: spec, expectedBinding: proposalBindings.get(spec.id) ?? null }; return submitProposal(home, { vault: spec.id, operation: args.operation, ...(str(args.agentLabel) !== undefined ? { agentLabel: str(args.agentLabel)! } : {}) }, context); },
+    vmem_proposal_list: args => { const spec = pick(args), context: ProposalContext = { channel: "mcp", env, expectedVault: spec, expectedBinding: proposalBindings.get(spec.id) ?? null }; return listProposals(home, { vault: spec.id, ...(str(args.state) ? { state: str(args.state) as "pending" | "applied" | "rejected" | "apply_unknown" } : {}), ...(typeof args.limit === "number" ? { limit: args.limit } : {}), ...(str(args.after) ? { after: str(args.after) } : {}) }, context); },
+    vmem_proposal_show: args => { const spec = pick(args), context: ProposalContext = { channel: "mcp", env, expectedVault: spec, expectedBinding: proposalBindings.get(spec.id) ?? null }; return showProposal(home, { vault: spec.id, id: str(args.id)!, ...(typeof args.offset === "number" ? { offset: args.offset } : {}), ...(typeof args.maxBytes === "number" ? { maxBytes: args.maxBytes } : {}) }, context); },
+    vmem_proposal_apply: args => { const spec = pick(args), context: ProposalContext = { channel: "mcp", env, expectedVault: spec, expectedBinding: proposalBindings.get(spec.id) ?? null }; if (args.confirm === true && !str(args.fingerprint)) throw new Error("proposal apply: confirm requires a fingerprint; request a new preview"); if (args.confirm !== true && args.fingerprint !== undefined) throw new Error("proposal apply: fingerprint requires confirm; request a new preview"); if (args.confirm !== true) return previewProposalApply(home, { vault: spec.id, id: str(args.id)! }, context); const result = applyProposal(home, { vault: spec.id, id: str(args.id)!, fingerprint: str(args.fingerprint)! }, context); return result.ok || result.applied ? result : { ...result, refused: true }; },
+    vmem_proposal_reject: args => { const spec = pick(args), context: ProposalContext = { channel: "mcp", env, expectedVault: spec, expectedBinding: proposalBindings.get(spec.id) ?? null }; if (args.confirm === true && !str(args.fingerprint)) throw new Error("proposal reject: confirm requires a fingerprint; request a new preview"); if (args.confirm !== true && args.fingerprint !== undefined) throw new Error("proposal reject: fingerprint requires confirm; request a new preview"); if (args.confirm !== true) return previewProposalReject(home, { vault: spec.id, id: str(args.id)!, reason: str(args.reason)! }, context); const result = rejectProposal(home, { vault: spec.id, id: str(args.id)!, reason: str(args.reason)!, fingerprint: str(args.fingerprint)! }, context); return result.ok || result.rejected ? result : { ...result, refused: true }; },
+    vmem_proposal_reconcile: args => { const spec = pick(args), context: ProposalContext = { channel: "mcp", env, expectedVault: spec, expectedBinding: proposalBindings.get(spec.id) ?? null }; return reconcileProposal(home, { vault: spec.id, id: str(args.id)! }, context); },
     vmem_brief: args => vaultBrief(home, { vault: pick(args).id, intent: args.intent as string, paths: args.paths as string[] | undefined, bytes: args.bytes as number | undefined }, pick(args)),
     vmem_promote: async args => {
       const { promoteToOrg } = await import("./org-promote.ts");

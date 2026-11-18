@@ -16,6 +16,12 @@ export const HELP_SECTIONS = ["Registry", "Read", "Write", "Log", "Analysis", "P
 interface CommandEntry { name: string; usage: string; mutates: boolean | string; section: typeof HELP_SECTIONS[number]; description: string }
 export const COMMANDS = [
   ...SPEC_COMMANDS.map(item => ({ name: `spec ${item.command}`, usage: item.usage, mutates: ["create", "update", "delete"].includes(item.command), section: "Design specs" as const, description: SPEC_HELP[item.command] })),
+  { name: "proposal submit", usage: "proposal submit <vault> <file|-> [--agent-label TEXT] [--json]", mutates: true, section: "Write", description: "screen and save one create or exact-patch proposal from JSON" },
+  { name: "proposal list", usage: "proposal list <vault> [--state STATE] [--limit 1..100] [--after ID] [--json]", mutates: false, section: "Read", description: "list screened proposal summaries, pending by default" },
+  { name: "proposal show", usage: "proposal show <vault> <id> [--offset N] [--max-bytes 1..16384] [--json]", mutates: false, section: "Read", description: "read a screened proposal operation in bounded pages" },
+  { name: "proposal apply", usage: "proposal apply <vault> <id> [--confirm --fingerprint SHA] [--json]", mutates: "confirm", section: "Write", description: "preview or confirm a proposal using the current writer plan" },
+  { name: "proposal reject", usage: "proposal reject <vault> <id> --reason TEXT [--confirm --fingerprint SHA] [--json]", mutates: "confirm", section: "Write", description: "preview or confirm a rejection without changing the vault" },
+  { name: "proposal reconcile", usage: "proposal reconcile <vault> <id> [--json]", mutates: false, section: "Read", description: "inspect an uncertain apply without inferring attribution" },
   { name: "lint", usage: "lint <vault> [--note PATH] [--write] [--dry-run] [--json]", mutates: "write", section: "Analysis", description: "lint links, schema, filenames and the log; --write saves a screened report" },
   { name: "graph build", usage: "graph build <vault> [--workspace] [--dry-run] [--json]", mutates: true, section: "Analysis", description: "build the vault graph, or the workspace graph with --workspace, under reports/" },
   { name: "graph neighbors", usage: "graph neighbors <vault> <stem> [--hops 1..2] [--limit 1..500] [--relation REL] [--json]", mutates: false, section: "Analysis", description: "read a note's graph neighborhood up to two hops, optionally over one link relation" },

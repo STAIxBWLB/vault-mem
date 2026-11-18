@@ -1,5 +1,6 @@
 /** Internal submission entry point. CLI/MCP and decision operations are intentionally not exposed yet. */
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { loadRegistry } from "./registry.ts";
@@ -9,11 +10,12 @@ import { screenMetadata } from "./write-validation.ts";
 import { checkStoredBinding, createStoredProposal, listStoredProposalIds, readStoredProposal, replaceStoredProposal } from "./proposal-storage.ts";
 import { encodeProposalRecord, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, type ProposalRecord } from "./proposals.ts";
 import type { ChangeReceipt, WriteIssue } from "./write-types.ts";
-import { unenforceablePii } from "./config.ts";
+import type { LogBinding } from "./log-types.ts";
+import { unenforceablePii, type VaultSpec } from "./config.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 
 export interface ProposalSubmitRequest { vault: string; operation: unknown; agentLabel?: string }
-export interface ProposalContext { channel: "cli" | "mcp"; env?: NodeJS.ProcessEnv; now?: Date }
+export interface ProposalContext { channel: "cli" | "mcp"; env?: NodeJS.ProcessEnv; now?: Date; expectedVault?: VaultSpec; expectedBinding?: LogBinding | null }
 export interface ProposalSubmitted { id: string; vault: string; path: string; state: "pending"; createdAt: string; payloadDigest: string }
 export interface ProposalSummary { id: string; vault: string; path: string; state: ProposalRecord["state"]; createdAt: string }
 export interface ProposalListRequest { vault: string; state?: ProposalRecord["state"]; limit?: number; after?: string }
@@ -32,10 +34,13 @@ export function proposalReplyBytes(result: unknown): number {
   return Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", id: "x".repeat(1200), result: { content: [{ type: "text", text }] } }), "utf8") + 1;
 }
 
-function currentBinding(home: string, id: string, channel: ProposalContext["channel"]) {
+function currentBinding(home: string, id: string, options: ProposalContext) {
+  const channel = options.channel;
   if (channel !== "cli" && channel !== "mcp") throw new Error("proposal: invalid write channel; use CLI or MCP");
   const config = loadRegistry(home), vault = config.vaults.find(item => item.id === id);
   if (!vault) throw new Error("proposal: unknown vault; choose a registered vault");
+  if (options.expectedVault && !isDeepStrictEqual(vault, options.expectedVault)) throw new Error("proposal: vault registration changed since MCP startup; restart the MCP server");
+  if (options.expectedBinding === null || (options.expectedBinding && !matchesBinding(config, id, options.expectedBinding))) throw new Error("proposal: vault identity or policy changed since MCP startup; restart the MCP server");
   if (vault.write === "none" || (channel === "mcp" && vault.write !== "mcp")) throw new Error("proposal: vault write policy refuses this channel; choose an authorized vault or channel");
   if (realpathSync(vault.path) !== vault.path || isDenied(vault.path, config.denyPaths ?? [])) throw new Error("proposal: vault root is denied, changed or linked; inspect the registered vault");
   if (unenforceablePii(vault)) throw new Error("proposal: vault PII policy cannot be enforced; inspect the vault policy");
@@ -62,7 +67,7 @@ export function submitProposal(home: string, request: ProposalSubmitRequest, opt
   if (options.channel !== "cli" && options.channel !== "mcp") throw new Error("proposal: invalid write channel; use CLI or MCP");
   if (request.agentLabel !== undefined && (typeof request.agentLabel !== "string" || !request.agentLabel.trim() || Buffer.byteLength(request.agentLabel) > 256 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(request.agentLabel)))
     throw new Error("proposal: agent label must be nonempty text without controls and at most 256 bytes; correct the label");
-  const operation = parseProposalOperation(request.operation), { config, vault, binding, bindingDigest } = currentBinding(home, request.vault, options.channel);
+  const operation = parseProposalOperation(request.operation), { config, vault, binding, bindingDigest } = currentBinding(home, request.vault, options);
   const screen = screenMetadata({ operation, ...(request.agentLabel !== undefined ? { agentLabel: request.agentLabel } : {}) }, { vault, config }, operation.path);
   if (screen.some(issue => issue.severity === "error")) throw new Error(`proposal: payload screening refused (${[...new Set(screen.filter(issue => issue.severity === "error").map(issue => issue.code))].join(", ")}); remove prohibited content or correct the vault policy`);
   const preview = applyWrite(home, { vault: vault.id, operation, channel: options.channel, dryRun: true }, { env: options.env, binding, now: options.now });
@@ -84,7 +89,7 @@ export function listProposals(home: string, request: ProposalListRequest, option
   const limit = request.limit ?? 50, state = request.state ?? "pending";
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !["pending", "applied", "rejected", "apply_unknown"].includes(state) || (request.after !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.after)))
     throw new Error("proposal: invalid list state, cursor or limit; use a returned cursor and limit 1..100");
-  const context = currentBinding(home, request.vault, options.channel);
+  const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) {
     if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding)) throw new Error("proposal: vault binding or policy changed during listing; retry with the current policy");
     return { items: [], nextCursor: null };
@@ -109,7 +114,7 @@ export function showProposal(home: string, request: ProposalShowRequest, options
   const offset = request.offset ?? 0, maxBytes = request.maxBytes ?? MAX_SHOW_BYTES;
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_SHOW_BYTES)
     throw new Error("proposal: invalid show offset or page size; use a returned offset and maxBytes 1..16384");
-  const context = currentBinding(home, request.vault, options.channel);
+  const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
   const record = readStoredProposal(home, context.bindingDigest, request.id);
   screenForRead(record, context);
@@ -139,7 +144,7 @@ export function showProposal(home: string, request: ProposalShowRequest, options
 export function previewProposalApply(home: string, request: { vault: string; id: string }, options: ProposalContext): ProposalApplyPreview {
   if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string")
     throw new Error("proposal: invalid apply preview request; provide a vault and proposal id");
-  const context = currentBinding(home, request.vault, options.channel);
+  const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
   const record = readStoredProposal(home, context.bindingDigest, request.id);
   screenForRead(record, context);
@@ -157,7 +162,7 @@ export function previewProposalApply(home: string, request: { vault: string; id:
 export function previewProposalReject(home: string, request: { vault: string; id: string; reason: string }, options: ProposalContext): ProposalRejectPreview {
   if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id", "reason"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string" || typeof request.reason !== "string" || !request.reason.trim() || Buffer.byteLength(request.reason, "utf8") > 4096)
     throw new Error("proposal: rejection requires a nonempty reason of at most 4096 bytes; provide a reason and preview again");
-  const context = currentBinding(home, request.vault, options.channel);
+  const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
   const record = readStoredProposal(home, context.bindingDigest, request.id);
   screenForRead(record, context);
@@ -174,7 +179,7 @@ export function previewProposalReject(home: string, request: { vault: string; id
 export function rejectProposal(home: string, request: { vault: string; id: string; reason: string; fingerprint: string }, options: ProposalContext): ProposalRejectReceipt {
   if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id", "reason", "fingerprint"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string" || typeof request.reason !== "string" || !request.reason.trim() || Buffer.byteLength(request.reason, "utf8") > 4096 || typeof request.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(request.fingerprint))
     throw new Error("proposal: invalid rejection confirmation; use the reason and fingerprint from a fresh preview");
-  const context = currentBinding(home, request.vault, options.channel);
+  const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
   const record = readStoredProposal(home, context.bindingDigest, request.id);
   screenForRead(record, context);
@@ -188,7 +193,7 @@ export function rejectProposal(home: string, request: { vault: string; id: strin
 export function applyProposal(home: string, request: { vault: string; id: string; fingerprint: string }, options: ProposalContext): ProposalApplyResult {
   if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id", "fingerprint"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string" || typeof request.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(request.fingerprint))
     throw new Error("proposal: invalid apply confirmation; use the fingerprint returned by a fresh preview");
-  const context = currentBinding(home, request.vault, options.channel);
+  const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
   const record = readStoredProposal(home, context.bindingDigest, request.id);
   screenForRead(record, context);
@@ -205,7 +210,12 @@ export function applyProposal(home: string, request: { vault: string; id: string
         throw new Error("intent or receipt does not match");
       replaceStoredProposal(home, context.bindingDigest, record.id, proposalRecordDigest(current), { ...current, state: "applied", updatedAt: (options.now ?? new Date()).toISOString(), receipt: { applied: true, logged, beforeSha: change.beforeSha, afterSha: change.sha256 } });
     } catch {
-      return { ok: false, applied: true, state: "apply_unknown", logged, issues: [{ code: "PROPOSAL_RECEIPT", severity: "error", message: "note was applied but proposal receipt could not be recorded; inspect and reconcile the proposal before retrying" }] };
+      let recorded = false;
+      try {
+        const current = readStoredProposal(home, context.bindingDigest, record.id), change = receipt.changes.find(item => item.path === record.operation.path);
+        recorded = current.state === "applied" && current.intent?.fingerprint === request.fingerprint && current.receipt?.applied === true && !!change && current.receipt.beforeSha === change.beforeSha && current.receipt.afterSha === change.sha256;
+      } catch { /* An unreadable record cannot establish that the receipt was saved. */ }
+      return { ok: false, applied: true, state: recorded ? "applied" : "apply_unknown", logged, issues: [{ code: "PROPOSAL_RECEIPT", severity: "error", message: recorded ? "note and proposal receipt were recorded but finalization failed; inspect the proposal store before retrying" : "note was applied but proposal receipt could not be recorded; inspect and reconcile the proposal before retrying" }] };
     }
     if (!bindingStillCurrent(home, context)) return { ok: false, applied: true, state: "applied", logged, issues: [{ code: "VAULT_DRIFT", severity: "error", message: "note was applied but vault binding or policy changed; inspect the registered vault and proposal" }] };
     return { ok: receipt.ok && logged !== false, applied: true, state: "applied", logged, issues: [...receipt.issues, ...(receipt.log?.issues ?? [])] };
@@ -223,7 +233,7 @@ export function applyProposal(home: string, request: { vault: string; id: string
 export function reconcileProposal(home: string, request: { vault: string; id: string }, options: ProposalContext): ProposalReconciliation {
   if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string")
     throw new Error("proposal: invalid reconciliation request; provide a vault and proposal id");
-  const context = currentBinding(home, request.vault, options.channel);
+  const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
   const record = readStoredProposal(home, context.bindingDigest, request.id);
   screenForRead(record, context);

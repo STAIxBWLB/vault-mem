@@ -12,6 +12,8 @@ export type { IndexedNote, SearchOptions, SearchResult } from "./vault-index.ts"
 export { readHistory, readRevision, readChanges, historyText, revisionText, changesText, HISTORY_PAGE_LIMIT, HISTORY_SCAN_LIMIT, CHANGES_PAGE_LIMIT, SNAPSHOT_TRANSPORT_BYTES } from "./vault-history.ts";
 export type { HistoryRequest, RevisionRequest, ChangesRequest, HistoryResult, RevisionResult, ChangesResult, SnapshotCoverage, SnapshotCapability } from "./vault-history.ts";
 export { applyWrite, sha256, MUTATION_LOCK, MAX_WRITE_BYTES } from "./writer.ts";
+export { submitProposal, listProposals, showProposal, previewProposalApply, applyProposal, previewProposalReject, rejectProposal, reconcileProposal } from "./proposal-provider.ts";
+export type { ProposalSubmitRequest, ProposalContext, ProposalSubmitted, ProposalListRequest, ProposalPage, ProposalShowRequest, ProposalView, ProposalApplyPreview, ProposalApplyResult, ProposalRejectPreview, ProposalReconciliation } from "./proposal-provider.ts";
 export { validateWrite, screenContent } from "./write-validation.ts";
 export type { WriteOp, WriteRequest, WriteReceipt, WriteIssue, PlannedChange, ValidationContext, ChangeReceipt } from "./write-types.ts";
 export { appendLog, readLog, LOG_LOCK, MAX_LOG_READ_BYTES, MAX_LOG_RESULT_BYTES, LARGE_LOG_LINES } from "./vault-log.ts";
