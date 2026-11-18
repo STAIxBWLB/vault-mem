@@ -9,6 +9,7 @@ import type { LintCode, LintReport } from "./analysis-types.ts";
 import type { GraphNeighborhood, GraphPath } from "./vault-graph.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
 import type { EvidenceReport } from "./evidence.ts";
+import type { GraphExplanation } from "./graph-evidence.ts";
 import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paint, paragraph, plural, shellWord, status, summary, table, tableParts, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
 
 const command = (...words: string[]) => ["vmem", ...words].map(shellWord).join(" ");
@@ -124,4 +125,16 @@ export function evidenceText(r: EvidenceReport, o: TextOptions): string {
     return [String(e.index), tone(`${marker(glyph, { ...o, color: false })} ${e.status}`, name), e.reason ?? "", e.match ? `${e.match.start}..${e.match.end}` : "", e.source ?? ""];
   });
   return blocks(head, table(["#", "STATUS", "REASON", "BYTES", "SOURCE"], rows, o));
+}
+
+/** `vmem graph explain`: each hop, then its occurrences as rows. Structural metadata only; never a probability. */
+export function explainText(r: GraphExplanation, o: TextOptions, c: { vault: string }): string {
+  if (!r.path.found) return `no path from ${clean(r.path.from)} to ${clean(r.path.to)} within ${plural(r.path.options.maxHops, "hop")}`;
+  const parts = r.hops.map(hop => {
+    const head = heading(`hop ${hop.index + 1}: ${hop.from} -> ${hop.to} (structural ${hop.edge.rel ?? hop.edge.relation})`, o);
+    const rows = hop.occurrences.map(x => [x.kind === "legacy_graph_match" && x.authored ? tone(`${marker("ok", { ...o, color: false })} link`, "ok") : tone(`${marker("unknown", { ...o, color: false })} ${x.kind === "legacy_graph_match" ? "legacy" : "note"}`, "muted"),
+      x.relation, x.traversal, `${x.origin.path}:${x.line}`, `${x.bytes.start}..${x.bytes.end}`, x.source === "frontmatter" ? `frontmatter ${x.field ?? ""}` : "body"]);
+    return blocks(head, rows.length ? table(["KIND", "RELATION", "WALK", "AT", "BYTES", "SOURCE"], rows, o) : paint("no occurrences found", "warn", o), hop.omitted ? status("warn", `${plural(hop.omitted, "occurrence")} omitted`, o) : undefined);
+  });
+  return blocks(...parts, `explained path ${clean(r.path.from)} to ${clean(r.path.to)} in ${clean(c.vault)}: ${plural(r.path.length, "hop")}${r.truncated ? " (truncated)" : ""}`);
 }

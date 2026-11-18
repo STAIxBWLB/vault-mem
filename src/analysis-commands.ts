@@ -1,12 +1,13 @@
 import { analysisInput } from "./analysis-input.ts";
 import { lintDetails } from "./vault-lint.ts";
-import { analysisWriteText, lintText, neighborsText, pathText } from "./read-output.ts";
+import { analysisWriteText, explainText, lintText, neighborsText, pathText } from "./read-output.ts";
 import { buildGraph, graphNeighbors, graphPath } from "./vault-graph.ts";
+import { explainGraphPath } from "./graph-evidence.ts";
 import { writeAnalysisReports } from "./analysis-reports.ts";
 import { PLAIN, UsageError, type TextOptions } from "./text-output.ts";
 
 const OPTION_SCOPE: Record<string, string> = {
-  "--hops": "graph neighbors", "--limit": "graph neighbors", "--relation": "graph neighbors and graph path", "--max-hops": "graph path", "--via-hubs": "graph path",
+  "--hops": "graph neighbors", "--limit": "graph neighbors", "--relation": "graph neighbors, graph path and graph explain", "--max-hops": "graph path and graph explain", "--via-hubs": "graph path and graph explain",
   "--note": "lint", "--write": "lint", "--workspace": "graph build", "--dry-run": "lint --write and graph build",
 };
 export function runAnalysisCommand(command: string, args: string[], home: string, env: NodeJS.ProcessEnv = process.env, text: TextOptions = PLAIN): { text: string; code: number } {
@@ -21,7 +22,7 @@ export function runAnalysisCommand(command: string, args: string[], home: string
   }
   // An option the subcommand does not take is named with where it applies, before any positional check.
   const subcommand = command === "lint" ? "lint" : `graph ${positional[0] ?? ""}`.trim();
-  const accepted = command === "lint" ? ["--json", "--dry-run", "--write", "--note"] : positional[0] === "build" ? ["--json", "--dry-run", "--workspace"] : positional[0] === "neighbors" ? ["--json", "--hops", "--limit", "--relation"] : positional[0] === "path" ? ["--json", "--max-hops", "--relation", "--via-hubs"] : undefined;
+  const accepted = command === "lint" ? ["--json", "--dry-run", "--write", "--note"] : positional[0] === "build" ? ["--json", "--dry-run", "--workspace"] : positional[0] === "neighbors" ? ["--json", "--hops", "--limit", "--relation"] : positional[0] === "path" || positional[0] === "explain" ? ["--json", "--max-hops", "--relation", "--via-hubs"] : undefined;
   if (accepted) for (const option of [...flags, ...Object.keys(values)]) if (!accepted.includes(option)) throw new UsageError(`${subcommand}: ${option} applies only to ${OPTION_SCOPE[option]}`);
   if (command === "lint") {
     if (positional.length !== 1) throw new UsageError("lint: requires one vault id");
@@ -36,6 +37,15 @@ export function runAnalysisCommand(command: string, args: string[], home: string
     const result = writeAnalysisReports(home,{vault:positional[0]!,kind:"graph",workspace:flags.has("--workspace"),dryRun:flags.has("--dry-run")},env);
     return {text:flags.has("--json") ? JSON.stringify(result) : analysisWriteText(result,text,{kind:"graph",dryRun:flags.has("--dry-run")}),code:result.ok ? 0 : 1};
   }
+  if (action === "explain") {
+    if (positional.length !== 3) throw new UsageError("graph explain: requires <vault> <from> <to>");
+    const maxHops = Number(values["--max-hops"] ?? 6);
+    if (!Number.isInteger(maxHops) || maxHops < 1 || maxHops > 6) throw new UsageError("graph explain: max hops 1..6");
+    const {snapshot} = analysisInput(home,positional[0]!);
+    const viaHubs = flags.has("--via-hubs"), relation = values["--relation"];
+    const result = explainGraphPath(snapshot,positional[1]!,positional[2]!,{maxHops,viaHubs,...(relation === undefined ? {} : {relation})});
+    return {text:flags.has("--json") ? JSON.stringify(result) : explainText(result,text,{vault:positional[0]!}),code:0};
+  }
   if (action === "path") {
     if (positional.length !== 3) throw new UsageError("graph path: requires <vault> <from> <to>");
     const maxHops = Number(values["--max-hops"] ?? 6);
@@ -45,7 +55,7 @@ export function runAnalysisCommand(command: string, args: string[], home: string
     const result = graphPath(buildGraph(snapshot),positional[1]!,positional[2]!,{maxHops,viaHubs,...(relation === undefined ? {} : {relation})});
     return {text:flags.has("--json") ? JSON.stringify(result) : pathText(result,text,{vault:positional[0]!,maxHops,viaHubs,relation}),code:0};
   }
-  if (action !== "neighbors" || positional.length !== 2) throw new UsageError("graph: use build <vault>, neighbors <vault> <stem> or path <vault> <from> <to>");
+  if (action !== "neighbors" || positional.length !== 2) throw new UsageError("graph: use build <vault>, neighbors <vault> <stem>, path <vault> <from> <to> or explain <vault> <from> <to>");
   const hops = Number(values["--hops"] ?? 1), limit = Number(values["--limit"] ?? 50);
   if ((hops !== 1 && hops !== 2) || !Number.isInteger(limit) || limit < 1 || limit > 500) throw new UsageError("graph neighbors: hops 1..2, limit 1..500");
   const {snapshot} = analysisInput(home,positional[0]!);

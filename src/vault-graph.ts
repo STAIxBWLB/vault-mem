@@ -339,7 +339,7 @@ export function labelCommunities(ids: readonly string[], edges: readonly (readon
   return leidenCommunities(ids, edges).membership;
 }
 /** The typed relation of a `- [[x]] (relation)` list line, or undefined for any other wiki link. */
-function linkRelation(body: string, index: number, length: number): string | undefined {
+export function linkRelation(body: string, index: number, length: number): string | undefined {
   // Only `- [[` can be typed; check the two characters before the link before scanning back to the line start,
   // so a long line of plain links stays linear. The scan back then crosses only whitespace.
   if (index < 2 || body[index - 1] !== " " || body[index - 2] !== "-") return undefined;
@@ -348,6 +348,15 @@ function linkRelation(body: string, index: number, length: number): string | und
   const after = /^ \(([a-z-]+)\)(?::|\s*(?:\n|$))/.exec(body.slice(index + length, index + length + 40));
   return after && (LINK_RELATIONS as readonly string[]).includes(after[1]!) ? after[1] : undefined;
 }
+/** The body the legacy graph scans: the source after its `---` frontmatter block, and that block's length. */
+export function graphBody(source: string): { body: string; offset: number } {
+  const match = FRONTMATTER.exec(source);
+  return match ? { body: source.slice(match[0].length), offset: match[0].length } : { body: source, offset: 0 };
+}
+/** The legacy body link pattern; `graph explain` reuses it so occurrences match exactly the edges `buildGraph` makes. */
+export const LEGACY_LINK = /\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]/g;
+/** Legacy target normalisation: trimmed, lower case, spaces to hyphens. */
+export const legacyTarget = (text: string) => text.trim().toLowerCase().replaceAll(" ", "-");
 /** Pure transformation of the derived-index snapshot, preserving the reference wiki graph semantics. */
 export function buildGraph(snapshot: AnalysisSnapshot): VaultGraph {
   if (snapshot.notes.length > MAX_NODES) throw new Error(`graph: exceeds ${MAX_NODES} notes`);
@@ -362,8 +371,8 @@ export function buildGraph(snapshot: AnalysisSnapshot): VaultGraph {
       confidence: pyString(truthy(fm.confidence) ? fm.confidence : ""), source_file: `notes/${id}.md`,
       topics: Array.isArray(topics) ? topics.map(topic => pyString(topic).replaceAll("[[", "").replaceAll("]]", "")).join(", ") : pyString(topics),
       community: null, degree: 0 });
-    for (const match of body.matchAll(/\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]/g)) {
-      const target = match[1]!.trim().toLowerCase().replaceAll(" ", "-");
+    for (const match of body.matchAll(LEGACY_LINK)) {
+      const target = legacyTarget(match[1]!);
       if (!stems.has(target)) continue;
       const [source, destination] = [id, target].sort(compare) as [string, string];
       const key = JSON.stringify([source, destination]), rel = linkRelation(body, match.index, match[0].length), prior = edges.get(key);

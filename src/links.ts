@@ -90,6 +90,24 @@ export function extractLinks(body: string): Link[] {
   }
   return links;
 }
+/**
+ * Body UTF-16 offsets of the `[[` of every link `extractLinks` accepts (visible, unescaped), with its parsed address.
+ * Offsets are in the original body, CRLF included, so a caller can compare them with raw regex matches.
+ */
+export function authoredLinkOffsets(body: string): Map<number, Link> {
+  const masked = maskInlineCode(proseLines(body).join("\n")).split("\n"), raw = body.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const out = new Map<number, Link>(), links = extractLinks(body);
+  let start = 0, cursor = 0;
+  for (const [index, line] of masked.entries()) {
+    for (const match of line.matchAll(/(!?)\[\[([^\]\n]+)\]\]/g)) {
+      if (escapedAt(line, match.index!)) continue;
+      const link = links[cursor++];
+      if (link) out.set(start + match.index! + match[1]!.length, link);
+    }
+    start += raw[index]?.length ?? 0;
+  }
+  return out;
+}
 /** Rewrite only visible wiki-link note targets; retain aliases, anchors, embeds and code verbatim. */
 export function rewriteLinkTargets(body: string, replace: (target: string) => string | undefined): string {
   const masked = maskInlineCode(proseLines(body).join("\n")).split("\n");
