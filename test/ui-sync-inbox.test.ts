@@ -171,7 +171,7 @@ test("only paths sync would stage count; a rename counts once; others are named 
   expect(localSyncPending(f.org)).toEqual({ changed: 2, ignored: 1, ahead: 0, upstream: true });
   const later = await plugin.open({ home: process.env.AGENTHUB_HOME!, log: () => {} });
   expect(await syncItems(later)).toMatchObject([{ title: "2 unsynced changes in team",
-    detail: "2 uncommitted paths to sync; 1 other path outside notes/, reports/ and log not counted; 0 local commits ahead of upstream" }]);
+    detail: "2 uncommitted paths to sync; 1 other path outside notes/, reports/, assertions/<segment>.jsonl and log not counted; 0 local commits ahead of upstream" }]);
 });
 
 test("a timed-out or killed git call names the timeout or the signal, with the console's next step (#138, #143)", async () => {
@@ -188,6 +188,6 @@ test("a timed-out or killed git call names the timeout or the signal, with the c
   expect(() => localSyncPending(f.org)).toThrow("git status failed: killed by SIGKILL; inspect the vault Git state in System and retry");
 });
 
-test("the inbox detail names the staged paths from the same list sync stages (#143)", () => {
-  expect(STAGED_DESCRIPTION).toBe("notes/, reports/ and log");
+test("the inbox detail names the staged paths from the same list sync stages (#143, #249)", () => {
+  expect(STAGED_DESCRIPTION).toBe("notes/, reports/, assertions/<segment>.jsonl and log");
 });

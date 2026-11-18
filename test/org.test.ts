@@ -160,6 +160,36 @@ test("sync previews, stages only planned paths, pushes on confirm and verifies t
   expect(JSON.parse(cli.text)).toMatchObject({ ok: true, preview: true, paths: [] });
 });
 
+test("sync stages assertion journal segments and nothing else under assertions/ (#249)", () => {
+  const f = fixture(), segment = "0123456789abcdef", stray = ["assertions.lock", "assertions/ABCDEF0123456789.jsonl", "assertions/HEAD.jsonl", `assertions/nested/${segment}.jsonl`];
+  mkdirSync(join(f.org, "assertions", "nested"), { recursive: true });
+  const journal = join(f.org, "assertions", `${segment}.jsonl`);
+  const first = `{"id":"${"1".repeat(32)}"}\n`;
+  writeFileSync(journal, first);
+  writeFileSync(join(f.org, "assertions", "HEAD.jsonl"), "not a segment: the name is not 16 hex digits\n");
+  writeFileSync(join(f.org, "assertions", "ABCDEF0123456789.jsonl"), "not a segment: uppercase hex\n");
+  writeFileSync(join(f.org, "assertions", "nested", `${segment}.jsonl`), "not a segment: not directly under assertions/\n");
+  writeFileSync(join(f.org, "assertions.lock"), "");
+  const plan = syncVault(f.home, { vault: "team" }, { env: f.env });
+  expect(plan).toMatchObject({ ok: true, preview: true, paths: [`assertions/${segment}.jsonl`] });
+  expect([...plan.ignored].sort()).toEqual([...stray].sort());
+  const pushed = syncVault(f.home, { vault: "team", confirm: true, fingerprint: plan.fingerprint }, { env: f.env });
+  expect(pushed).toMatchObject({ ok: true, applied: true, pushed: true });
+  expect(git(f.remote, "rev-parse", "main")).toBe(pushed.commit!);
+  expect(git(f.remote, "show", "--name-only", "--format=", "main")).toBe(`assertions/${segment}.jsonl`);
+  expect(git(f.remote, "show", `main:assertions/${segment}.jsonl`)).toBe(first.trim());
+  // Nothing else was staged, so every one of them is still untracked in the clone.
+  expect(snapshot(f.org).split("\n").map(line => line.slice(3)).sort()).toEqual([...stray].sort());
+  // An appended segment is the same path again: the next sync commits and pushes the new content.
+  const appended = first + `{"id":"${"2".repeat(32)}"}\n`;
+  writeFileSync(journal, appended);
+  const again = syncVault(f.home, { vault: "team" }, { env: f.env });
+  expect(again).toMatchObject({ ok: true, preview: true, paths: [`assertions/${segment}.jsonl`] });
+  const second = syncVault(f.home, { vault: "team", confirm: true, fingerprint: again.fingerprint }, { env: f.env });
+  expect(second).toMatchObject({ ok: true, applied: true, pushed: true });
+  expect(git(f.remote, "show", `main:assertions/${segment}.jsonl`)).toBe(appended.trim());
+});
+
 test("sync refuses a mismatched remote, reports divergence and failed pushes without false success", () => {
   const f = fixture();
   // Mismatch: configured remote differs from origin; nothing is fetched or pushed.

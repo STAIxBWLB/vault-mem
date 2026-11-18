@@ -100,7 +100,7 @@ test("promote, sync and promote-from-amem previews print the confirm command; dr
   expect(renderSync(sync, PLAIN, ctx("sync", "team", "--message", "two words"))).toBe([
     "dry run: would commit 1 path, rebase onto origin/main, push main to git@example.com:o/v.git",
     "  vault   team", "  branch  main", "  remote  git@example.com:o/v.git", "  origin  git@example.com:o/v.git", "  ahead   0", "  behind  1", "",
-    "PATH", "notes/a.md", "", "not synced (outside notes/, reports/ and log):", "  - scratch.txt", "",
+    "PATH", "notes/a.md", "", "not synced (outside notes/, reports/, assertions/<segment>.jsonl and log):", "  - scratch.txt", "",
     `confirm: vmem sync team --message 'two words' --confirm --fingerprint ${FP}`].join("\n"));
   expect(renderSync({ ...sync, preview: undefined, applied: true, commit: "c".repeat(40), pushed: true }, PLAIN, ctx("sync", "team")).split("\n")[0]).toBe("✓  synced team: cccccccccccc pushed to git@example.com:o/v.git main");
   const amem: PromoteResult = { ok: true, action: "create", applied: false, preview: true, id: "0".repeat(32), path: "notes/a.md", text: "SECRET BODY", fingerprint: FP, issues: [], linked: null };
