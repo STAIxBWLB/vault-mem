@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
 permissions:
   contents: read
 concurrency:
@@ -15,7 +16,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Pull requests without the ci:macos label run Ubuntu only; every
+        # other event, and a labelled pull request, run both.
+        os: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:macos') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
