@@ -47,7 +47,7 @@ Output: every command prints text for people by default, following agent-hub's C
 | Writes and log | `new`, `patch`, `append`, `frontmatter`, `link`, `supersede`, `merge`, `move`, `delete`, `check`, `report`, `tidy`, `log append\|tail\|grep` | [writes](docs/reference/writes.md) |
 | MCP and hosts | `mcp`, `setup`, `completion`, `manifest` | [mcp-and-setup](docs/reference/mcp-and-setup.md) |
 | Promotion and sync | `promote-from-amem`, `promote`, `sync` | [promotion-and-sync](docs/reference/promotion-and-sync.md) |
-| Analysis | `lint`, `graph build\|neighbors\|path`, `skills mine` | [analysis](docs/reference/analysis.md) |
+| Analysis | `lint`, `graph build\|neighbors\|path\|explain`, `skills mine` | [analysis](docs/reference/analysis.md) |
 | Specs | `spec get\|graph\|grep\|validate\|create\|update\|delete` | [specs](docs/reference/specs.md) |
 
 `vmem help <command>` prints one command's syntax; `vmem manifest --json` lists the commands and MCP tools for scripts. [docs/README.md](docs/README.md) says which document to open for which task.
@@ -85,6 +85,7 @@ The only runtime dependency is the exact first-party pin <!-- facts:amem-pin -->
 - `src/promote.ts`: `promoteFromAmem`, `listPromotionCandidates`, `draftNote`, `stemFor`, `logProjectFor`
 - `src/vault-lint.ts`: `lintVault`
 - `src/vault-graph.ts`: `buildGraph`, `graphNeighbors`, `graphPath`, `graphReport`
+- `src/graph-evidence.ts`: `explainGraphPath`, `EXPLAIN_OCCURRENCES_PER_HOP`, `EXPLAIN_MAX_BYTES`
 - `src/analysis-reports.ts`: `writeAnalysisReports`
 - `src/org-promote.ts`: `promoteToOrg`, `screenForOrg`, `dropUnresolvedLinks`, `lintPromoted`
 - `src/sync.ts`: `syncVault`, `sameRemote`

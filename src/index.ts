@@ -30,6 +30,8 @@ export type { AmemSeam, AmemCandidate, AmemOptions } from "./amem/seam.ts";
 export { lintVault } from "./vault-lint.ts";
 export { buildGraph, graphNeighbors, graphPath, graphReport } from "./vault-graph.ts";
 export type { VaultGraph, GraphNeighborhood } from "./vault-graph.ts";
+export { explainGraphPath, EXPLAIN_OCCURRENCES_PER_HOP, EXPLAIN_MAX_BYTES } from "./graph-evidence.ts";
+export type { GraphExplanation, GraphHop, GraphOccurrence } from "./graph-evidence.ts";
 export type { AnalysisSnapshot, LintCode, LintReport } from "./analysis-types.ts";
 export { writeAnalysisReports } from "./analysis-reports.ts";
 export type { AnalysisRequest } from "./analysis-reports.ts";
