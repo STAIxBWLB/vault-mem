@@ -4,6 +4,7 @@
 - Source is in `src/`, the executable bootstrap in `bin/`, checks in `scripts/`, tests in `test/`.
 - Use strict TypeScript, `.ts` imports and `noUncheckedIndexedAccess`. Keep runtime imports to builtins and the exact first-party dependency pin. Import agent-mem platform only through `src/platform.ts` and its root only through `src/amem/seam.ts`.
 - Run `bun install --frozen-lockfile`, then `bun run check`. Passing output includes `boundary: ok`, all tests passing and a successful package dry-run. The check exits nonzero on failure.
+- Pull request CI runs Ubuntu only. Add the `ci:macos` label when the change touches platform-specific code (paths, processes, signals, the file system or the shell); pushes to `main` and releases run macOS regardless.
 - Treat registry removal as unregistering only. Preserve all vault files. Do not add agent-environment refusal or TTY mutation requirements.
 - Keep unimplemented capabilities explicit in README; export commands and interfaces only when implemented.
 - Use conventional English commits without coauthor trailers unless requested.
