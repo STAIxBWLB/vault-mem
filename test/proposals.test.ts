@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalPayloadDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
-import { createStoredProposal, readStoredProposal } from "../src/proposal-storage.ts";
+import { checkStoredBinding, createStoredProposal, readStoredProposal } from "../src/proposal-storage.ts";
 import { submitProposal } from "../src/proposal-provider.ts";
-import { addVault } from "../src/registry.ts";
+import { addVault, removeVault } from "../src/registry.ts";
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -47,6 +47,9 @@ test("private record storage refuses overwrite, linked files and permissive dire
     expect(lstatSync(dir).mode & 0o777).toBe(0o700);
     expect(lstatSync(file).mode & 0o777).toBe(0o600);
     expect(readStoredProposal(home, record.bindingDigest, record.id)).toEqual(record);
+    expect(checkStoredBinding(home, record.vault, record.bindingDigest)).toBe(true);
+    expect(() => checkStoredBinding(home, record.vault, "b".repeat(64))).toThrow("different root");
+    expect(() => createStoredProposal(home, { ...record, id: "12345678-1234-4123-8123-123456789abd", bindingDigest: "b".repeat(64) })).toThrow("different root");
     expect(() => createStoredProposal(home, record)).toThrow();
     linkSync(file, join(dir, "linked"));
     expect(() => readStoredProposal(home, record.bindingDigest, record.id)).toThrow("linked");
@@ -85,6 +88,13 @@ test("submission screens and validates before storing without changing the vault
     const lockedVault = join(root, "locked"); mkdirSync(join(lockedVault, "notes"), { recursive: true });
     addVault(home, { id: "locked", path: lockedVault, kind: "personal", write: "none" });
     expect(() => submitProposal(home, { vault: "locked", operation }, { channel: "cli" })).toThrow("write policy");
+    expect(readdirSync(store)).toEqual([bucket]);
+    removeVault(home, "test", true);
+    const replacement = join(root, "replacement"), replacementNotes = join(replacement, "notes");
+    mkdirSync(replacementNotes, { recursive: true });
+    writeFileSync(join(replacementNotes, "research.md"), "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n");
+    addVault(home, { id: "test", path: replacement, kind: "personal", write: "mcp" });
+    expect(() => submitProposal(home, { vault: "test", operation }, { channel: "mcp" })).toThrow("different root");
     expect(readdirSync(store)).toEqual([bucket]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

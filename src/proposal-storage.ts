@@ -1,5 +1,5 @@
 /** Internal bounded proposal record storage. Public lifecycle operations are not yet available. */
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, writeFileSync, type Stats } from "node:fs";
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, realpathSync, writeFileSync, type Stats } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { syncDirectory } from "./registry.ts";
@@ -8,6 +8,7 @@ import { decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RECORD_BYTES, 
 
 const DIGEST = /^[a-f0-9]{64}$/;
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const MAX_BINDINGS = 256, MAX_BINDING_BYTES = 4096;
 function validateDirectory(path: string): void {
   const info = lstatSync(path);
   if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o077) !== 0 || (typeof process.getuid === "function" && info.uid !== process.getuid()))
@@ -41,6 +42,62 @@ function validRecordFile(info: Stats): void {
     throw new Error("proposal: record is linked or not private; inspect the proposal store");
   if (info.size > MAX_PROPOSAL_RECORD_BYTES) throw new Error("proposal: stored record exceeds 32 KiB; inspect the proposal store");
 }
+/** Binding metadata contains no note or proposal body. Each read is bounded before allocation. */
+function readBinding(home: string, binding: string): { vault: string; bindingDigest: string } {
+  const root = resolve(home), dir = directory(root, binding, false), file = join(dir, "binding.json"), captured = capturePublicationPath(root, file);
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const before = fstatSync(fd); validRecordFile(before);
+    if (before.size > MAX_BINDING_BYTES) throw new Error("proposal: binding metadata exceeds its bound; inspect the proposal store");
+    const bytes = Buffer.alloc(MAX_BINDING_BYTES + 1); let length = 0, n = 0;
+    while (length < bytes.length && (n = readSync(fd, bytes, length, bytes.length - length, null)) > 0) length += n;
+    const after = fstatSync(fd), named = lstatSync(file), parents = capturePublicationPath(root, file);
+    validRecordFile(after); validRecordFile(named);
+    if (length > MAX_BINDING_BYTES || length !== after.size || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || after.dev !== named.dev || after.ino !== named.ino || JSON.stringify(captured.parents) !== JSON.stringify(parents.parents))
+      throw new Error("proposal: binding metadata changed while reading; inspect the proposal store");
+    const data = bytes.subarray(0, length), text = data.toString("utf8");
+    if (!Buffer.from(text, "utf8").equals(data)) throw new Error("proposal: binding metadata is not UTF-8; inspect the proposal store");
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch { throw new Error("proposal: binding metadata is not JSON; inspect the proposal store"); }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || JSON.stringify(parsed) !== text) throw new Error("proposal: binding metadata is corrupt; inspect the proposal store");
+    const value = parsed as Record<string, unknown>;
+    if (Object.keys(value).sort().join(",") !== "bindingDigest,schemaVersion,vault" || value.schemaVersion !== 1 || typeof value.vault !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(value.vault) || value.bindingDigest !== binding)
+      throw new Error("proposal: binding metadata is invalid; inspect the proposal store");
+    return { vault: value.vault, bindingDigest: binding };
+  } finally { closeSync(fd); }
+}
+
+/** Bounded lookup prevents a re-registered vault id from silently choosing another store. */
+export function checkStoredBinding(home: string, vault: string, expected: string): boolean {
+  if (!DIGEST.test(expected) || !/^[a-z][a-z0-9-]{0,63}$/.test(vault)) throw new Error("proposal: invalid internal vault binding; inspect the registered vault");
+  const root = resolve(home), base = join(root, "proposals");
+  if (realpathSync(root) !== root) throw new Error("proposal: configured home is linked; inspect the configured home");
+  try { validateDirectory(base); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  const parent = capturePublicationPath(root, join(base, ".scan")), dir = opendirSync(base); let count = 0, found = false;
+  try {
+    let entry;
+    while ((entry = dir.readSync()) !== null) {
+      if (entry.name === ".binding.lock") { validRecordFile(lstatSync(join(base, entry.name))); continue; }
+      if (++count > MAX_BINDINGS) throw new Error("proposal: too many vault bindings to inspect; inspect the proposal store");
+      if (!DIGEST.test(entry.name)) throw new Error("proposal: unexpected entry in proposal store; inspect the proposal store");
+      const binding = readBinding(root, entry.name);
+      if (binding.vault === vault && binding.bindingDigest !== expected) throw new Error("proposal: vault id was registered with a different root; inspect the registered vault and existing proposals");
+      if (binding.vault === vault && binding.bindingDigest === expected) found = true;
+    }
+  } finally { dir.closeSync(); }
+  if (JSON.stringify(parent.parents) !== JSON.stringify(capturePublicationPath(root, join(base, ".scan")).parents)) throw new Error("proposal: store path changed during binding lookup; inspect the configured home");
+  return found;
+}
+
+function publishNew(root: string, dir: string, file: string, bytes: Uint8Array): void {
+  const captured = capturePublicationPath(root, file), temporary = join(dir, `.proposal-${randomUUID()}.tmp`);
+  const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try {
+    writeFileSync(fd, bytes); fsyncSync(fd);
+    publishFile(captured, { kind: "link", temp: temporary }, () => {});
+    syncDirectory(dir);
+  } finally { try { cleanupOwnedFile(temporary, fd); } finally { closeSync(fd); } }
+}
 /** Reads at most 32 KiB and rejects a rebound filename or changed descriptor. */
 export function readStoredProposal(home: string, binding: string, id: string): ProposalRecord {
   const { root, file } = recordFile(home, binding, id, false), captured = capturePublicationPath(root, file);
@@ -63,14 +120,20 @@ export function readStoredProposal(home: string, binding: string, id: string): P
 }
 /** Publishes a new record atomically without overwriting any existing proposal. */
 export function createStoredProposal(home: string, record: ProposalRecord): void {
-  const bytes = encodeProposalRecord(record), { root, file } = recordFile(home, record.bindingDigest, record.id, true);
-  const captured = capturePublicationPath(root, file), temporary = join(directory(root, record.bindingDigest, false), `.proposal-${randomUUID()}.tmp`);
-  const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  const bytes = encodeProposalRecord(record), root = resolve(home), base = join(root, "proposals");
+  if (realpathSync(root) !== root) throw new Error("proposal: configured home is linked; inspect the configured home");
+  let made = false;
+  try { mkdirSync(base, { mode: 0o700 }); made = true; } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  if (made) syncDirectory(root);
+  validateDirectory(base);
+  const lock = join(base, ".binding.lock"), fd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try {
-    writeFileSync(fd, bytes); fsyncSync(fd);
-    publishFile(captured, { kind: "link", temp: temporary }, () => {});
-    syncDirectory(directory(root, record.bindingDigest, false));
+    writeFileSync(fd, JSON.stringify({ pid: process.pid, token: randomUUID() })); fsyncSync(fd); syncDirectory(base);
+    const found = checkStoredBinding(root, record.vault, record.bindingDigest);
+    const { file } = recordFile(root, record.bindingDigest, record.id, true), dir = directory(root, record.bindingDigest, false);
+    if (!found) publishNew(root, dir, join(dir, "binding.json"), Buffer.from(JSON.stringify({ schemaVersion: 1, vault: record.vault, bindingDigest: record.bindingDigest }), "utf8"));
+    publishNew(root, dir, file, bytes);
   } finally {
-    try { cleanupOwnedFile(temporary, fd); } finally { closeSync(fd); }
+    try { cleanupOwnedFile(lock, fd); syncDirectory(base); } finally { closeSync(fd); }
   }
 }
