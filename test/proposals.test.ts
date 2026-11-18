@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalPayloadDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
 import { checkStoredBinding, createStoredProposal, readStoredProposal } from "../src/proposal-storage.ts";
-import { listProposals, submitProposal } from "../src/proposal-provider.ts";
+import { listProposals, proposalReplyBytes, showProposal, submitProposal } from "../src/proposal-provider.ts";
 import { addVault, removeVault, setVaultPii } from "../src/registry.ts";
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -87,14 +87,29 @@ test("submission screens and validates before storing without changing the vault
     expect(listed.items).toHaveLength(1);
     expect(listed.items[0]).toMatchObject({ id: result.id, state: "pending" });
     expect(JSON.stringify(listed)).not.toContain("Synthetic body");
-    const second = submitProposal(home, { vault: "test", operation: { ...operation, path: "proposed-two", body: operation.body.replace("Synthetic body.", "Contact synthetic@example.invalid.") } }, { channel: "mcp" });
+    const longBody = operation.body.replace("Synthetic body.", `Contact synthetic@example.invalid. 한글 ${'"'.repeat(13000)}`);
+    const second = submitProposal(home, { vault: "test", operation: { ...operation, path: "proposed-two", body: longBody } }, { channel: "mcp" });
     const firstPage = listProposals(home, { vault: "test", limit: 1 }, { channel: "mcp" });
     expect(firstPage.items).toHaveLength(1);
     expect(firstPage.nextCursor).not.toBeNull();
     const secondPage = listProposals(home, { vault: "test", limit: 1, after: firstPage.nextCursor! }, { channel: "mcp" });
     expect(new Set([firstPage.items[0]!.id, secondPage.items[0]!.id])).toEqual(new Set([result.id, second.id]));
+    let offset = 0, assembled = "", pageCount = 0;
+    for (;;) {
+      const page = showProposal(home, { vault: "test", id: second.id, offset }, { channel: "mcp" });
+      expect(Buffer.byteLength(page.content, "utf8")).toBeLessThanOrEqual(16 * 1024);
+      expect(proposalReplyBytes(page)).toBeLessThanOrEqual(48 * 1024);
+      assembled += page.content; pageCount++;
+      if (page.nextOffset === null) break;
+      expect(page.nextOffset).toBeGreaterThan(offset);
+      offset = page.nextOffset;
+      expect(pageCount).toBeLessThan(20);
+    }
+    expect(pageCount).toBeGreaterThan(1);
+    expect(JSON.parse(assembled).body).toBe(longBody);
     setVaultPii(home, "test", "deny", true);
     expect(() => listProposals(home, { vault: "test" }, { channel: "mcp" })).toThrow("disclosure policy");
+    expect(() => showProposal(home, { vault: "test", id: second.id }, { channel: "mcp" })).toThrow("disclosure policy");
     expect(readdirSync(notes)).toEqual(before);
     expect(existsSync(join(notes, "proposed.md"))).toBe(false);
     const lockedVault = join(root, "locked"); mkdirSync(join(lockedVault, "notes"), { recursive: true });

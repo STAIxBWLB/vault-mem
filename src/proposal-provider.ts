@@ -17,6 +17,15 @@ export interface ProposalSubmitted { id: string; vault: string; path: string; st
 export interface ProposalSummary { id: string; vault: string; path: string; state: ProposalRecord["state"]; createdAt: string }
 export interface ProposalListRequest { vault: string; state?: ProposalRecord["state"]; limit?: number; after?: string }
 export interface ProposalPage { items: ProposalSummary[]; nextCursor: string | null }
+export interface ProposalShowRequest { vault: string; id: string; offset?: number; maxBytes?: number }
+export interface ProposalView { id: string; vault: string; state: ProposalRecord["state"]; path: string; createdAt: string; payloadDigest: string; agentLabelUnverified?: string; decisionReason?: string; content: string; offset: number; nextOffset: number | null; truncated: boolean }
+const MAX_SHOW_BYTES = 16 * 1024, MAX_RPC_REPLY_BYTES = 48 * 1024;
+
+/** Conservative complete MCP reply size; MCP limits request IDs to 200 UTF-16 units (at most 1200 encoded bytes). */
+export function proposalReplyBytes(result: unknown): number {
+  const text = JSON.stringify(result);
+  return Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", id: "x".repeat(1200), result: { content: [{ type: "text", text }] } }), "utf8") + 1;
+}
 
 function currentBinding(home: string, id: string, channel: ProposalContext["channel"]) {
   if (channel !== "cli" && channel !== "mcp") throw new Error("proposal: invalid write channel; use CLI or MCP");
@@ -81,4 +90,37 @@ export function listProposals(home: string, request: ProposalListRequest, option
   }
   if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding)) throw new Error("proposal: vault binding or policy changed during listing; retry with the current policy");
   return { items, nextCursor: scanned < ids.length ? cursor : null };
+}
+
+/** Pages the normalized operation as UTF-8 text without splitting a code point or exceeding the encoded MCP reply cap. */
+export function showProposal(home: string, request: ProposalShowRequest, options: ProposalContext): ProposalView {
+  if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id", "offset", "maxBytes"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string")
+    throw new Error("proposal: invalid show request; provide a vault and proposal id");
+  const offset = request.offset ?? 0, maxBytes = request.maxBytes ?? MAX_SHOW_BYTES;
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_SHOW_BYTES)
+    throw new Error("proposal: invalid show offset or page size; use a returned offset and maxBytes 1..16384");
+  const context = currentBinding(home, request.vault, options.channel);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
+  const record = readStoredProposal(home, context.bindingDigest, request.id);
+  screenForRead(record, context);
+  const serialized = JSON.stringify(record.operation), bytes = Buffer.from(serialized, "utf8");
+  if (offset > bytes.length || !Buffer.from(bytes.subarray(0, offset).toString("utf8"), "utf8").equals(bytes.subarray(0, offset)))
+    throw new Error("proposal: offset is outside the payload or splits a UTF-8 character; use the returned nextOffset");
+  const chars = Array.from(bytes.subarray(offset).toString("utf8"));
+  const view = (count: number): ProposalView => {
+    const content = chars.slice(0, count).join(""), end = offset + Buffer.byteLength(content, "utf8"), more = end < bytes.length;
+    return { id: record.id, vault: record.vault, state: record.state, path: record.operation.path, createdAt: record.createdAt, payloadDigest: record.payloadDigest,
+      ...(record.agentLabel !== undefined ? { agentLabelUnverified: record.agentLabel } : {}), ...(record.decisionReason !== undefined ? { decisionReason: record.decisionReason } : {}),
+      content, offset, nextOffset: more ? end : null, truncated: more };
+  };
+  let low = 0, high = chars.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2), candidate = view(middle);
+    if (Buffer.byteLength(candidate.content, "utf8") <= maxBytes && proposalReplyBytes(candidate) <= MAX_RPC_REPLY_BYTES) low = middle;
+    else high = middle - 1;
+  }
+  const result = view(low);
+  if (proposalReplyBytes(result) > MAX_RPC_REPLY_BYTES || (low === 0 && chars.length > 0)) throw new Error("proposal: page cannot fit the requested bounds; increase maxBytes or inspect the record");
+  if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding)) throw new Error("proposal: vault binding or policy changed during read; retry with the current policy");
+  return result;
 }
