@@ -9,7 +9,7 @@ import type { SpecEdge, SpecNode } from "./spec-graph.ts";
 import type { SpecFreshnessEntry } from "./spec-freshness.ts";
 import type { SpecValidationIssue, SpecValidationReport } from "./spec-validate.ts";
 import type { SpecDiagnostic } from "./spec-source.ts";
-import { blocks, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
+import { blocks, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tableParts, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
 
 /** What the renderers need from the command line: the spec arguments (`get root --body`) and their parsed values. */
 export interface SpecTextContext { args: readonly string[]; values: Record<string, unknown>; repo?: string }
@@ -86,7 +86,7 @@ export function renderSpecGraph(r: SpecGraphResult, o: TextOptions, context: Spe
 /** One hit per row, its snippet on the next line; rows never wrap so each snippet stays under its row. */
 export function renderSpecGrep(r: SpecGrepResult, o: TextOptions, context: SpecTextContext): string {
   if (!r.hits.length) return paragraph(r.offset ? `no more hits after offset ${r.offset}` : "no specs matched", o);
-  const lines = table(["ID", "TYPE", "STATUS", "TITLE"], r.hits.map(hit => [tone(hit.id, "info"), hit.type || "-", statusTone(hit.status), hit.title]), { color: o.color }).split("\n");
+  const lines = tableParts(["ID", "TYPE", "STATUS", "TITLE"], r.hits.map(hit => [tone(hit.id, "info"), hit.type || "-", statusTone(hit.status), hit.title]), { ...o, columns: undefined });
   const body = [lines[0]!, ...r.hits.flatMap((hit, i) => [lines[i + 1]!, paragraph(stripTerminal(hit.snippet).replace(/\s+/g, " ").trim(), o, "muted", "  ")])].join("\n");
   const range = r.offset || r.truncated ? `hits ${r.offset + 1}-${r.offset + r.hits.length}` : plural(r.hits.length, "hit");
   return blocks(body, [paragraph(range + (r.truncated ? ", more remain" : ""), o),
