@@ -40,6 +40,7 @@ test("CLI submits, pages, applies and rejects through one provider", () => {
     const listed = JSON.parse(run(["proposal", "list", "test", "--json"], f.env).text);
     expect(listed.items.map((item: { id: string }) => item.id)).toEqual([submitted.id]);
     expect(run(["proposal", "list", "test"], f.env).text).toContain(submitted.id);
+    expect(run(["proposal", "list", "test"], { ...f.env, COLUMNS: "80" }).text).toContain(submitted.id);
     const shown = JSON.parse(run(["proposal", "show", "test", submitted.id, "--json"], f.env).text);
     expect(JSON.parse(shown.content)).toMatchObject({ ...first, path: "notes/candidate.md" });
     expect(shown.agentLabelUnverified).toBe("test-agent");
@@ -81,6 +82,22 @@ test("MCP refuses a root replaced at the same registered path", async () => {
     const result = await server.handlers.vmem_proposal_list!({ vault: "test" });
     expect(result).toMatchObject({ refused: true });
     expect(JSON.stringify(result)).toContain("MCP startup");
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("CLI preview and MCP confirmation reconcile a durable writer refusal", async () => {
+  const f = fixture();
+  try {
+    const server = createVaultMcp(f.home, f.env), submitted = await server.handlers.vmem_proposal_submit!({ vault: "test", operation: operation("candidate") }) as { id: string };
+    const preview = await server.handlers.vmem_proposal_apply!({ vault: "test", id: submitted.id }) as { fingerprint: string };
+    const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures", "proposal-fail-before.ts"), f.home, f.vault, submitted.id, preview.fingerprint, "candidate"], { stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    expect(JSON.parse(child.stdout.toString())).toMatchObject({ applied: false, state: "apply_unknown" });
+    const review = JSON.parse(run(["proposal", "reconcile", "test", submitted.id, "--json"], f.env).text);
+    expect(review).toMatchObject({ receiptEvidence: "available", proposedState: "pending" });
+    const confirmed = await server.handlers.vmem_proposal_reconcile!({ vault: "test", id: submitted.id, confirm: true, fingerprint: review.fingerprint });
+    expect(confirmed).toMatchObject({ ok: true, resolved: true, state: "pending" });
+    expect(existsSync(join(f.notes, "candidate.md"))).toBe(false);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 

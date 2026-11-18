@@ -1,7 +1,7 @@
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry } from "./registry.ts";
-import { applyProposal, listProposals, previewProposalApply, previewProposalReject, reconcileProposal, rejectProposal, showProposal, submitProposal, type ProposalContext } from "./proposal-provider.ts";
+import { applyProposal, confirmProposalReconciliation, listProposals, previewProposalApply, previewProposalReject, reconcileProposal, rejectProposal, showProposal, submitProposal, type ProposalContext } from "./proposal-provider.ts";
 import { MAX_PROPOSAL_RECORD_BYTES } from "./proposals.ts";
 import { blocks, fields, heading, issueTable, nextCommand, PLAIN, shellWord, status, stripTerminal, table, UsageError, type TextOptions } from "./text-output.ts";
 
@@ -27,7 +27,7 @@ const number = (value: string | boolean | undefined, name: string, minimum: numb
 };
 /** CLI parsing and rendering; all lifecycle semantics stay in the shared provider. */
 export function runProposalCommand(args: string[], home: string, env: NodeJS.ProcessEnv, text: TextOptions = PLAIN): { text: string; code: number } {
-  const action = args[0], valueFlags: Record<string, string[]> = { submit: ["--agent-label"], list: ["--state", "--limit", "--after"], show: ["--offset", "--max-bytes"], apply: ["--fingerprint"], reject: ["--reason", "--fingerprint"], reconcile: [] };
+  const action = args[0], valueFlags: Record<string, string[]> = { submit: ["--agent-label"], list: ["--state", "--limit", "--after"], show: ["--offset", "--max-bytes"], apply: ["--fingerprint"], reject: ["--reason", "--fingerprint"], reconcile: ["--fingerprint"] };
   if (!action || !Object.hasOwn(valueFlags, action)) throw new UsageError("proposal: use submit, list, show, apply, reject or reconcile");
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
   let literal = false;
@@ -36,7 +36,7 @@ export function runProposalCommand(args: string[], home: string, env: NodeJS.Pro
     if (word === "--" && !literal) { literal = true; continue; }
     if (literal || !word.startsWith("--")) { positional.push(word); continue; }
     if (Object.hasOwn(flags, word)) throw new UsageError(`proposal ${action}: repeated option ${word}`);
-    if (word === "--json" || (word === "--confirm" && (action === "apply" || action === "reject"))) { flags[word] = true; continue; }
+    if (word === "--json" || (word === "--confirm" && ["apply", "reject", "reconcile"].includes(action))) { flags[word] = true; continue; }
     if (!valueFlags[action]!.includes(word)) throw new UsageError(`proposal ${action}: unknown option ${word}`);
     const value = args[++i]; if (value === undefined || value.startsWith("--")) throw new UsageError(`proposal ${action}: ${word} requires a value`);
     flags[word] = value;
@@ -50,8 +50,8 @@ export function runProposalCommand(args: string[], home: string, env: NodeJS.Pro
     const label = value("--agent-label");
     if (label !== undefined && (!label.trim() || Buffer.byteLength(label) > 256 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(label))) throw new UsageError("proposal submit: --agent-label needs nonempty text without controls, at most 256 bytes");
     const result = submitProposal(home, { vault, operation: input(target!, home), ...(label !== undefined ? { agentLabel: label } : {}) }, ctx);
-    const message = result.stored ? `submitted proposal ${result.id}${result.path ? ` for ${result.path}` : "; inspect current policy"}` : `proposal ${result.id}: storage outcome unknown`;
-    return { text: json ? JSON.stringify(result) : blocks(status(result.ok && !result.issues.length ? "ok" : result.stored ? "warn" : "unknown", message, text), issueTable(result.issues, text)), code: result.ok ? 0 : 1 };
+    const message = result.stored ? `submitted proposal ${result.id}${result.path ? ` for ${result.path}` : "; inspect current policy"}` : `proposal ${result.id}: ${result.stored === false ? "not stored" : "storage outcome unknown"}`;
+    return { text: json ? JSON.stringify(result) : blocks(status(result.ok && !result.issues.length ? "ok" : result.stored ? "warn" : result.stored === false ? "fail" : "unknown", message, text), issueTable(result.issues, text)), code: result.ok ? 0 : 1 };
   }
   if (action === "list") {
     const state = value("--state");
@@ -59,7 +59,7 @@ export function runProposalCommand(args: string[], home: string, env: NodeJS.Pro
     const after = value("--after");
     if (after !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(after)) throw new UsageError("proposal list: --after needs a returned cursor");
     const result = listProposals(home, { vault, ...(state ? { state: state as "pending" | "applied" | "rejected" | "apply_unknown" } : {}), limit: number(flags["--limit"], "--limit", 1, 100), after }, ctx);
-    const rows = result.items.length ? table(["STATE", "PATH", "CREATED", "ID"], result.items.map(item => [item.state, item.path, item.createdAt, item.id]), text) : "no proposals found";
+    const rows = result.items.length ? result.items.map(item => blocks(status(item.state === "applied" ? "ok" : item.state === "rejected" ? "absent" : item.state === "pending" ? "pending" : "unknown", `${item.state} ${item.id}`, text), fields([["path", item.path], ["created", item.createdAt]], text))).join("\n\n") : "no proposals found";
     const next = result.nextCursor ? nextCommand("next", command("list", vault, ...(state ? ["--state", state] : []), ...(flags["--limit"] ? ["--limit", String(flags["--limit"])] : []), "--after", result.nextCursor), text) : undefined;
     return { text: json ? JSON.stringify(result) : blocks(rows, issueTable(result.issues, text), next), code: 0 };
   }
@@ -69,8 +69,15 @@ export function runProposalCommand(args: string[], home: string, env: NodeJS.Pro
     return { text: json ? JSON.stringify(result) : blocks(heading(`proposal ${result.id}: ${result.state}`, text), fields([["vault", result.vault], ["path", result.path], ["agent label (unverified)", result.agentLabelUnverified], ["reason", result.decisionReason]], text), issueTable(result.issues, text), stripTerminal(result.content), next), code: 0 };
   }
   if (action === "reconcile") {
+    const confirm = flags["--confirm"] === true, fingerprint = value("--fingerprint");
+    if ((confirm && !fingerprint) || (!confirm && fingerprint) || (fingerprint !== undefined && !/^[a-f0-9]{64}$/.test(fingerprint))) throw new UsageError("proposal reconcile: --confirm and a preview fingerprint must be supplied together");
+    if (confirm) {
+      const result = confirmProposalReconciliation(home, { vault, id: target!, fingerprint: fingerprint! }, ctx);
+      return { text: json ? JSON.stringify(result) : blocks(status(result.resolved ? result.ok ? "ok" : "warn" : "unknown", `proposal ${target}: ${result.state}`, text), issueTable(result.issues, text)), code: result.ok ? 0 : 1 };
+    }
     const result = reconcileProposal(home, { vault, id: target! }, ctx);
-    return { text: json ? JSON.stringify(result) : blocks(status("unknown", `proposal ${result.id}: apply outcome unknown`, text), fields([["before", result.beforeSha ?? "-"], ["after", result.afterSha ?? "-"], ["observed", result.observedSha ?? "-"], ["receipt evidence", result.receiptEvidence]], text), issueTable(result.issues, text), result.explanation), code: 0 };
+    const next = result.fingerprint ? nextCommand("confirm", command("reconcile", vault, target!, "--confirm", "--fingerprint", result.fingerprint), text) : undefined;
+    return { text: json ? JSON.stringify(result) : blocks(status("unknown", `proposal ${result.id}: apply outcome unknown`, text), fields([["before", result.beforeSha ?? "-"], ["after", result.afterSha ?? "-"], ["observed", result.observedSha ?? "-"], ["receipt evidence", result.receiptEvidence]], text), issueTable(result.issues, text), result.explanation, next), code: 0 };
   }
   const confirm = flags["--confirm"] === true, fingerprint = value("--fingerprint"), reason = value("--reason");
   if ((confirm && !fingerprint) || (!confirm && fingerprint)) throw new UsageError(`proposal ${action}: --confirm and --fingerprint must be supplied together`);

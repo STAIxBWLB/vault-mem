@@ -48,7 +48,7 @@ The vault set is read once at startup: every tool's `vault` property is an enum 
 | `vmem_proposal_show` | `vault`, `id`, `offset`, `maxBytes` 1..16384; screened operation page and `nextOffset`, complete encoded response <=48 KiB |
 | `vmem_proposal_apply` | `vault`, `id`, optional `confirm` and `fingerprint`; preview first, then confirm the returned fingerprint |
 | `vmem_proposal_reject` | `vault`, `id`, `reason`, optional `confirm` and `fingerprint`; preview first, then confirm the same reason and fingerprint |
-| `vmem_proposal_reconcile` | `vault`, `id`; read-only before/after comparison for an uncertain apply, without inferring attribution |
+| `vmem_proposal_reconcile` | `vault`, `id`, optional `confirm` and `fingerprint`; preview and confirm only when durable writer evidence and the target agree |
 
 <!-- facts:mcp-tools -->
 
