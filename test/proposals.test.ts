@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
 import { checkStoredBinding, createStoredProposal, readStoredProposal, replaceStoredProposal } from "../src/proposal-storage.ts";
 import { listProposals, proposalReplyBytes, showProposal, submitProposal } from "../src/proposal-provider.ts";
-import { addVault, removeVault, setVaultPii } from "../src/registry.ts";
+import { addVault, loadRegistry, removeVault, setVaultPii } from "../src/registry.ts";
+import { logBinding } from "../src/vault-log.ts";
+import { applyProposalWrite, applyWrite } from "../src/writer.ts";
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -151,5 +153,36 @@ test("submission screens and validates before storing without changing the vault
     expect(() => listProposals(home, { vault: "test" }, { channel: "mcp" })).toThrow("different root");
     expect(() => submitProposal(home, { vault: "test", operation }, { channel: "mcp" })).toThrow("different root");
     expect(readdirSync(store)).toEqual([bucket]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("writer guard records intent under the mutation lock and refuses a stale decision", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-writer-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
+  try {
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, "research.md"), "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n");
+    addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp" });
+    const input = { op: "create", path: "proposed", frontmatter: { type: "insight", domain: "research", description: "Synthetic finding.", topics: ["[[research]]"] }, body: "# Proposed\n\nSynthetic body.\n\n## Topics\n\n- [[research]]\n" };
+    const submitted = submitProposal(home, { vault: "test", operation: input }, { channel: "mcp" });
+    const bindingDigest = readdirSync(join(home, "proposals"))[0]!, record = readStoredProposal(home, bindingDigest, submitted.id);
+    const config = loadRegistry(home), binding = logBinding(config.vaults[0]!, config), request = { vault: "test", operation: record.operation, channel: "mcp" as const };
+    const preview = applyWrite(home, { ...request, dryRun: true }, { binding });
+    expect(preview.ok).toBe(true);
+    const recordDigest = proposalRecordDigest(record), fingerprint = proposalDecisionFingerprint(recordDigest, preview.fingerprint!, "apply");
+    const decision = { id: record.id, bindingDigest, recordDigest, fingerprint };
+    const missing = applyProposalWrite(home, request, { binding } as Parameters<typeof applyProposalWrite>[2]);
+    expect(missing.applied).toBe(false);
+    expect(existsSync(join(notes, "proposed.md"))).toBe(false);
+    const stale = applyProposalWrite(home, request, { binding, proposal: { ...decision, fingerprint: "0".repeat(64) } });
+    expect(stale.ok).toBe(false);
+    expect(existsSync(join(notes, "proposed.md"))).toBe(false);
+    expect(readStoredProposal(home, bindingDigest, record.id).state).toBe("pending");
+    const applied = applyProposalWrite(home, request, { binding, proposal: decision });
+    expect(applied.applied).toBe(true);
+    expect(existsSync(join(notes, "proposed.md"))).toBe(true);
+    const after = readStoredProposal(home, bindingDigest, record.id);
+    expect(after.state).toBe("apply_unknown");
+    expect(after.intent).toMatchObject({ fingerprint, beforeSha: null, afterSha: applied.changes[0]!.sha256 });
+    expect(applyProposalWrite(home, request, { binding, proposal: decision }).applied).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

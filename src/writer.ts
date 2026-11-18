@@ -18,6 +18,8 @@ import type { PiiSurface } from "./config.ts";
 import { unenforceablePii, mutationVault } from "./config.ts";
 import type { LogBinding } from "./log-types.ts";
 import type { MergePreview, ChangeReceipt, PlannedChange, WriteIssue, WriteReceipt, WriteRequest } from "./write-types.ts";
+import { readStoredProposal, replaceStoredProposal } from "./proposal-storage.ts";
+import { proposalDecisionFingerprint, proposalRecordDigest } from "./proposals.ts";
 export const MUTATION_LOCK = "mutation.lock";
 export { MAX_WRITE_BYTES } from "./write-types.ts";
 const MAX_MERGE_ACK_BYTES = 224 * 1024;
@@ -143,9 +145,19 @@ function duplicateWarnings(request: WriteRequest, notes: Map<string, string>, ch
     return hits.filter(hit => hit.score <= -0.000001).map(hit => ({ code: "V08", severity: "warning", path: hit.path, message: "possible duplicate: FTS title terms match an existing note" }));
   } finally { db.close(); }
 }
+interface WriteOptions { env?: NodeJS.ProcessEnv; piiSurface?: PiiSurface; binding?: LogBinding; now?: Date }
+/** Internal approval binding; public CLI/MCP callers never supply store paths. */
+export interface ProposalWriteDecision { id: string; bindingDigest: string; recordDigest: string; fingerprint: string }
 /** Single mutation entry point. Preview/dry-run perform no writes, including locks and caches. */
-/** `options.binding` (internal callers composing several writes) refuses with VAULT_DRIFT unless the registry still matches it. */
-export function applyWrite(home: string, request: WriteRequest, options: { env?: NodeJS.ProcessEnv; piiSurface?: PiiSurface; binding?: LogBinding; now?: Date } = {}): WriteReceipt {
+export function applyWrite(home: string, request: WriteRequest, options: WriteOptions = {}): WriteReceipt {
+  return runWrite(home, request, options);
+}
+/** Proposal-only seam: the normal writer owns the lock, validation, publication and receipt. */
+export function applyProposalWrite(home: string, request: WriteRequest, options: WriteOptions & { binding: LogBinding; proposal: ProposalWriteDecision }): WriteReceipt {
+  if (!options || !options.binding || !options.proposal) return { ok: false, applied: false, issues: [{ code: "V01", severity: "error", message: "proposal decision and vault binding are required; request a new proposal preview" }], changes: [], indexUpdated: false };
+  return runWrite(home, request, options);
+}
+function runWrite(home: string, request: WriteRequest, options: WriteOptions & { proposal?: ProposalWriteDecision }): WriteReceipt {
   let lockFd: number | undefined, lockFile: string | undefined;
   let index: VaultIndex | undefined;
   const temps = new Map<string, { fd: number; remove: boolean }>(), publicationPaths = new Map<string, PublicationPath>(), createdDirs: string[] = [], committed: PlannedChange[] = [];
@@ -185,6 +197,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     }
     const twoStep = ["move", "delete", "tidy", "merge"].includes(request.operation.op);
     const preview = request.operation.op === "check" || request.dryRun === true || (twoStep && request.confirm !== true);
+    if (options.proposal && (preview || !options.binding || !["create", "patch"].includes(request.operation.op))) refuse("V01", "proposal confirmation requires one create or patch and a bound vault; request a new preview");
     if (!preview) {
       lockFile = join(root, MUTATION_LOCK);
       try { lockFd = openSync(lockFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
@@ -270,6 +283,21 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       // Full content recheck: shared mmap writes can change bytes without moving any stat field.
       const current = snapshot(root, config.denyPaths);
       if (current.size !== notes.size || [...current].some(([path, text]) => notes.get(path) !== text)) refuse("V09", "vault changed while staging");
+      if (options.proposal) {
+        const decision = options.proposal;
+        if (!options.binding || !matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("VAULT_DRIFT", "vault binding or policy changed after preview; request a new proposal preview");
+        const record = readStoredProposal(home, decision.bindingDigest, decision.id);
+        const recordDigest = proposalRecordDigest(record);
+        if (record.state !== "pending" || record.vault !== request.vault || recordDigest !== decision.recordDigest || canonical(record.operation) !== canonical(request.operation))
+          refuse("V09", "proposal or operation changed since preview; request a new proposal preview");
+        const expected = proposalDecisionFingerprint(recordDigest, fingerprint!, "apply");
+        if (decision.fingerprint !== expected) refuse("V09", "proposal decision fingerprint changed; request a new proposal preview");
+        const planned = receipts(changes);
+        if (planned.length !== 1) refuse("V09", "proposal plan is not a single note change; request a new proposal preview");
+        const change = planned[0]!;
+        replaceStoredProposal(home, decision.bindingDigest, decision.id, recordDigest, { ...record, state: "apply_unknown", updatedAt: (options.now ?? new Date()).toISOString(), intent: { fingerprint: expected, beforeSha: change.beforeSha, afterSha: change.sha256 } });
+        if (!matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("VAULT_DRIFT", "proposal intent was recorded but the vault binding or policy changed; inspect the proposal before retrying");
+      }
       for (const change of changes) {
         const file = safePath(root, change.path);
         if (readPlain(root, change.path, request.operation.op === "report" ? MAX_REPORT_BYTES : MAX_NOTE_BYTES) !== change.before) refuse("V09", "file changed while staging", change.path);
