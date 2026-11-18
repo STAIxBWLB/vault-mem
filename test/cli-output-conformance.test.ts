@@ -29,6 +29,9 @@ test("80-column reports cap fixed columns and keep state on one line", () => {
   for (const line of output.split("\n")) expect(width(line)).toBeLessThanOrEqual(80);
   expect(output).toContain("failed");
   expect(output).toContain("...");
+  const piped = table(["LABEL", "RESULT"], [["alpha beta gamma delta epsilon zeta eta theta", "done"]], plain);
+  expect(piped).toContain("alpha beta gamma delta epsilon");
+  expect(piped).toContain("zeta eta theta");
 });
 test("LANG=C selects ASCII markers", () => {
   const options = textOptions("never", { LANG: "C" });

@@ -171,7 +171,7 @@ test("#165 AC3 fix: a NUL dead link is reported by links and both MCP tools, not
   const links = JSON.parse(run(["links", "demo", "hub", "--json"], f.env).text) as { target: string; suggested: { path: string } | null }[];
   expect(links.find(link => link.target === "bad\u0000target")).toMatchObject({ suggested: { path: "bad.md" } });
   expect(links.find(link => link.target === "unquotable \"")!.suggested).toBeNull();
-  expect(run(["links", "demo", "hub"], f.env).text).toContain("suggested bad.md (");
+  expect(run(["links", "demo", "hub"], f.env).text).toContain("suggested bad.md");
   const lint = run(["lint", "demo"], f.env).text;
   expect(lint).toContain("suggested `bad.md`");
   expect(lint).toContain("SUMMARY errors=");
@@ -319,7 +319,7 @@ test("#165 AC3: lint and links report the hint in text and JSON and rewrite noth
   expect(links.find(l => l.target === "Ghost Topic")!.suggested).toBeNull();
   expect(links.find(l => l.target === "alpha")).toMatchObject({ resolved: "alpha.md" });
   expect(links.find(l => l.target === "alpha")).not.toHaveProperty("suggested");
-  expect(run(["links", "demo", "hub"], f.env).text).toContain("suggested lantern.md (");
+  expect(run(["links", "demo", "hub"], f.env).text).toContain("lantern.md (");
   // A hint is never a rewrite: the vault tree, note bytes and absence of a lock all stay as they were.
   expect(tree(f.vault)).toEqual(before);
   expect(existsSync(join(f.vault, "log.lock"))).toBe(false);

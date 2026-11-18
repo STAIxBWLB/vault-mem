@@ -9,7 +9,7 @@ import type { LintCode, LintReport } from "./analysis-types.ts";
 import type { GraphNeighborhood, GraphPath } from "./vault-graph.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
 import type { EvidenceReport } from "./evidence.ts";
-import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paint, paragraph, plural, shellWord, summary, table, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
+import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paint, paragraph, plural, shellWord, summary, table, tableParts, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
 
 const command = (...words: string[]) => ["vmem", ...words].map(shellWord).join(" ");
 
@@ -17,7 +17,7 @@ export function searchText(hits: SearchResult[], o: TextOptions, c: { vault: str
   const count = `${plural(hits.length, "result")} for ${JSON.stringify(clean(c.query))}`;
   if (!hits.length) return count;
   // Rows stay on one line so each snippet sits under its own hit.
-  const rows = table(["PATH", "TITLE", "TYPE"], hits.map(h => [h.path, h.title, h.type]), { ...o, columns: undefined }).split("\n");
+  const rows = tableParts(["PATH", "TITLE", "TYPE"], hits.map(h => [h.path, h.title, h.type]), { ...o, columns: undefined });
   const list = [rows[0]!, ...hits.flatMap((h, i) => [rows[i + 1]!, ...(stripTerminal(h.snippet).trim() ? [paragraph(stripTerminal(h.snippet).trim(), o, "muted", "  ")] : [])])].join("\n");
   const filters = [...(c.type ? ["--type", c.type] : []), ...(c.domain ? ["--domain", c.domain] : [])];
   const more = hits.length >= c.limit && c.limit < 500 ? nextCommand("next", command("search", c.vault, c.query, ...filters, "--limit", String(Math.min(500, c.limit * 2))), o) : undefined;

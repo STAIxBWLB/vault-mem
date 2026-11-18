@@ -111,7 +111,8 @@ test("#114 AC1/AC4: registry lists, adds and remove previews print their result 
   const vault = { id: "mine", path: "/v/m", kind: "personal" as const, write: "mcp" as const, pii: "allow" };
   const listed = renderVaultsList([vault], PLAIN);
   expect(listed).toContain("DOMAINS");
-  expect(listed).toContain("research, projects, teaching, operations, people, ai-practice");
+  expect(listed).toContain("research, projects, teaching,");
+  expect(listed).toContain("operations, people, ai-practice");
   expect(listed).toContain("/v/m");
   expect(renderVaultsList([], PLAIN)).toContain("no vaults registered");
   expect(renderVaultAdd({ vault: { id: "mine", path: "/v/m", kind: "org", write: "cli" } }, PLAIN)).toBe("registered vault mine: org, write cli, PII deny, at /v/m");

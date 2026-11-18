@@ -44,6 +44,9 @@ test("#114 search: one hit per row with its snippet beneath, a count line and th
   ].join("\n"));
   expect(searchText(hits, PLAIN, { vault: "demo", query: "two words", limit: 50 })).not.toContain("more:");
   expect(searchText([], PLAIN, { vault: "demo", query: "none", limit: 50 })).toBe("0 results for \"none\"");
+  const wrapped = searchText([{ ...hits[0]!, title: "A title long enough to wrap into another table row", snippet: "first snippet" }, { ...hits[1]!, snippet: "second snippet" }], PLAIN, { vault: "demo", query: "x", limit: 10 });
+  expect(wrapped.indexOf("first snippet")).toBeLessThan(wrapped.indexOf("beta.md"));
+  expect(wrapped.indexOf("beta.md")).toBeLessThan(wrapped.indexOf("second snippet"));
 });
 
 test("#114 show: title line, fields, the body as is without escapes, and for a truncated read the next-page command and headings", () => {
@@ -78,8 +81,8 @@ test("#114 links, log, rebuild and neighbours render tables, counts and next com
   ].join("\n"));
   // A hinted dead link keeps one RESOLVED cell, and the hint inherits the reason's tone.
   const hinted = [{ ...link("missing", null, "missing-note"), suggested: { path: "lantern.md", title: "Synthetic Lantern Notes", score: 3.76 } }];
-  expect(linksText(hinted, PLAIN, { vault: "demo", target: "alpha", limit: 2 })).toContain("missing-note; suggested lantern.md (3.760)");
-  expect(linksText(hinted, { color: true }, { vault: "demo", target: "alpha", limit: 2 })).toMatch(/\u001b\[[\d;]+mmissing-note; suggested lantern\.md \(3\.760\)\u001b\[0m/);
+  expect(linksText(hinted, PLAIN, { vault: "demo", target: "alpha", limit: 2 })).toContain("lantern.md (3.760)");
+  expect(linksText(hinted, { color: true }, { vault: "demo", target: "alpha", limit: 2 })).toMatch(/\u001b\[[\d;]+mlantern\.md \(3\.760\) *\u001b\[0m/);
   expect(linksText([link("missing", null, "missing-note")], PLAIN, { vault: "demo", target: "alpha", limit: 2 })).not.toContain("suggested");
   const read = { ok: true, lines: ["2026-11-02 10:00  CONNECT  -  synthetic  — second"], dataLines: 2, warnings: ["incomplete final log line omitted"], issues: [] };
   expect(logReadText(read, PLAIN, { command: "grep", vault: "demo", pattern: "sec ond", limit: 1 })).toBe([

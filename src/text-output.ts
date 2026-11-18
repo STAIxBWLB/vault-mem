@@ -84,7 +84,7 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 export function wrap(text: string, columns: number | undefined, indent = ""): string[] {
   const flat = clean(text);
   if (columns === undefined) return [indent + flat];
-  const room = Math.max(10, columns - width(indent)), lines: string[] = [];
+  const room = Math.max(1, columns - width(indent)), lines: string[] = [];
   let line = "";
   for (const word of flat.split(/ +/).filter(Boolean)) {
     const pieces: string[] = [];
@@ -105,9 +105,13 @@ const pad = (text: string, size: number) => text + " ".repeat(Math.max(0, size -
  * wraps under itself; with no width (pipes, tests) rows stay on one line.
  */
 export function table(headers: string[], rows: CellInput[][], o: TextOptions): string {
+  return tableParts(headers, rows, o).join("\n");
+}
+/** Table blocks retain the row boundaries when a cell wraps across several lines. */
+export function tableParts(headers: string[], rows: CellInput[][], o: TextOptions): string[] {
   const data = rows.map(row => headers.map((_, i) => { const c = cell(row[i]); return { ...c, text: clean(c.text) }; }));
   const last = headers.length - 1;
-  const sizes = headers.map((header, i) => Math.min(i === last || o.columns === undefined ? Infinity : 32, Math.max(width(header), ...data.map(row => width(row[i]!.text)))));
+  const sizes = headers.map((header, i) => Math.min(i === last ? Infinity : 32, Math.max(width(header), ...data.map(row => width(row[i]!.text)))));
   if (o.columns !== undefined) {
     while (sizes.slice(0, last).reduce((sum, size) => sum + size + 2, 0) + 10 > o.columns) {
       let largest = -1;
@@ -134,11 +138,18 @@ export function table(headers: string[], rows: CellInput[][], o: TextOptions): s
     return start + "..." + end;
   };
   const line = (cells: Cell[], bold = false) => {
-    const tail = wrap(cells[last]!.text, lastRoom);
-    const head = cells.slice(0, last).map((c, i) => paint(pad(shorten(c.text, sizes[i]!), sizes[i]!), bold ? "key" : c.tone, o)).join("  ");
-    return tail.map((part, i) => (i ? " ".repeat(lead) : head + (last ? "  " : "")) + paint(part, bold ? "key" : cells[last]!.tone, o)).join("\n").replace(/ +$/gm, "");
+    const columns = cells.map((c, i) => {
+      if (i === last) return wrap(c.text, lastRoom);
+      if (/PATH|^(ID|STATE)$/i.test(headers[i]!)) return [shorten(c.text, sizes[i]!)];
+      return width(c.text) <= sizes[i]! ? [c.text] : wrap(c.text, sizes[i]!);
+    });
+    const height = Math.max(...columns.map(parts => parts.length));
+    return Array.from({ length: height }, (_, row) => cells.map((c, i) => {
+      const part = columns[i]![row] ?? "";
+      return paint(i === last ? part : pad(part, sizes[i]!), bold ? "key" : c.tone, o);
+    }).join("  ").replace(/ +$/, "")).join("\n");
   };
-  return [line(headers.map(text => ({ text })), true), ...data.map(row => line(row))].join("\n");
+  return [line(headers.map(text => ({ text })), true), ...data.map(row => line(row))];
 }
 /** `label  value` lines with aligned values, indented by two spaces. Empty values are left out. */
 export function fields(pairs: [label: string, value: CellInput][], o: TextOptions, indent = "  "): string {
