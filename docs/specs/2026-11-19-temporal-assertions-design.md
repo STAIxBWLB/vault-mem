@@ -2,17 +2,18 @@
 id: temporal-assertions-design
 type: architecture
 title: Temporal assertions design
-status: draft
+status: active
 ---
 
 # Temporal assertions design
 
-Status: awaiting the owner's selection (issue 237 D5). This draft is not accepted. It authorizes no runtime code, public API, schema change or vault migration. The independent read-only review required by issue 237 D4 has not taken place.
+Status: accepted on 2026-11-19. The owner selected alternative C and answered O2 to O6 (issue 237 D5); the answers are under Owner decisions. The independent read-only review (issue 237 D4) took place on PR 244 before merge.
 
 - Contract: issue 237 in STAIxBWLB/vault-mem, parent plan issue 232.
-- Read contracts reviewed: issue 233 (evidence anchors) and issue 235 (Git snapshot history). Issue 233 is implemented in PR 243 (merge 32495c0, `src/evidence.ts#verifyEvidenceEntry` verifies one entry independent of a note). Issue 235 is not implemented and is treated here as a proposed contract.
+- Read contracts reviewed: issue 233 (evidence anchors) and issue 235 (Git snapshot history). Issue 233 is implemented in PR 243 (merge 32495c0, `src/evidence.ts#verifyEvidenceEntry` verifies one entry independent of a note). Issue 235 was treated here as a proposed contract; it merged later in PR 245 (7abe644).
 - Source read: `src/` at commit 53ac9af for the writer, index, log and snapshot contracts; `src/` was unchanged between 9a789a8, the commit issue 237 cites, and 53ac9af. `src/evidence.ts` and `src/source.ts` were read at 24cdd49 (main after PRs 243, 241, 246 and 248), where the cited writer, validation and log symbols still exist.
 - Concept reference: the Utopia time design pinned by issue 237 (commit 4fec6cb).
+- Implementation: issue 249 (P2, `vmem sync` staging), issue 250 (journal, write contract, evaluation, `vmem assert`), issue 251 (`vmem assertions`, derived index, read-time policy) and issue 252 (purge).
 
 ## Summary
 
@@ -330,7 +331,7 @@ Payloads of the scenario 1 and 2 entries, seq 1 to 6 in append order:
 {"op":"revise","payload":{"id":"a:3f9c2e1d0a4b5c6d:2","rev":3,"value":"member","kind":"state","from":"2025-09-01","to":"2026-03-28","evidence":[]}}
 ```
 
-Evidence lists are shortened to `[]` above; under owner decision O2 each assert would carry at least one entry. Other payload forms, with illustrative ids outside the corpus:
+Evidence lists are shortened to `[]` above; under owner decision O2 each assert carries at least one entry. Other payload forms, with illustrative ids outside the corpus:
 
 ```json
 {"op":"assert","payload":{"id":"a:3f9c2e1d0a4b5c6d:90","rev":1,"subject":"s:person-b","relation":"member-of","value":"org-x","kind":"state","from":"unknown","to":"2026-06-01","held_on":"2026-02-15","evidence":[]}}
@@ -486,20 +487,22 @@ Durable state that cannot be reconstructed:
 Before C can be implemented:
 
 - P1: issue 233 implemented (evidence entry shape and verifier). Met by PR 243 (merge 32495c0).
-- P2: `vmem sync` stages `assertions/` through a change to `src/sync.ts#STAGE_PREFIXES`. Without it the journal has no backup.
-- P3: the owner accepts a vmem-owned, non-Markdown `assertions/` area in the vault beside `log`, and answers O2 to O6.
+- P2: `vmem sync` stages `assertions/` through a change to `src/sync.ts#STAGE_PREFIXES`. Without it the journal has no backup. Tracked in issue 249.
+- P3: the owner accepts a vmem-owned, non-Markdown `assertions/` area in the vault beside `log`, and answers O2 to O6. Met on 2026-11-19.
 - P4 (optional): issue 235 extended to read journal blobs at a pinned commit, for recovery and existence evidence.
 
 Fallback if C is not selected: retain snapshot history only, meaning alternative A through issue 235 plus documentation conventions for prose assertions, with no `at` or `as_of` surface. The missing prerequisite is a vmem-owned, append-only, tamper-evident record-time store in the vault. Without one, record-time answers cannot be honest, and B cannot provide one.
 
-## Owner decisions needed
+## Owner decisions
 
-- O1: select A, B or C. This document recommends C, gated on P1 to P3.
-- O2: require at least one evidence entry or `source` reference per assertion. Recommended: yes.
-- O3: when current policy withholds evidence, withhold only the evidence (recommended) or the whole assertion.
-- O4: directory name and Obsidian visibility of `assertions/`.
-- O5: whether vmem move and merge append subject note remaps automatically. Recommended for v1: no; report `missing`.
-- O6: final command names, reconciled with issue 228.
+Recorded on issue 237 on 2026-11-19.
+
+- O1: alternative C.
+- O2: every assertion carries at least one evidence entry or `source` reference.
+- O3: when current policy withholds evidence, only that evidence is withheld; the assertion is still returned.
+- O4: the directory is `assertions/` at the vault root. vmem changes no Obsidian settings.
+- O5: in v1, vmem move and merge do not remap subject notes. A moved or merged subject reports `missing` or `superseded`.
+- O6: commands `vmem assert` and `vmem assertions`, MCP tools `vmem_assert` and `vmem_assertions`, with output following the issue 228 standard.
 
 ## Unverified items
 
@@ -507,6 +510,6 @@ Fallback if C is not selected: retain snapshot history only, meaning alternative
 - The Utopia time design was read through a fetched summary of the pinned document, not line by line.
 - `isDenied` was read in agent-mem 0.25.0 from the main checkout; the pinned 0.28.0 is not installed in this worktree. The design relies only on it being a path policy evaluated at call time.
 - Bun YAML date parsing was observed with Bun 1.4.4 locally; no repository test covers it.
-- Issue 235 is not merged (PR 245 is in review). Every reference to its outcomes and bounds is to its proposed contract. Issue 233 is merged (PR 243), and its contract is cited from the code.
+- Issue 235 merged in PR 245 (7abe644) after this design was written. References to its outcomes and bounds follow its proposed contract and were not rechecked against the merged code. Issue 233 is merged (PR 243), and its contract is cited from the code.
 - Whether `vmem lint` or the workspace graph would react to an `assertions/` directory was not checked.
 - All bounds are proposals; nothing was measured.
