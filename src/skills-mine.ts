@@ -480,6 +480,11 @@ export async function runSkillsCommand(args: string[], home: string, env: NodeJS
     if (!/^\d+(\.\d+)?$/.test(value)) throw new UsageError(`${flag}: expected a number`);
     return Number(value);
   };
+  const days = number("--days"), minSize = number("--min-size"), novelty = number("--min-novelty");
+  if (days !== undefined && (!Number.isInteger(days) || days < 1 || days > 3650)) throw new UsageError("skills mine: --days takes 1..3650");
+  if (minSize !== undefined && (!Number.isInteger(minSize) || minSize < 1 || minSize > 10000)) throw new UsageError("skills mine: --min-size takes 1..10000");
+  if (novelty !== undefined && (novelty < 0 || novelty > 1)) throw new UsageError("skills mine: --min-novelty takes 0..1");
+  if (flags["--all-projects"] && flags["--project"]) throw new UsageError("skills mine: choose either --all-projects or --project");
   const result = await mineSkills(home, {
     vault: positional[0]!, env, skills, allProjects: flags["--all-projects"] === true,
     ...(typeof flags["--project"] === "string" ? { project: flags["--project"] } : {}),

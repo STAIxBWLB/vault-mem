@@ -86,6 +86,9 @@ export function runBriefCommand(args: string[], home: string): { text: string; c
     else throw new UsageError(`brief: repeated option or invalid value for ${arg}; run vmem brief --help`);
   }
   if (positional.length !== 1 || intent === undefined) throw new UsageError("brief: requires one registered vault and --for intent; run vmem brief --help");
+  if (!intent.trim() || Buffer.byteLength(intent) > 1024) throw new UsageError("brief: intent must contain 1..1024 UTF-8 bytes");
+  if (bytes !== undefined && (!Number.isSafeInteger(bytes) || bytes < 256 || bytes > 4096)) throw new UsageError("brief: bytes must be an integer 256..4096");
+  if (paths.length > 16 || paths.some(p => !p.trim() || Buffer.byteLength(p) > 1024 || /\p{Cc}/u.test(p))) throw new UsageError("brief: paths must be at most 16 nonempty hints of at most 1024 bytes without control characters");
   const result = vaultBrief(home, { vault: positional[0]!, intent, paths, bytes });
   return { text: json ? JSON.stringify(result) : briefText(result), code: 0 };
 }

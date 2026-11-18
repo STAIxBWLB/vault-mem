@@ -68,7 +68,7 @@ test("stderr decides color independently of stdout", () => {
 test("usage and operation failures have distinct process exits", () => {
   const bin = new URL("../bin/vmem.js", import.meta.url).pathname;
   const env = { ...process.env, LANG: "C", VMEM_HOME: "/nonexistent-vmem-test-home" };
-  for (const args of [["lint"], ["check"], ["not-a-command"], ["lint", "--bad"], ["status", "extra"], ["search"], ["log"], ["sync"], ["graph", "path"], ["spec", "unknown"], ["skills", "unknown"], ["brief"], ["brief", "--bad"], ["tidy", "v"], ["check", "v", "-", "--unknown"]]) {
+  for (const args of [["lint"], ["check"], ["not-a-command"], ["lint", "--bad"], ["status", "extra"], ["search"], ["log"], ["sync"], ["graph", "path"], ["spec", "unknown"], ["skills", "unknown"], ["brief"], ["brief", "--bad"], ["brief", "v", "--for", "x", "--bytes", "2"], ["skills", "mine", "v", "--days", "0"], ["tidy", "v"], ["check", "v", "-", "--unknown"]]) {
     const result = Bun.spawnSync([process.execPath, bin, ...args], { env, stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode).toBe(2);
     expect(result.stderr.toString()).toContain("vmem: ");
