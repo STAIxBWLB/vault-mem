@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { checkProposalRpcSize, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalRpcBytes } from "../src/proposals.ts";
+import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalPayloadDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
 
 test("proposal operations admit only one normalized note and bounded exact edits", () => {
   expect(parseProposalOperation({ op: "create", path: "synthetic", frontmatter: { type: "insight" }, body: "한글" })).toEqual({ op: "create", path: "notes/synthetic.md", frontmatter: { type: "insight" }, body: "한글" });
@@ -11,6 +11,17 @@ test("proposal operations admit only one normalized note and bounded exact edits
   expect(() => parseProposalOperation({ ...patch, arbitrary: true })).toThrow();
   expect(() => parseProposalOperation({ op: "delete", path: "synthetic" })).toThrow("unsupported operation");
   expect(() => parseProposalOperation({ op: "create", path: "synthetic", frontmatter: {}, body: "가".repeat(12000) })).toThrow("32 KiB");
+});
+
+test("record codec rejects corruption, payload drift and uncertain apply without intent", () => {
+  const operation = parseProposalOperation({ op: "create", path: "synthetic", frontmatter: { type: "insight" }, body: "한글" });
+  const record: ProposalRecord = { schemaVersion: 1, id: "12345678-1234-4123-8123-123456789abc", vault: "test", bindingDigest: "a".repeat(64), state: "pending", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", operation, payloadDigest: proposalPayloadDigest(operation) };
+  expect(decodeProposalRecord(encodeProposalRecord(record))).toEqual(record);
+  expect(() => encodeProposalRecord({ ...record, payloadDigest: "b".repeat(64) })).toThrow("digest differs");
+  expect(() => encodeProposalRecord({ ...record, state: "apply_unknown" })).toThrow("no recorded intent");
+  expect(() => decodeProposalRecord(Buffer.from([255]))).toThrow("not UTF-8");
+  expect(() => decodeProposalRecord(Buffer.from("{"))).toThrow("not JSON");
+  expect(() => decodeProposalRecord(Buffer.from('{"schemaVersion":1,"schemaVersion":1}'))).toThrow("canonical JSON");
 });
 
 test("request bound counts actual JSON escaping and UTF-8 envelope bytes", () => {
