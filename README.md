@@ -74,6 +74,7 @@ The only runtime dependency is the exact first-party pin <!-- facts:amem-pin -->
 - `src/frontmatter.ts`: `parseFrontmatter`, `emitFrontmatter`
 - `src/links.ts`: `extractLinks`, `resolveLinks`, `normalizeTarget`
 - `src/vault-index.ts`: `VaultIndex`, `MAX_NOTE_BYTES`, `MAX_RESULTS`, `MAX_READ_BYTES`
+- `src/vault-history.ts`: `readHistory`, `readRevision`, `readChanges`, `historyText`, `revisionText`, `changesText`, `HISTORY_PAGE_LIMIT`, `HISTORY_SCAN_LIMIT`, `CHANGES_PAGE_LIMIT`, `SNAPSHOT_TRANSPORT_BYTES`
 - `src/writer.ts`: `applyWrite`, `sha256`, `MUTATION_LOCK`, `MAX_WRITE_BYTES`
 - `src/write-validation.ts`: `validateWrite`, `screenContent`
 - `src/vault-log.ts`: `appendLog`, `readLog`, `LOG_LOCK`, `MAX_LOG_READ_BYTES`, `MAX_LOG_RESULT_BYTES`, `LARGE_LOG_LINES`

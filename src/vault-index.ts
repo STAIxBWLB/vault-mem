@@ -551,6 +551,8 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     if (row?.source === null) throw Object.assign(new Error(`note source exceeds the ${maximum}-byte remaining read budget; split the note or reduce configured tables before retrying`), { code: "V09" });
     return row?.source;
   }
+  /** The indexed note path for a stem, alias or notes/ path, resolved as `show` resolves it but reading no content. */
+  resolve(target: string): string { return this.find(target); }
   show(target: string, maxBytes = 16384, section?: string, offset?: number): NoteReadResult {
     if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_READ_BYTES) throw new Error(`max-bytes: expected integer 1..${MAX_READ_BYTES}`);
     if (section !== undefined && (typeof section !== "string" || !section.trim() || /[\r\n]/.test(section) || Buffer.byteLength(section) > 1024)) throw new Error("section: expected one exact H2 heading <=1024 bytes");

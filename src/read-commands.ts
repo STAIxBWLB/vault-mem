@@ -2,14 +2,16 @@ import { loadRegistry } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
 import { PLAIN, UsageError, type TextOptions } from "./text-output.ts";
 import { linksText, rebuildText, searchText, showText } from "./read-output.ts";
+import { CHANGES_PAGE_LIMIT, HISTORY_PAGE_LIMIT, changesText, historyText, readChanges, readHistory, readRevision, revisionText } from "./vault-history.ts";
 import type { NoteReadResult, SearchResult } from "./vault-index.ts";
 import { evidenceReport } from "./evidence.ts";
 import { evidenceText } from "./read-output.ts";
-const READ_COMMANDS = new Set(["rebuild", "search", "show", "links", "evidence"]);
+const READ_COMMANDS = new Set(["rebuild", "search", "show", "links", "evidence", "history", "changes"]);
 export function isReadCommand(command: string): boolean { return READ_COMMANDS.has(command); }
 export function runReadCommand(command: string, args: string[], home: string, text: TextOptions = PLAIN): { text: string; code: number } {
   const options: Record<string, string | boolean> = {}, positional: string[] = [];
-  const allowed = command === "search" ? ["--limit", "--type", "--domain"] : command === "show" ? ["--max-bytes", "--section", "--offset"] : command === "links" ? ["--limit"] : [];
+  const allowed = command === "search" ? ["--limit", "--type", "--domain"] : command === "show" ? ["--max-bytes", "--section", "--offset", "--revision"]
+    : command === "links" ? ["--limit"] : command === "history" ? ["--limit", "--cursor"] : command === "changes" ? ["--from", "--to", "--limit", "--cursor"] : [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (!arg.startsWith("-")) { positional.push(arg); continue; }
@@ -19,7 +21,8 @@ export function runReadCommand(command: string, args: string[], home: string, te
     if (!value || value.startsWith("--")) throw new UsageError(`${arg}: value required`);
     options[arg] = value;
   }
-  if (positional.length !== (command === "rebuild" ? 1 : 2)) throw new UsageError(`${command}: requires vault id${command === "rebuild" ? "" : " and query/target"}`);
+  const expected = command === "rebuild" || command === "changes" ? 1 : 2;
+  if (positional.length !== expected) throw new UsageError(`${command}: requires vault id${command === "rebuild" ? "" : command === "changes" ? " and --from/--to" : " and query/target"}`);
   const registry = loadRegistry(home), vault = registry.vaults.find(v => v.id === positional[0]);
   if (!vault) throw new Error(`${command}: unknown vault id`);
   // Evidence reads the note and its sources directly: no index cache, lock or write.
@@ -39,6 +42,28 @@ export function runReadCommand(command: string, args: string[], home: string, te
   if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 0 || offset > MAX_NOTE_BYTES)) throw new UsageError(`offset: expected integer 0..${MAX_NOTE_BYTES}`);
   const section = options["--section"] as string | undefined;
   if (section !== undefined && (!section.trim() || /[\r\n]/.test(section) || Buffer.byteLength(section) > 1024)) throw new UsageError("section: expected one exact H2 heading <=1024 bytes");
+  const cursor = options["--cursor"] as string | undefined, revision = options["--revision"] as string | undefined;
+  const denyPaths = registry.denyPaths ?? [];
+  if (command === "history") {
+    if (limit !== undefined && limit > HISTORY_PAGE_LIMIT) throw new UsageError(`limit: expected integer 1..${HISTORY_PAGE_LIMIT} for history`);
+    const result = readHistory({ vault, home, denyPaths, note: positional[1]!, ...(limit !== undefined ? { limit } : {}), ...(cursor !== undefined ? { cursor } : {}) });
+    if (options["--json"]) return { text: JSON.stringify(result), code: 0 };
+    return { text: historyText(result, text, { vault: vault.id, note: positional[1]!, ...(limit !== undefined ? { limit } : {}), ...(cursor !== undefined ? { cursor } : {}) }), code: 0 };
+  }
+  if (command === "changes") {
+    const from = options["--from"], to = options["--to"];
+    if (typeof from !== "string" || typeof to !== "string") throw new UsageError("changes: requires one vault id plus --from and --to, e.g. vmem changes demo --from <oid> --to <oid>");
+    if (limit !== undefined && limit > CHANGES_PAGE_LIMIT) throw new UsageError(`limit: expected integer 1..${CHANGES_PAGE_LIMIT} for changes`);
+    const result = readChanges({ vault, home, denyPaths, from, to, ...(limit !== undefined ? { limit } : {}), ...(cursor !== undefined ? { cursor } : {}) });
+    if (options["--json"]) return { text: JSON.stringify(result), code: 0 };
+    return { text: changesText(result, text, { vault: vault.id, from, to, ...(limit !== undefined ? { limit } : {}) }), code: 0 };
+  }
+  if (command === "show" && revision !== undefined) {
+    const result = readRevision({ vault, home, denyPaths, note: positional[1]!, revision,
+      ...(maxBytes !== undefined ? { maxBytes } : {}), ...(offset !== undefined ? { offset } : {}), ...(section !== undefined ? { section } : {}) });
+    if (options["--json"]) return { text: JSON.stringify(result), code: 0 };
+    return { text: revisionText(result, text, { vault: vault.id, note: positional[1]!, revision, ...(maxBytes !== undefined ? { maxBytes } : {}) }), code: 0 };
+  }
   const index = new VaultIndex(home, vault, registry.vaults.map(v => v.path));
   let result: unknown;
   try {
