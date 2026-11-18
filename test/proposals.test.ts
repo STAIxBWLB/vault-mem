@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
 import { checkStoredBinding, createStoredProposal, readStoredProposal, replaceStoredProposal } from "../src/proposal-storage.ts";
-import { listProposals, previewProposalApply, proposalReplyBytes, showProposal, submitProposal } from "../src/proposal-provider.ts";
+import { applyProposal, listProposals, previewProposalApply, proposalReplyBytes, showProposal, submitProposal } from "../src/proposal-provider.ts";
 import { addVault, loadRegistry, removeVault, setVaultPii } from "../src/registry.ts";
 import { logBinding } from "../src/vault-log.ts";
 import { applyProposalWrite, applyWrite } from "../src/writer.ts";
@@ -192,5 +192,26 @@ test("writer guard records intent under the mutation lock and refuses a stale de
     expect(after.intent).toMatchObject({ fingerprint, beforeSha: null, afterSha: applied.changes[0]!.sha256 });
     expect(applyProposalWrite(home, request, { binding, proposal: decision }).applied).toBe(false);
     expect(() => previewProposalApply(home, { vault: "test", id: record.id }, { channel: "mcp" })).toThrow("outcome is unknown");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("applied notes stay applied when logging fails and cannot be replayed", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-log-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
+  try {
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, "research.md"), "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n");
+    addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp" });
+    const operation = { op: "create", path: "proposed", frontmatter: { type: "insight", domain: "research", description: "Synthetic finding.", topics: ["[[research]]"] }, body: "# Proposed\n\nSynthetic body.\n\n## Topics\n\n- [[research]]\n" };
+    const submitted = submitProposal(home, { vault: "test", operation }, { channel: "mcp" });
+    const preview = previewProposalApply(home, { vault: "test", id: submitted.id }, { channel: "mcp" });
+    mkdirSync(join(vaultPath, "log"));
+    const result = applyProposal(home, { vault: "test", id: submitted.id, fingerprint: preview.fingerprint }, { channel: "mcp" });
+    expect(result).toMatchObject({ ok: false, applied: true, state: "applied", logged: false });
+    expect(existsSync(join(notes, "proposed.md"))).toBe(true);
+    const bindingDigest = readdirSync(join(home, "proposals"))[0]!;
+    const stored = readStoredProposal(home, bindingDigest, submitted.id);
+    expect(stored.state).toBe("applied");
+    expect(stored.receipt).toMatchObject({ applied: true, logged: false });
+    expect(() => applyProposal(home, { vault: "test", id: submitted.id, fingerprint: preview.fingerprint }, { channel: "mcp" })).toThrow("no longer pending");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

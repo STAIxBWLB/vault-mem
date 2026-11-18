@@ -4,9 +4,9 @@ import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { loadRegistry } from "./registry.ts";
 import { logBinding, matchesBinding } from "./vault-log.ts";
-import { applyWrite } from "./writer.ts";
+import { applyProposalWrite, applyWrite } from "./writer.ts";
 import { screenMetadata } from "./write-validation.ts";
-import { checkStoredBinding, createStoredProposal, listStoredProposalIds, readStoredProposal } from "./proposal-storage.ts";
+import { checkStoredBinding, createStoredProposal, listStoredProposalIds, readStoredProposal, replaceStoredProposal } from "./proposal-storage.ts";
 import { encodeProposalRecord, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, type ProposalRecord } from "./proposals.ts";
 import type { ChangeReceipt, WriteIssue } from "./write-types.ts";
 import { unenforceablePii } from "./config.ts";
@@ -21,6 +21,7 @@ export interface ProposalPage { items: ProposalSummary[]; nextCursor: string | n
 export interface ProposalShowRequest { vault: string; id: string; offset?: number; maxBytes?: number }
 export interface ProposalView { id: string; vault: string; state: ProposalRecord["state"]; path: string; createdAt: string; payloadDigest: string; agentLabelUnverified?: string; decisionReason?: string; content: string; offset: number; nextOffset: number | null; truncated: boolean }
 export interface ProposalApplyPreview { id: string; vault: string; state: "pending"; fingerprint: string; changes: ChangeReceipt[]; issues: WriteIssue[] }
+export interface ProposalApplyResult { ok: boolean; applied: boolean; state: "pending" | "applied" | "apply_unknown"; logged: boolean | null; issues: WriteIssue[] }
 const MAX_SHOW_BYTES = 16 * 1024, MAX_RPC_REPLY_BYTES = 48 * 1024;
 
 /** Conservative complete MCP reply size; MCP limits request IDs to 200 UTF-16 units (at most 1200 encoded bytes). */
@@ -48,6 +49,9 @@ function screenForRead(record: ProposalRecord, context: ReturnType<typeof curren
   const issues = screenMetadata({ operation: record.operation, agentLabel: record.agentLabel, decisionReason: record.decisionReason }, { vault: context.vault, config: context.config }, record.operation.path);
   if (issues.some(issue => issue.severity === "error")) throw new Error("proposal: current disclosure policy refuses stored content; inspect the vault policy");
 }
+function bindingStillCurrent(home: string, context: ReturnType<typeof currentBinding>): boolean {
+  try { return matchesBinding(loadRegistry(home), context.vault.id, context.binding); } catch { return false; }
+}
 
 /** Screen and validate a proposal before any persistent record is created. */
 export function submitProposal(home: string, request: ProposalSubmitRequest, options: ProposalContext): ProposalSubmitted {
@@ -64,6 +68,8 @@ export function submitProposal(home: string, request: ProposalSubmitRequest, opt
   const createdAt = (options.now ?? new Date()).toISOString();
   const record: ProposalRecord = { schemaVersion: 1, id: randomUUID(), vault: vault.id, bindingDigest, state: "pending", createdAt, updatedAt: createdAt, operation, payloadDigest: proposalPayloadDigest(operation), ...(request.agentLabel !== undefined ? { agentLabel: request.agentLabel } : {}) };
   encodeProposalRecord(record);
+  const placeholder = "0".repeat(64);
+  encodeProposalRecord({ ...record, state: "applied", intent: { fingerprint: placeholder, beforeSha: placeholder, afterSha: placeholder }, receipt: { applied: true, logged: false, beforeSha: placeholder, afterSha: placeholder } });
   if (!matchesBinding(loadRegistry(home), vault.id, binding)) throw new Error("proposal: vault binding or policy changed during submit; request a new preview");
   createStoredProposal(home, record);
   if (!matchesBinding(loadRegistry(home), vault.id, binding)) throw new Error("proposal: record was stored but the vault binding or policy changed; inspect the proposal store and current vault policy");
@@ -143,4 +149,39 @@ export function previewProposalApply(home: string, request: { vault: string; id:
   if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id)) !== recordDigest)
     throw new Error("proposal: record, vault binding or policy changed during preview; request a new preview");
   return { id: record.id, vault: record.vault, state: "pending", fingerprint: proposalDecisionFingerprint(recordDigest, preview.fingerprint, "apply"), changes: preview.changes, issues: preview.issues };
+}
+
+/** Confirm through the existing writer; an applied note remains applied even if logging or receipt persistence fails. */
+export function applyProposal(home: string, request: { vault: string; id: string; fingerprint: string }, options: ProposalContext): ProposalApplyResult {
+  if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id", "fingerprint"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string" || typeof request.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(request.fingerprint))
+    throw new Error("proposal: invalid apply confirmation; use the fingerprint returned by a fresh preview");
+  const context = currentBinding(home, request.vault, options.channel);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
+  const record = readStoredProposal(home, context.bindingDigest, request.id);
+  screenForRead(record, context);
+  if (record.state !== "pending") throw new Error(`proposal: ${record.state === "apply_unknown" ? "apply outcome is unknown; reconcile before another decision" : "proposal is no longer pending; inspect the proposal"}`);
+  const receipt = applyProposalWrite(home, { vault: record.vault, operation: record.operation, channel: options.channel }, {
+    binding: context.binding, env: options.env, now: options.now,
+    proposal: { id: record.id, bindingDigest: context.bindingDigest, recordDigest: proposalRecordDigest(record), fingerprint: request.fingerprint },
+  });
+  const logged = receipt.logged === true ? true : receipt.logged === false ? false : null;
+  if (receipt.applied) {
+    try {
+      const current = readStoredProposal(home, context.bindingDigest, record.id), change = receipt.changes.find(item => item.path === record.operation.path);
+      if (current.state !== "apply_unknown" || current.intent?.fingerprint !== request.fingerprint || !change || current.intent.beforeSha !== change.beforeSha || current.intent.afterSha !== change.sha256)
+        throw new Error("intent or receipt does not match");
+      replaceStoredProposal(home, context.bindingDigest, record.id, proposalRecordDigest(current), { ...current, state: "applied", updatedAt: (options.now ?? new Date()).toISOString(), receipt: { applied: true, logged, beforeSha: change.beforeSha, afterSha: change.sha256 } });
+    } catch {
+      return { ok: false, applied: true, state: "apply_unknown", logged, issues: [{ code: "PROPOSAL_RECEIPT", severity: "error", message: "note was applied but proposal receipt could not be recorded; inspect and reconcile the proposal before retrying" }] };
+    }
+    if (!bindingStillCurrent(home, context)) return { ok: false, applied: true, state: "applied", logged, issues: [{ code: "VAULT_DRIFT", severity: "error", message: "note was applied but vault binding or policy changed; inspect the registered vault and proposal" }] };
+    return { ok: receipt.ok && logged !== false, applied: true, state: "applied", logged, issues: [...receipt.issues, ...(receipt.log?.issues ?? [])] };
+  }
+  let state: "pending" | "apply_unknown" = "apply_unknown";
+  try {
+    const current = readStoredProposal(home, context.bindingDigest, record.id);
+    if (current.state === "pending") state = "pending";
+  } catch { /* Failure to read the state cannot prove that publication did not start. */ }
+  if (!bindingStillCurrent(home, context)) return { ok: false, applied: false, state: "apply_unknown", logged, issues: [{ code: "VAULT_DRIFT", severity: "error", message: "vault binding or policy changed; inspect the proposal before retrying" }] };
+  return { ok: false, applied: false, state, logged, issues: receipt.issues };
 }

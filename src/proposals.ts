@@ -62,6 +62,7 @@ export interface ProposalRecord {
   agentLabel?: string;
   decisionReason?: string;
   intent?: { fingerprint: string; beforeSha: string | null; afterSha: string | null };
+  receipt?: { applied: true; logged: boolean | null; beforeSha: string | null; afterSha: string | null };
 }
 
 /** A digest of the exact normalized operation, never a claim about who authored it. */
@@ -78,7 +79,7 @@ export function decodeProposalRecord(bytes: Uint8Array): ProposalRecord {
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { throw new Error("proposal: stored record is not JSON; inspect the proposal store"); }
   if (JSON.stringify(parsed) !== text) throw new Error("proposal: stored record is not in canonical JSON form; inspect the proposal store");
-  if (!object(parsed) || !exactKeys(parsed, ["schemaVersion", "id", "vault", "bindingDigest", "state", "createdAt", "updatedAt", "operation", "payloadDigest", "agentLabel", "decisionReason", "intent"]) || parsed.schemaVersion !== 1 || typeof parsed.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(parsed.id) || typeof parsed.vault !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(parsed.vault) || !digest(parsed.bindingDigest) || !["pending", "applied", "rejected", "apply_unknown"].includes(String(parsed.state)) || !date(parsed.createdAt) || !date(parsed.updatedAt) || !digest(parsed.payloadDigest))
+  if (!object(parsed) || !exactKeys(parsed, ["schemaVersion", "id", "vault", "bindingDigest", "state", "createdAt", "updatedAt", "operation", "payloadDigest", "agentLabel", "decisionReason", "intent", "receipt"]) || parsed.schemaVersion !== 1 || typeof parsed.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(parsed.id) || typeof parsed.vault !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(parsed.vault) || !digest(parsed.bindingDigest) || !["pending", "applied", "rejected", "apply_unknown"].includes(String(parsed.state)) || !date(parsed.createdAt) || !date(parsed.updatedAt) || !digest(parsed.payloadDigest))
     throw new Error("proposal: stored record has invalid metadata; inspect the proposal store");
   if ((parsed.agentLabel !== undefined && (typeof parsed.agentLabel !== "string" || Buffer.byteLength(parsed.agentLabel) > 256)) || (parsed.decisionReason !== undefined && (typeof parsed.decisionReason !== "string" || Buffer.byteLength(parsed.decisionReason) > 4096)))
     throw new Error("proposal: stored record has invalid optional fields; inspect the proposal store");
@@ -86,6 +87,11 @@ export function decodeProposalRecord(bytes: Uint8Array): ProposalRecord {
     throw new Error("proposal: stored record has invalid apply intent; inspect the proposal store");
   if (parsed.state === "apply_unknown" && parsed.intent === undefined) throw new Error("proposal: uncertain apply has no recorded intent; inspect the proposal store");
   if (parsed.state === "applied" && parsed.intent === undefined) throw new Error("proposal: applied record has no recorded intent; inspect the proposal store");
+  if (parsed.receipt !== undefined && (!object(parsed.receipt) || !exactKeys(parsed.receipt, ["applied", "logged", "beforeSha", "afterSha"]) || parsed.receipt.applied !== true || (typeof parsed.receipt.logged !== "boolean" && parsed.receipt.logged !== null) || (parsed.receipt.beforeSha !== null && !digest(parsed.receipt.beforeSha)) || (parsed.receipt.afterSha !== null && !digest(parsed.receipt.afterSha))))
+    throw new Error("proposal: stored receipt is invalid; inspect the proposal store");
+  if (parsed.state === "applied" && parsed.receipt === undefined) throw new Error("proposal: applied record has no durable receipt; inspect the proposal store");
+  if (parsed.receipt !== undefined && (!object(parsed.receipt) || parsed.state !== "applied" || !object(parsed.intent) || parsed.receipt.beforeSha !== parsed.intent.beforeSha || parsed.receipt.afterSha !== parsed.intent.afterSha))
+    throw new Error("proposal: stored receipt does not match its apply intent; inspect the proposal store");
   if (parsed.state === "pending" && parsed.intent !== undefined) throw new Error("proposal: pending record has an apply intent; inspect the proposal store");
   if (parsed.state === "rejected" && (typeof parsed.decisionReason !== "string" || !parsed.decisionReason.trim())) throw new Error("proposal: rejected record has no decision reason; inspect the proposal store");
   const operation = parseProposalOperation(parsed.operation);
