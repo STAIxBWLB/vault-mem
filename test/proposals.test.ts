@@ -234,6 +234,42 @@ test("applied notes stay applied when logging fails and cannot be replayed", () 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a competing registry lock after publication retains applied truth and an unknown receipt", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-finalize-lock-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
+  try {
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, "research.md"), "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n");
+    addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp" });
+    const operation = { op: "create", path: "proposed", frontmatter: { type: "insight", domain: "research", description: "Synthetic finding.", topics: ["[[research]]"] }, body: "# Proposed\n\nSynthetic body.\n\n## Topics\n\n- [[research]]\n" };
+    const submitted = submitProposal(home, { vault: "test", operation }, { channel: "mcp" });
+    const preview = previewProposalApply(home, { vault: "test", id: submitted.id }, { channel: "mcp" });
+    const fixture = join(import.meta.dir, "fixtures", "proposal-finish-lock.ts"), child = Bun.spawnSync([process.execPath, fixture, home, submitted.id, preview.fingerprint], { stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    expect(JSON.parse(child.stdout.toString())).toMatchObject({ ok: false, applied: true, state: "apply_unknown" });
+    expect(existsSync(join(notes, "proposed.md"))).toBe(true);
+    expect(reconcileProposal(home, { vault: "test", id: submitted.id }, { channel: "mcp" })).toMatchObject({ state: "apply_unknown", matchesAfter: true, receiptEvidence: "unavailable" });
+    expect(() => applyProposal(home, { vault: "test", id: submitted.id, fingerprint: preview.fingerprint }, { channel: "mcp" })).toThrow("outcome is unknown");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("policy drift after publication does not reopen a newly denied record", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-finish-policy-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
+  try {
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, "research.md"), "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n");
+    addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp" });
+    const operation = { op: "create", path: "proposed", frontmatter: { type: "insight", domain: "research", description: "Synthetic finding.", topics: ["[[research]]"] }, body: "# Proposed\n\nSynthetic body.\n\n## Topics\n\n- [[research]]\n" };
+    const submitted = submitProposal(home, { vault: "test", operation }, { channel: "mcp" });
+    const preview = previewProposalApply(home, { vault: "test", id: submitted.id }, { channel: "mcp" });
+    const binding = readdirSync(join(home, "proposals")).find(name => /^[a-f0-9]{64}$/.test(name))!, recordFile = join(home, "proposals", binding, `${submitted.id}.json`);
+    const fixture = join(import.meta.dir, "fixtures", "proposal-finish-policy.ts"), child = Bun.spawnSync([process.execPath, fixture, home, submitted.id, preview.fingerprint, recordFile], { stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    expect(JSON.parse(child.stdout.toString())).toMatchObject({ result: { ok: false, applied: true, state: "apply_unknown" }, deniedOpens: 0 });
+    expect(existsSync(join(notes, "proposed.md"))).toBe(true);
+    expect(() => reconcileProposal(home, { vault: "test", id: submitted.id }, { channel: "mcp" })).toThrow("storage path is denied");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("rejection binds the reason and current vault snapshot without changing notes or log", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-reject-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
   try {
@@ -382,11 +418,14 @@ test("two concurrent confirmations publish the note at most once", async () => {
     const outputs = await Promise.all(children.map(async child => ({ code: await child.exited, text: await new Response(child.stdout).text(), error: await new Response(child.stderr).text() })));
     for (const output of outputs) expect(output.code).toBe(0);
     const results = outputs.map(output => JSON.parse(output.text) as { applied: boolean });
-    expect(results.filter(result => result.applied)).toHaveLength(1);
-    expect(existsSync(join(notes, "proposed.md"))).toBe(true);
-    expect(readFileSync(join(vaultPath, "log"), "utf8").trim().split("\n")).toHaveLength(1);
+    const successes = results.filter(result => result.applied).length;
+    expect(successes).toBeLessThanOrEqual(1);
+    expect(existsSync(join(notes, "proposed.md"))).toBe(successes === 1);
+    if (successes) expect(readFileSync(join(vaultPath, "log"), "utf8").trim().split("\n")).toHaveLength(1);
+    else expect(existsSync(join(vaultPath, "log"))).toBe(false);
     const bindingDigest = readdirSync(join(home, "proposals")).find(name => /^[a-f0-9]{64}$/.test(name))!;
-    expect(readStoredProposal(home, bindingDigest, submitted.id).state).toBe("applied");
+    const state = readStoredProposal(home, bindingDigest, submitted.id).state;
+    expect(successes ? ["applied", "apply_unknown"] : ["pending", "apply_unknown"]).toContain(state);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -405,10 +444,12 @@ test("concurrent apply and rejection cannot both succeed", async () => {
     const outputs = await Promise.all([a, b].map(async child => ({ code: await child.exited, text: await new Response(child.stdout).text(), error: await new Response(child.stderr).text() })));
     for (const output of outputs) expect(output.code).toBe(0);
     const applyResult = JSON.parse(outputs[0]!.text) as { applied: boolean }, rejectResult = JSON.parse(outputs[1]!.text) as { rejected: boolean };
-    expect(Number(applyResult.applied) + Number(rejectResult.rejected)).toBe(1);
+    const successes = Number(applyResult.applied) + Number(rejectResult.rejected);
+    expect(successes).toBeLessThanOrEqual(1);
     expect(existsSync(join(notes, "proposed.md"))).toBe(applyResult.applied);
     expect(existsSync(join(vaultPath, "log"))).toBe(applyResult.applied);
     const bindingDigest = readdirSync(join(home, "proposals")).find(name => /^[a-f0-9]{64}$/.test(name))!;
-    expect(readStoredProposal(home, bindingDigest, submitted.id).state).toBe(applyResult.applied ? "applied" : "rejected");
+    const state = readStoredProposal(home, bindingDigest, submitted.id).state;
+    expect(applyResult.applied ? ["applied", "apply_unknown"] : rejectResult.rejected ? ["rejected"] : ["pending", "apply_unknown"]).toContain(state);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

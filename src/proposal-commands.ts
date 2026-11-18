@@ -50,7 +50,7 @@ export function runProposalCommand(args: string[], home: string, env: NodeJS.Pro
     const label = value("--agent-label");
     if (label !== undefined && (!label.trim() || Buffer.byteLength(label) > 256 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(label))) throw new UsageError("proposal submit: --agent-label needs nonempty text without controls, at most 256 bytes");
     const result = submitProposal(home, { vault, operation: input(target!, home), ...(label !== undefined ? { agentLabel: label } : {}) }, ctx);
-    const message = result.stored ? `submitted proposal ${result.id} for ${result.path}` : `proposal ${result.id}: storage outcome unknown`;
+    const message = result.stored ? `submitted proposal ${result.id}${result.path ? ` for ${result.path}` : "; inspect current policy"}` : `proposal ${result.id}: storage outcome unknown`;
     return { text: json ? JSON.stringify(result) : blocks(status(result.ok ? "ok" : result.stored ? "warn" : "unknown", message, text), issueTable(result.issues, text)), code: result.ok ? 0 : 1 };
   }
   if (action === "list") {
