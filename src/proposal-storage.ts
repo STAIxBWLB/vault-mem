@@ -1,4 +1,4 @@
-/** Internal bounded proposal record storage. Public lifecycle operations are not yet available. */
+/** Internal bounded storage for proposal records and binding metadata. */
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, realpathSync, writeFileSync, type Stats } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";

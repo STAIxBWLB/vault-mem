@@ -59,7 +59,7 @@ export function runProposalCommand(args: string[], home: string, env: NodeJS.Pro
     const after = value("--after");
     if (after !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(after)) throw new UsageError("proposal list: --after needs a returned cursor");
     const result = listProposals(home, { vault, ...(state ? { state: state as "pending" | "applied" | "rejected" | "apply_unknown" } : {}), limit: number(flags["--limit"], "--limit", 1, 100), after }, ctx);
-    const rows = result.items.length ? table(["ID", "STATE", "PATH", "CREATED"], result.items.map(item => [item.id, item.state, item.path, item.createdAt]), text) : "no proposals found";
+    const rows = result.items.length ? table(["STATE", "PATH", "CREATED", "ID"], result.items.map(item => [item.state, item.path, item.createdAt, item.id]), text) : "no proposals found";
     const next = result.nextCursor ? nextCommand("next", command("list", vault, ...(state ? ["--state", state] : []), ...(flags["--limit"] ? ["--limit", String(flags["--limit"])] : []), "--after", result.nextCursor), text) : undefined;
     return { text: json ? JSON.stringify(result) : blocks(rows, issueTable(result.issues, text), next), code: 0 };
   }

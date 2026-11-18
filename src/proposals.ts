@@ -1,4 +1,4 @@
-/** Internal proposal payload contracts. Durable storage and public commands are not available yet. */
+/** Proposal payload and durable record contracts. */
 import { createHash } from "node:crypto";
 import { notePath } from "./write-operations.ts";
 import type { PatchEdit, WriteOp } from "./write-types.ts";

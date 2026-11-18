@@ -39,6 +39,7 @@ test("CLI submits, pages, applies and rejects through one provider", () => {
     expect(existsSync(join(f.notes, "candidate.md"))).toBe(false);
     const listed = JSON.parse(run(["proposal", "list", "test", "--json"], f.env).text);
     expect(listed.items.map((item: { id: string }) => item.id)).toEqual([submitted.id]);
+    expect(run(["proposal", "list", "test"], f.env).text).toContain(submitted.id);
     const shown = JSON.parse(run(["proposal", "show", "test", submitted.id, "--json"], f.env).text);
     expect(JSON.parse(shown.content)).toMatchObject({ ...first, path: "notes/candidate.md" });
     expect(shown.agentLabelUnverified).toBe("test-agent");

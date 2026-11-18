@@ -202,13 +202,12 @@ test("writer guard records intent under the mutation lock and refuses a stale de
     expect(applied.applied).toBe(true);
     expect(existsSync(join(notes, "proposed.md"))).toBe(true);
     const after = readStoredProposal(home, bindingDigest, record.id);
-    expect(after.state).toBe("apply_unknown");
+    expect(after.state).toBe("applied");
     expect(after.intent).toMatchObject({ fingerprint, beforeSha: null, afterSha: applied.changes[0]!.sha256 });
-    const observed = reconcileProposal(home, { vault: "test", id: record.id }, { channel: "mcp" });
-    expect(observed).toMatchObject({ state: "apply_unknown", matchesBefore: false, matchesAfter: true, receiptEvidence: "unavailable" });
+    expect(after.receipt).toMatchObject({ applied: true, afterSha: applied.changes[0]!.sha256 });
     expect(readStoredProposal(home, bindingDigest, record.id)).toEqual(after);
     expect(applyProposalWrite(home, request, { binding, proposal: decision }).applied).toBe(false);
-    expect(() => previewProposalApply(home, { vault: "test", id: record.id }, { channel: "mcp" })).toThrow("outcome is unknown");
+    expect(() => previewProposalApply(home, { vault: "test", id: record.id }, { channel: "mcp" })).toThrow("no longer pending");
     const second = submitProposal(home, { vault: "test", operation: { ...input, path: "precrash", body: input.body.replace("Proposed", "Precrash") } }, { channel: "mcp" });
     const pending = readStoredProposal(home, bindingDigest, second.id);
     replaceStoredProposal(home, bindingDigest, second.id, proposalRecordDigest(pending), { ...pending, state: "apply_unknown", intent: { fingerprint: "a".repeat(64), beforeSha: null, afterSha: "b".repeat(64) } });
@@ -238,7 +237,7 @@ test("applied notes stay applied when logging fails and cannot be replayed", () 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("a competing registry lock after publication retains applied truth and an unknown receipt", () => {
+test("applied receipt is saved without a second registry lock acquisition", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-finalize-lock-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
   try {
     mkdirSync(notes, { recursive: true });
@@ -249,10 +248,9 @@ test("a competing registry lock after publication retains applied truth and an u
     const preview = previewProposalApply(home, { vault: "test", id: submitted.id }, { channel: "mcp" });
     const fixture = join(import.meta.dir, "fixtures", "proposal-finish-lock.ts"), child = Bun.spawnSync([process.execPath, fixture, home, submitted.id, preview.fingerprint], { stdout: "pipe", stderr: "pipe" });
     expect(child.exitCode).toBe(0);
-    expect(JSON.parse(child.stdout.toString())).toMatchObject({ ok: false, applied: true, state: "apply_unknown" });
+    expect(JSON.parse(child.stdout.toString())).toMatchObject({ ok: true, applied: true, state: "applied" });
     expect(existsSync(join(notes, "proposed.md"))).toBe(true);
-    expect(reconcileProposal(home, { vault: "test", id: submitted.id }, { channel: "mcp" })).toMatchObject({ state: "apply_unknown", matchesAfter: true, receiptEvidence: "unavailable" });
-    expect(() => applyProposal(home, { vault: "test", id: submitted.id, fingerprint: preview.fingerprint }, { channel: "mcp" })).toThrow("outcome is unknown");
+    expect(() => applyProposal(home, { vault: "test", id: submitted.id, fingerprint: preview.fingerprint }, { channel: "mcp" })).toThrow("no longer pending");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -268,7 +266,7 @@ test("policy drift after publication does not reopen a newly denied record", () 
     const binding = readdirSync(join(home, "proposals")).find(name => /^[a-f0-9]{64}$/.test(name))!, recordFile = join(home, "proposals", binding, `${submitted.id}.json`);
     const fixture = join(import.meta.dir, "fixtures", "proposal-finish-policy.ts"), child = Bun.spawnSync([process.execPath, fixture, home, submitted.id, preview.fingerprint, recordFile], { stdout: "pipe", stderr: "pipe" });
     expect(child.exitCode).toBe(0);
-    expect(JSON.parse(child.stdout.toString())).toMatchObject({ result: { ok: false, applied: true, state: "apply_unknown" }, deniedOpens: 0 });
+    expect(JSON.parse(child.stdout.toString())).toMatchObject({ result: { ok: false, applied: true, state: "applied" }, deniedOpens: 0 });
     expect(existsSync(join(notes, "proposed.md"))).toBe(true);
     expect(() => reconcileProposal(home, { vault: "test", id: submitted.id }, { channel: "mcp" })).toThrow("storage path is denied");
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -320,6 +318,9 @@ test("a stale patch can still be rejected against a fresh rejection preview", ()
     const research = join(notes, "research.md"), original = "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n";
     writeFileSync(research, original);
     addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp" });
+    const noOp = { op: "patch", path: "research", expectedSha: sha256(original), edits: [{ oldString: "# Research", newString: "# Research" }] };
+    expect(() => submitProposal(home, { vault: "test", operation: noOp }, { channel: "mcp" })).toThrow("no note change");
+    expect(existsSync(join(home, "proposals"))).toBe(false);
     const operation = { op: "patch", path: "research", expectedSha: sha256(original), edits: [{ oldString: "# Research", newString: "# Research revised" }] };
     const submitted = submitProposal(home, { vault: "test", operation }, { channel: "mcp" });
     const changed = `${original}\nexternal edit\n`; writeFileSync(research, changed);
@@ -328,6 +329,22 @@ test("a stale patch can still be rejected against a fresh rejection preview", ()
     expect(rejectProposal(home, { vault: "test", id: submitted.id, reason: "superseded", fingerprint: preview.fingerprint }, { channel: "mcp" })).toMatchObject({ ok: true, rejected: true });
     expect(readFileSync(research, "utf8")).toBe(changed);
     expect(existsSync(join(vaultPath, "log"))).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("rejection confirmation returns current PII warning for the reason", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-reject-warn-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
+  try {
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, "research.md"), "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n");
+    addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp", pii: { email: "warn" } });
+    const operation = { op: "create", path: "proposed", frontmatter: { type: "insight", domain: "research", description: "Synthetic finding.", topics: ["[[research]]"] }, body: "# Proposed\n\nSynthetic body.\n\n## Topics\n\n- [[research]]\n" };
+    const submitted = submitProposal(home, { vault: "test", operation }, { channel: "mcp" }), reason = "Contact synthetic@example.invalid";
+    const preview = previewProposalReject(home, { vault: "test", id: submitted.id, reason }, { channel: "mcp" });
+    expect(preview.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "V07", severity: "warning" })]));
+    const result = rejectProposal(home, { vault: "test", id: submitted.id, reason, fingerprint: preview.fingerprint }, { channel: "mcp" });
+    expect(result).toMatchObject({ ok: true, rejected: true });
+    expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "V07", severity: "warning" })]));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -342,6 +359,13 @@ test("changed evidence source or vault policy invalidates an apply preview", () 
     addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp", registry });
     const reference = "vault/notes/research.md", operation = { op: "create", path: "proposed", frontmatter: { type: "insight", domain: "research", description: "Synthetic finding.", topics: ["[[research]]"], source: [reference], evidence: [{ source: reference, sha256: sha256(original), quote: "# Research" }] }, body: "# Proposed\n\nSynthetic body.\n\n## Topics\n\n- [[research]]\n" };
     const submitted = submitProposal(home, { vault: "test", operation }, { channel: "mcp" });
+    expect(submitted.issues.some(issue => issue.code === "EVIDENCE")).toBe(false);
+    const incorrect = { ...operation, path: "incorrect", frontmatter: { ...operation.frontmatter, evidence: [{ source: reference, sha256: "0".repeat(64), quote: "# Research" }] }, body: operation.body.replace("Proposed", "Incorrect") };
+    const wrongHash = submitProposal(home, { vault: "test", operation: incorrect }, { channel: "mcp" });
+    expect(wrongHash.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "EVIDENCE", message: expect.stringContaining("stale") })]));
+    expect(previewProposalApply(home, { vault: "test", id: wrongHash.id }, { channel: "mcp" }).issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "EVIDENCE", message: expect.stringContaining("stale") })]));
+    const missingQuote = { ...incorrect, path: "missing-quote", frontmatter: { ...operation.frontmatter, evidence: [{ source: reference, sha256: sha256(original), quote: "not in the source" }] }, body: operation.body.replace("Proposed", "Missing Quote") };
+    expect(submitProposal(home, { vault: "test", operation: missingQuote }, { channel: "mcp" }).issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "EVIDENCE", message: expect.stringContaining("missing") })]));
     const preview = previewProposalApply(home, { vault: "test", id: submitted.id }, { channel: "mcp" });
     writeFileSync(source, `${original}\nchanged source\n`);
     expect(applyProposal(home, { vault: "test", id: submitted.id, fingerprint: preview.fingerprint }, { channel: "mcp" }).applied).toBe(false);
