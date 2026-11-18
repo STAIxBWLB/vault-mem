@@ -141,6 +141,10 @@ test("submission screens and validates before storing without changing the vault
     expect(pageCount).toBeGreaterThan(1);
     expect(JSON.parse(assembled).body).toBe(longBody);
     expect(() => previewProposalReject(home, { vault: "test", id: second.id, reason: "x".repeat(4096) }, { channel: "mcp" })).toThrow("shorten the reason");
+    setVaultPii(home, "test", { email: "warn" }, true);
+    expect(listProposals(home, { vault: "test" }, { channel: "mcp" }).issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "V07", severity: "warning" })]));
+    expect(showProposal(home, { vault: "test", id: second.id }, { channel: "mcp" }).issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "V07", severity: "warning" })]));
+    expect(previewProposalReject(home, { vault: "test", id: second.id, reason: "not needed" }, { channel: "mcp" }).issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "V07", severity: "warning" })]));
     setVaultPii(home, "test", "deny", true);
     expect(() => listProposals(home, { vault: "test" }, { channel: "mcp" })).toThrow("disclosure policy");
     expect(() => showProposal(home, { vault: "test", id: second.id }, { channel: "mcp" })).toThrow("disclosure policy");

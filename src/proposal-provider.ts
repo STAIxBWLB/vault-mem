@@ -21,13 +21,13 @@ export interface ProposalContext { channel: "cli" | "mcp"; env?: NodeJS.ProcessE
 export interface ProposalSubmitted { ok: boolean; stored: true | null; id: string; vault: string; path: string | null; state: "pending" | null; createdAt: string; payloadDigest: string | null; issues: WriteIssue[] }
 export interface ProposalSummary { id: string; vault: string; path: string; state: ProposalRecord["state"]; createdAt: string }
 export interface ProposalListRequest { vault: string; state?: ProposalRecord["state"]; limit?: number; after?: string }
-export interface ProposalPage { items: ProposalSummary[]; nextCursor: string | null }
+export interface ProposalPage { items: ProposalSummary[]; nextCursor: string | null; issues: WriteIssue[] }
 export interface ProposalShowRequest { vault: string; id: string; offset?: number; maxBytes?: number }
-export interface ProposalView { id: string; vault: string; state: ProposalRecord["state"]; path: string; createdAt: string; payloadDigest: string; agentLabelUnverified?: string; decisionReason?: string; content: string; offset: number; nextOffset: number | null; truncated: boolean }
+export interface ProposalView { id: string; vault: string; state: ProposalRecord["state"]; path: string; createdAt: string; payloadDigest: string; agentLabelUnverified?: string; decisionReason?: string; content: string; offset: number; nextOffset: number | null; truncated: boolean; issues: WriteIssue[] }
 export interface ProposalApplyPreview { id: string; vault: string; state: "pending"; fingerprint: string; changes: ChangeReceipt[]; issues: WriteIssue[] }
 export interface ProposalApplyResult { ok: boolean; applied: boolean; state: "pending" | "applied" | "apply_unknown"; logged: boolean | null; issues: WriteIssue[] }
-export interface ProposalReconciliation { id: string; vault: string; state: "apply_unknown"; beforeSha: string | null; afterSha: string | null; observedSha: string | null; matchesBefore: boolean; matchesAfter: boolean; receiptEvidence: "unavailable"; explanation: string }
-export interface ProposalRejectPreview { id: string; vault: string; state: "pending"; reason: string; fingerprint: string }
+export interface ProposalReconciliation { id: string; vault: string; state: "apply_unknown"; beforeSha: string | null; afterSha: string | null; observedSha: string | null; matchesBefore: boolean; matchesAfter: boolean; receiptEvidence: "unavailable"; explanation: string; issues: WriteIssue[] }
+export interface ProposalRejectPreview { id: string; vault: string; state: "pending"; reason: string; fingerprint: string; issues: WriteIssue[] }
 const MAX_SHOW_BYTES = 16 * 1024, MAX_RPC_REPLY_BYTES = 48 * 1024;
 
 /** Conservative complete MCP reply size; MCP limits request IDs to 200 UTF-16 units (at most 1200 encoded bytes). */
@@ -55,11 +55,19 @@ function currentBinding(home: string, id: string, options: ProposalContext) {
   const bindingDigest = createHash("sha256").update(JSON.stringify([vault.id, vault.path, binding.dev, binding.ino]), "utf8").digest("hex");
   return { config, vault, binding, bindingDigest };
 }
-function screenForRead(record: ProposalRecord, context: ReturnType<typeof currentBinding>): void {
+function warningsOf(...groups: WriteIssue[][]): WriteIssue[] {
+  const seen = new Set<string>(), out: WriteIssue[] = [];
+  for (const issue of groups.flat()) if (issue.severity === "warning" && !seen.has(`${issue.code}:${issue.message}`)) {
+    seen.add(`${issue.code}:${issue.message}`); out.push({ code: issue.code, severity: "warning", message: issue.message });
+  }
+  return out;
+}
+function screenForRead(record: ProposalRecord, context: ReturnType<typeof currentBinding>): WriteIssue[] {
   if (record.vault !== context.vault.id || record.bindingDigest !== context.bindingDigest || isDenied(join(context.vault.path, record.operation.path), context.config.denyPaths ?? []))
     throw new Error("proposal: stored binding or target is denied or changed; inspect the registered vault and policy");
   const issues = screenMetadata({ operation: record.operation, agentLabel: record.agentLabel, decisionReason: record.decisionReason }, { vault: context.vault, config: context.config }, record.operation.path);
   if (issues.some(issue => issue.severity === "error")) throw new Error("proposal: current disclosure policy refuses stored content; inspect the vault policy");
+  return warningsOf(issues);
 }
 function bindingStillCurrent(home: string, context: ReturnType<typeof currentBinding>): boolean {
   try { return matchesBinding(loadRegistry(home), context.vault.id, context.binding); } catch { return false; }
@@ -131,7 +139,7 @@ export function submitProposal(home: string, request: ProposalSubmitRequest, opt
   try { fd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
   catch { throw new Error("proposal: registry lock is unavailable; stop concurrent registry updates and inspect the lock"); }
   let attempted = false, stored = false, primary: unknown;
-  const issues: WriteIssue[] = [];
+  const issues: WriteIssue[] = warningsOf(screen, preview.issues);
   try {
     writeFileSync(fd, JSON.stringify({ pid: process.pid, host: hostname(), created: new Date().toISOString() }) + "\n"); fsyncSync(fd);
     if (!matchesBinding(loadRegistry(home), vault.id, binding)) throw new Error("proposal: vault binding or policy changed during submit; request a new preview");
@@ -153,7 +161,7 @@ export function submitProposal(home: string, request: ProposalSubmitRequest, opt
   let current = false;
   try { current = matchesBinding(loadRegistry(home), vault.id, binding); } catch { /* Unavailable policy cannot authorize disclosure. */ }
   if (!current) issues.push({ code: "VAULT_DRIFT", severity: "error", message: "vault binding or policy changed during submission; inspect the registered vault and proposal store" });
-  return { ok: stored && issues.length === 0, stored: stored ? true : null, id: record.id, vault: record.vault, path: current ? operation.path : null, state: stored ? "pending" : null, createdAt, payloadDigest: current ? record.payloadDigest : null, issues };
+  return { ok: stored && issues.every(issue => issue.severity !== "error"), stored: stored ? true : null, id: record.id, vault: record.vault, path: current ? operation.path : null, state: stored ? "pending" : null, createdAt, payloadDigest: current ? record.payloadDigest : null, issues: current ? issues : issues.filter(issue => issue.severity === "error") };
 }
 
 /** Returns screened summaries, examining at most 512 records per call. The cursor is a record id, never a path. */
@@ -165,19 +173,20 @@ export function listProposals(home: string, request: ProposalListRequest, option
   const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) {
     if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding)) throw new Error("proposal: vault binding or policy changed during listing; retry with the current policy");
-    return { items: [], nextCursor: null };
+    return { items: [], nextCursor: null, issues: [] };
   }
   const ids = listStoredProposalIds(home, context.bindingDigest, context.config.denyPaths ?? []).filter(id => request.after === undefined || id > request.after);
-  const items: ProposalSummary[] = []; let scanned = 0, cursor: string | null = null;
+  const items: ProposalSummary[] = [], warningGroups: WriteIssue[][] = []; let scanned = 0, cursor: string | null = null;
   for (const id of ids) {
     if (scanned >= 512 || items.length >= limit) break;
     const record = readStoredProposal(home, context.bindingDigest, id, context.config.denyPaths ?? []); scanned++; cursor = id;
-    screenForRead(record, context);
+    const warnings = screenForRead(record, context);
     if (record.state !== state) continue;
+    warningGroups.push(warnings);
     items.push({ id: record.id, vault: record.vault, path: record.operation.path, state: record.state, createdAt: record.createdAt });
   }
   if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding)) throw new Error("proposal: vault binding or policy changed during listing; retry with the current policy");
-  return { items, nextCursor: scanned < ids.length ? cursor : null };
+  return { items, nextCursor: scanned < ids.length ? cursor : null, issues: warningsOf(...warningGroups) };
 }
 
 /** Pages the normalized operation as UTF-8 text without splitting a code point or exceeding the encoded MCP reply cap. */
@@ -190,7 +199,7 @@ export function showProposal(home: string, request: ProposalShowRequest, options
   const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
   const record = readStoredProposal(home, context.bindingDigest, request.id, context.config.denyPaths ?? []);
-  screenForRead(record, context);
+  const issues = screenForRead(record, context);
   const serialized = JSON.stringify(record.operation), bytes = Buffer.from(serialized, "utf8");
   if (offset > bytes.length || !Buffer.from(bytes.subarray(0, offset).toString("utf8"), "utf8").equals(bytes.subarray(0, offset)))
     throw new Error("proposal: offset is outside the payload or splits a UTF-8 character; use the returned nextOffset");
@@ -199,7 +208,7 @@ export function showProposal(home: string, request: ProposalShowRequest, options
     const content = chars.slice(0, count).join(""), end = offset + Buffer.byteLength(content, "utf8"), more = end < bytes.length;
     return { id: record.id, vault: record.vault, state: record.state, path: record.operation.path, createdAt: record.createdAt, payloadDigest: record.payloadDigest,
       ...(record.agentLabel !== undefined ? { agentLabelUnverified: record.agentLabel } : {}), ...(record.decisionReason !== undefined ? { decisionReason: record.decisionReason } : {}),
-      content, offset, nextOffset: more ? end : null, truncated: more };
+      content, offset, nextOffset: more ? end : null, truncated: more, issues };
   };
   let low = 0, high = chars.length;
   while (low < high) {
@@ -220,7 +229,7 @@ export function previewProposalApply(home: string, request: { vault: string; id:
   const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
   const record = readStoredProposal(home, context.bindingDigest, request.id, context.config.denyPaths ?? []);
-  screenForRead(record, context);
+  const warnings = screenForRead(record, context);
   if (record.state !== "pending") throw new Error(`proposal: ${record.state === "apply_unknown" ? "apply outcome is unknown; reconcile before another decision" : "proposal is no longer pending; inspect the proposal"}`);
   const recordDigest = proposalRecordDigest(record);
   const preview = applyWrite(home, { vault: record.vault, operation: record.operation, channel: options.channel, dryRun: true }, { binding: context.binding, env: options.env, now: options.now });
@@ -228,7 +237,7 @@ export function previewProposalApply(home: string, request: { vault: string; id:
   if (preview.changes.length !== 1) throw new Error("proposal: apply preview is not a single note change; inspect the proposal");
   if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id, context.config.denyPaths ?? [])) !== recordDigest)
     throw new Error("proposal: record, vault binding or policy changed during preview; request a new preview");
-  return { id: record.id, vault: record.vault, state: "pending", fingerprint: proposalDecisionFingerprint(recordDigest, preview.fingerprint, "apply"), changes: preview.changes, issues: preview.issues };
+  return { id: record.id, vault: record.vault, state: "pending", fingerprint: proposalDecisionFingerprint(recordDigest, preview.fingerprint, "apply"), changes: preview.changes, issues: [...preview.issues, ...warningsOf(warnings)] };
 }
 
 /** Preview a rejection without changing the proposal, notes, graph or log. */
@@ -238,9 +247,10 @@ export function previewProposalReject(home: string, request: { vault: string; id
   const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
   const record = readStoredProposal(home, context.bindingDigest, request.id, context.config.denyPaths ?? []);
-  screenForRead(record, context);
+  const warnings = screenForRead(record, context);
   if (record.state !== "pending") throw new Error(`proposal: ${record.state === "apply_unknown" ? "apply outcome is unknown; reconcile before another decision" : "proposal is no longer pending; inspect the proposal"}`);
-  if (screenMetadata({ reason: request.reason }, { vault: context.vault, config: context.config }, record.operation.path).some(issue => issue.severity === "error"))
+  const reasonIssues = screenMetadata({ reason: request.reason }, { vault: context.vault, config: context.config }, record.operation.path);
+  if (reasonIssues.some(issue => issue.severity === "error"))
     throw new Error("proposal: current policy refuses the rejection reason; remove prohibited content or inspect the vault policy");
   const rejected: ProposalRecord = { ...record, state: "rejected", decisionReason: request.reason, updatedAt: (options.now ?? new Date()).toISOString() };
   if (Buffer.byteLength(JSON.stringify(rejected), "utf8") > MAX_PROPOSAL_RECORD_BYTES) throw new Error("proposal: rejection would exceed the 32 KiB record bound; shorten the reason and preview again");
@@ -248,7 +258,7 @@ export function previewProposalReject(home: string, request: { vault: string; id
   const recordDigest = proposalRecordDigest(record), plan = proposalRejectionPlan(home, record.vault, options.channel, context.binding);
   if (!bindingStillCurrent(home, context) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id, context.config.denyPaths ?? [])) !== recordDigest)
     throw new Error("proposal: record, vault binding or policy changed during preview; request a new preview");
-  return { id: record.id, vault: record.vault, state: "pending", reason: request.reason, fingerprint: proposalDecisionFingerprint(recordDigest, plan, "reject", request.reason) };
+  return { id: record.id, vault: record.vault, state: "pending", reason: request.reason, fingerprint: proposalDecisionFingerprint(recordDigest, plan, "reject", request.reason), issues: warningsOf(warnings, reasonIssues) };
 }
 
 /** Confirm a rejection using a freshly recomputed plan while holding the vault's mutation lock. */
@@ -258,11 +268,11 @@ export function rejectProposal(home: string, request: { vault: string; id: strin
   const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
   const record = readStoredProposal(home, context.bindingDigest, request.id, context.config.denyPaths ?? []);
-  screenForRead(record, context);
+  const warnings = screenForRead(record, context);
   if (record.state !== "pending") throw new Error(`proposal: ${record.state === "apply_unknown" ? "apply outcome is unknown; reconcile before another decision" : "proposal is no longer pending; inspect the proposal"}`);
   const result = rejectProposalWrite(home, record.vault, options.channel, context.binding, { id: record.id, bindingDigest: context.bindingDigest, recordDigest: proposalRecordDigest(record), fingerprint: request.fingerprint, reason: request.reason }, options.now);
   if (!bindingStillCurrent(home, context)) return { ok: false, rejected: result.rejected, issues: [{ code: "VAULT_DRIFT", severity: "error", message: `vault binding or policy changed${result.rejected ? " after rejection was recorded" : ""}; inspect the registered vault and proposal` }] };
-  return result;
+  return { ...result, issues: [...result.issues, ...warnings] };
 }
 
 /** Confirm through the existing writer; an applied note remains applied even if logging or receipt persistence fails. */
@@ -272,13 +282,14 @@ export function applyProposal(home: string, request: { vault: string; id: string
   const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
   const record = readStoredProposal(home, context.bindingDigest, request.id, context.config.denyPaths ?? []);
-  screenForRead(record, context);
+  const warnings = screenForRead(record, context);
   if (record.state !== "pending") throw new Error(`proposal: ${record.state === "apply_unknown" ? "apply outcome is unknown; reconcile before another decision" : "proposal is no longer pending; inspect the proposal"}`);
   const receipt = applyProposalWrite(home, { vault: record.vault, operation: record.operation, channel: options.channel }, {
     binding: context.binding, env: options.env, now: options.now,
     proposal: { id: record.id, bindingDigest: context.bindingDigest, recordDigest: proposalRecordDigest(record), fingerprint: request.fingerprint },
   });
-  return finishProposalApply(home, context, record, request.fingerprint, receipt, options.now);
+  const result = finishProposalApply(home, context, record, request.fingerprint, receipt, options.now);
+  return bindingStillCurrent(home, context) ? { ...result, issues: [...result.issues, ...warnings] } : result;
 }
 
 /** Compare recorded intent to the current target without inferring attribution or changing state. */
@@ -288,12 +299,12 @@ export function reconcileProposal(home: string, request: { vault: string; id: st
   const context = currentBinding(home, request.vault, options);
   if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
   const record = readStoredProposal(home, context.bindingDigest, request.id, context.config.denyPaths ?? []);
-  screenForRead(record, context);
+  const warnings = screenForRead(record, context);
   if (record.state !== "apply_unknown" || !record.intent) throw new Error("proposal: reconciliation needs an uncertain apply; inspect the proposal state");
   const recordDigest = proposalRecordDigest(record), observedSha = proposalTargetDigest(home, record.vault, record.operation.path, context.binding);
   if (!bindingStillCurrent(home, context) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id, context.config.denyPaths ?? [])) !== recordDigest)
     throw new Error("proposal: record, vault binding or policy changed during reconciliation; retry with the current policy");
   return { id: record.id, vault: record.vault, state: "apply_unknown", beforeSha: record.intent.beforeSha, afterSha: record.intent.afterSha, observedSha,
     matchesBefore: observedSha === record.intent.beforeSha, matchesAfter: observedSha === record.intent.afterSha, receiptEvidence: "unavailable",
-    explanation: "Matching content does not prove this proposal published it; inspect independent receipt evidence before any manual recovery." };
+    explanation: "Matching content does not prove this proposal published it; inspect independent receipt evidence before any manual recovery.", issues: warnings };
 }
