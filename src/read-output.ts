@@ -8,6 +8,7 @@ import type { LogReadResult, LogReceipt } from "./log-types.ts";
 import type { LintCode, LintReport } from "./analysis-types.ts";
 import type { GraphNeighborhood, GraphPath } from "./vault-graph.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
+import type { EvidenceReport } from "./evidence.ts";
 import { blocks, clean, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
 
 const command = (...words: string[]) => ["vmem", ...words].map(shellWord).join(" ");
@@ -62,7 +63,7 @@ export function logAppendText(r: LogReceipt, o: TextOptions, c: { vault: string;
   return blocks(line, issueTable(r.issues, o));
 }
 
-const LEVELS: Record<LintCode, "error" | "warn"> = { L01: "error", L02: "error", L03: "warn", L09: "warn", L10: "warn", L11: "warn", L12: "warn", L13: "error", L14: "warn", L15: "warn" };
+const LEVELS: Record<LintCode, "error" | "warn"> = { L01: "error", L02: "error", L03: "warn", L09: "warn", L10: "warn", L11: "warn", L12: "warn", L13: "error", L14: "warn", L15: "warn", L16: "warn" };
 const verdict = (r: { errors: number; warnings: number; summary: string }, o: TextOptions) => paint(clean(r.summary), r.errors ? "fail" : r.warnings ? "warn" : "ok", o);
 export function lintText(d: { report: LintReport; notes: number; titles: Record<LintCode, string>; info: Partial<Record<LintCode, string>> }, o: TextOptions, c: { vault: string; note?: string }): string {
   const rows = (Object.keys(d.report.findings) as LintCode[]).flatMap(code => {
@@ -109,4 +110,13 @@ export function pathText(r: GraphPath, o: TextOptions, c: { vault: string; maxHo
   }
   const lines = r.edges.map(e => `${clean(e.source)} -[${e.relation === "wiki_link" ? e.rel ?? e.relation : e.relation}]-> ${clean(e.target)}`);
   return [...lines, `path from ${clean(r.from)} to ${clean(r.to)}: ${plural(r.length, "hop")}`].join("\n");
+}
+
+/** `vmem evidence`: one row per entry with status, reason and byte offsets. Quotes are not echoed. */
+export function evidenceText(r: EvidenceReport, o: TextOptions): string {
+  const head = heading(`evidence ${r.vault} ${r.note.path}: ${plural(r.evidence.length, "entry", "entries")}`, o);
+  if (!r.evidence.length) return blocks(head, paint("no evidence metadata", "muted", o));
+  const t = (s: EvidenceReport["evidence"][number]["status"]) => s === "verified" ? "ok" : s === "unverified_external" ? "muted" : s === "unsupported" ? "fail" : "warn";
+  const rows = r.evidence.map(e => [String(e.index), tone(e.status, t(e.status)), e.reason ?? "", e.match ? `${e.match.start}..${e.match.end}` : "", e.source ?? ""]);
+  return blocks(head, table(["#", "STATUS", "REASON", "BYTES", "SOURCE"], rows, o));
 }

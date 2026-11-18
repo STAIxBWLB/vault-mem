@@ -39,6 +39,8 @@ export { syncVault, sameRemote } from "./sync.ts";
 export type { SyncResult } from "./sync.ts";
 
 export { normalizeSource, sourceReferences } from "./source.ts";
+export { evidenceReport, verifyNoteEvidence, verifyEvidenceEntry, parseEvidence, evidenceProblem, screenEvidenceForTarget, EVIDENCE_SCHEMA_VERSION } from "./evidence.ts";
+export type { EvidenceEntry, EvidenceResult, EvidenceReport, EvidenceStatus, EvidenceReason } from "./evidence.ts";
 export type { SourceValue, SourceReference } from "./source.ts";
 export { tidyVault, parseTidyMap, TIDY_RULES } from "./tidy.ts";
 export type { TidyRequest, TidyResult, TidyRule, TidyMap } from "./tidy.ts";

@@ -16,6 +16,7 @@ import { appendLog, logBinding } from "./vault-log.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
 import type { LogBinding, LogReceipt } from "./log-types.ts";
 import { analysisInput } from "./analysis-input.ts";
+import { screenEvidenceForTarget } from "./evidence.ts";
 import { lintVault } from "./vault-lint.ts";
 import type { AnalysisSnapshot } from "./analysis-types.ts";
 
@@ -41,6 +42,8 @@ export interface OrgPromoteResult {
   target: string | null;
   text?: string;
   droppedLinks?: string[];
+  /** Evidence entries removed because their source is not retained at the destination: index and reason only. */
+  evidenceRemoved?: { index: number; reason: string }[];
   /** Target-vault advisory data, excluded from the promotion fingerprint. */
   canonRowMatches?: CanonRowMatch[];
   canonTableWarnings?: string[];
@@ -229,6 +232,12 @@ export function promoteToOrg(home: string, request: OrgPromoteRequest, options: 
   for (const key of ["project", "superseded_by", "supersedes", "source_ref"]) {
     const values = strings(parsed.data[key]);
     if (values.some(value => value.includes("[[") && !targetNotes.resolved.has(linkKey(value)))) { frontmatter[key] = undefined; transformed.dropped.push(`${key}:${values.join(",")}`); }
+  }
+  // Evidence whose source is not retained in the target vault is removed; its path and quote never reach the org note.
+  if (parsed.data.evidence !== undefined) {
+    const screened = screenEvidenceForTarget(parsed.data.evidence, parsed.data.source, target, config.denyPaths ?? []);
+    frontmatter.evidence = screened.kept;
+    if (screened.removed.length) result.evidenceRemoved = screened.removed;
   }
   let text = emitFrontmatter(parseFrontmatter(parsed.source.slice(0, parsed.source.length - parsed.body.length) + body), frontmatter);
   result.target = `${target.id}:${targetPath}`; result.text = text; result.droppedLinks = transformed.dropped;

@@ -3,7 +3,9 @@ import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
 import { PLAIN, type TextOptions } from "./text-output.ts";
 import { linksText, rebuildText, searchText, showText } from "./read-output.ts";
 import type { NoteReadResult, SearchResult } from "./vault-index.ts";
-const READ_COMMANDS = new Set(["rebuild", "search", "show", "links"]);
+import { evidenceReport } from "./evidence.ts";
+import { evidenceText } from "./read-output.ts";
+const READ_COMMANDS = new Set(["rebuild", "search", "show", "links", "evidence"]);
 export function isReadCommand(command: string): boolean { return READ_COMMANDS.has(command); }
 export function runReadCommand(command: string, args: string[], home: string, text: TextOptions = PLAIN): { text: string; code: number } {
   const options: Record<string, string | boolean> = {}, positional: string[] = [];
@@ -20,6 +22,11 @@ export function runReadCommand(command: string, args: string[], home: string, te
   if (positional.length !== (command === "rebuild" ? 1 : 2)) throw new Error(`${command}: requires vault id${command === "rebuild" ? "" : " and query/target"}`);
   const registry = loadRegistry(home), vault = registry.vaults.find(v => v.id === positional[0]);
   if (!vault) throw new Error(`${command}: unknown vault id`);
+  // Evidence reads the note and its sources directly: no index cache, lock or write.
+  if (command === "evidence") {
+    const report = evidenceReport(vault, positional[1]!, registry.denyPaths ?? []);
+    return { text: options["--json"] ? JSON.stringify(report) : evidenceText(report, text), code: 0 };
+  }
   const number = (name: string): number | undefined => {
     if (options[name] === undefined) return undefined;
     if (!/^[0-9]+$/.test(String(options[name]))) throw new Error(`${name}: expected integer`);

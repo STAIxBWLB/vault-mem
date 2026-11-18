@@ -9,6 +9,7 @@ import { MAX_WRITE_BYTES, type PlannedChange, type ValidationContext, type Write
 import type { PiiSurface } from "./config.ts";
 import { screenPii } from "./pii.ts";
 import { moveSourcePath } from "./write-operations.ts";
+import { evidenceProblem } from "./evidence.ts";
 
 const TYPES = new Set(["insight", "decision", "observation", "person", "project", "method", "moc", "reference"]);
 const CONFIDENCE = new Set(["proven", "likely", "experimental"]);
@@ -19,7 +20,7 @@ const KEYS = new Set([
   "methodology", "evidence_strength", "project", "alternatives", "superseded_by", "supersedes", "stakeholders",
   "course", "semester", "student_level", "institution", "policy_area", "role", "affiliation", "last_contact",
   "tool", "category", "resolution_status", "aliases", "tags", "cssclasses", "title", "created", "updated", "received", "entities",
-  "promoted_from", "promoted_at", "promoted_to", "source_ref",
+  "promoted_from", "promoted_at", "promoted_to", "source_ref", "evidence",
   // Adopted in the V2 cutover (#22): decision dates/owners and person contact fields.
   "decided_at", "decided_by", "email", "phone",
   "citekey", "doi", "arxiv_id", "authors", "year", "venue",
@@ -162,6 +163,7 @@ function schema(note: ParsedNote, vault: VaultSpec): SchemaIssue[] {
     if (data[key] !== undefined && (typeof data[key] !== "string" || !allowed.has(data[key]))) add(key,`invalid ${key} enum`);
   }
   if(data.source!==undefined)try{sourceReferences(data.source);}catch{add("source","source must contain workspace-relative paths, mem ids or URLs");}
+  if(data.evidence!==undefined){const problem=evidenceProblem(data.evidence,data.source);if(problem)add("evidence",problem,["evidence","source"]);}
   if (data.type === "reference") {
     if (data.citekey !== undefined && (typeof data.citekey !== "string" || !/^[A-Za-z0-9_:-]{1,64}(?![\s\S])/.test(data.citekey))) add("citekey", "citekey must match [A-Za-z0-9_:-]{1,64}");
     if (data.doi !== undefined && (typeof data.doi !== "string" || !/^10\.[0-9]{4,9}\/[^\s\p{C}]+(?![\s\S])/u.test(data.doi))) add("doi", "doi must be 10.<4..9 digit registrant>/<nonempty suffix>, without whitespace or control characters");
