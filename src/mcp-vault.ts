@@ -1,4 +1,5 @@
 import { vaultBrief } from "./vault-brief.ts";
+import { evidenceReport } from "./evidence.ts";
 import { createSpecMcp } from "./mcp-spec.ts";
 import { SPEC_COMMANDS } from "./spec-command-table.ts";
 import { analysisInput } from "./analysis-input.ts";
@@ -34,7 +35,7 @@ const metadata = { type: "object", maxProperties: 32, properties: { authors: { t
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_brief", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_stats", ...SPEC_COMMANDS.map(item => item.name)] as const;
+  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_evidence", "vmem_stats", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Server `initialize` instructions: purpose, navigation order and the write contract. Pinned by a test, under 400 bytes. */
 export const VMEM_INSTRUCTIONS = "vmem is a vault of durable, linked knowledge: notes with frontmatter, wiki-links and an append-only log. Search first with vmem_search, then read the best match with vmem_read, using section for one H2. Writes are validated and receipted: a refusal lists issues, and a failure after publication can leave changes behind, so read the receipt and its issues before retrying.";
@@ -78,6 +79,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_read_file", "Read one UTF-8 file outside notes/: ops/, reports/, self/, templates/, AGENTS.md or README.md. Same bounds and paging as vmem_read (maxBytes, offset, nextOffset); notes/ use vmem_read, the log vmem_log_tail. Never locks or writes.", object({ vault, path: string(1024), maxBytes: integer(1, 65536), offset: integer(0, MAX_NOTE_BYTES) }, ["path"])),
     tool("vmem_list_files", "List one directory level under ops/, reports/, self/ or templates/ (up to 500 entries; dot, linked and denied entries omitted). Never locks or writes.", object({ vault, dir: string(1024) }, ["dir"])),
     tool("vmem_report", "Write a screened report file under reports/ or ops/ (the MCP form of `vmem report`): same path rules, screening, write policy (write=mcp), receipt and EXTRACT log event; log overrides it, for example a LINT or GRAPH event. dryRun changes nothing.", object({ vault, path: string(200), body: string(65536, 0), dryRun: { type: "boolean" }, log: logEvent }, ["path", "body"]), "write"),
+    tool("vmem_evidence", "Verify a note's version-1 evidence entries (source, sha256, quote, optional section): flat notes/*.md sources in the same vault are re-read on every call and reported verified, stale, missing, ambiguous or unsupported with UTF-8 byte offsets; other references are unverified_external without I/O. Proves that quoted bytes occur in a source version, not that a claim is true. Writes nothing, takes no lock, keeps no cache.", object({ vault, path: note }, ["path"])),
     tool("vmem_stats", "Read-only vault statistics: note counts by type, domain and status, note bytes and words in total and by type and domain, and the note-to-source byte ratio (median, p90 and the largest notes) over the workspace files the notes cite. A source counts at its own byte size on disk, so a decoded byte count never inflates a file that is not UTF-8; non-file, unreadable and over-cap sources are skipped and counted, and `truncatedNotes` counts the sourced notes the ratio's 10000-note cap left out. Also notes modified in the last 7 and 30 days, and log event counts by type over the last `days` (default 30). Writes no vault file or log and takes no vault or log lock.", object({ vault, days: integer(1, STATS_MAX_DAYS) })),
   ];
 }
@@ -153,6 +155,8 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
       catch (error) { return { path, ...refusal("V04", error instanceof Error ? error.message : "unreadable") }; }
     }) })),
     vmem_list: args => read(args, index => index.list(str(args.prefix) ?? "", (args.limit as number | undefined) ?? 100, str(args.cursor))),
+    // Registry is reloaded per call so the source root is rebound on every verification.
+    vmem_evidence: args => { const registry = loadRegistry(home), spec = registry.vaults.find(v => v.id === pick(args).id); if (!spec) throw Object.assign(new Error("unknown vault id"), { code: "V04" }); return evidenceReport(spec, str(args.path)!, registry.denyPaths ?? []); },
     vmem_stats: args => vaultStats(home, pick(args).id, { expectedVault: pick(args), ...(typeof args.days === "number" ? { days: args.days } : {}) }),
     vmem_links: args => read(args, index => {
       const direction = str(args.direction) ?? "both", limit = (args.limit as number | undefined) ?? 50;

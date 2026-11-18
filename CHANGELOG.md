@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add optional version-1 `evidence` frontmatter (`source`, `sha256`, `quote`, optional exact H2 `section`; at most 16 entries and 16 KiB, each source also listed in `source`) and the read-only `vmem evidence <vault> <note> [--json]` / `vmem_evidence` (schemaVersion 1). Flat `notes/*.md` sources in the same vault, resolved through the workspace root of the vault registry, are re-read on every call and reported `verified`, `stale`, `missing`, `ambiguous` or `unsupported` with UTF-8 byte offsets; other references are `unverified_external` without I/O. Newly introduced malformed evidence is a V01 write error; source drift is the new lint warning L16, never a write refusal. Org promotion removes evidence whose source is not retained in the target vault and lists the removals (`evidenceRemoved`, index and reason only). Existing notes and JSON shapes are unchanged.
+
 ## [0.9.1] - 2026-11-17
 
 - Keeps the 0.9 line's N-1 with 0.8.0 unchanged: note and spec index files (`links2-schema4`, schema 4), config format 4, link resolution, the pinned MCP `initialize` instructions, the 38 MCP tools and the CLI commands are the same as 0.9.0, and agent-mem 0.28.0 keeps curated `INDEX_VERSION` 4, so both versions still read the same memory home.

@@ -43,7 +43,7 @@ Output: every command prints text for people by default, following agent-hub's C
 | area | commands | reference |
 |---|---|---|
 | Registry and policy | `status`, `doctor`, `recover`, `vaults add\|list\|remove\|pii`, `specs add\|list\|remove` | [configuration](docs/reference/configuration.md) |
-| Reads | `rebuild`, `search`, `show`, `links`, `brief`, `stats` | [reads](docs/reference/reads.md) |
+| Reads | `rebuild`, `search`, `show`, `links`, `brief`, `stats`, `evidence` | [reads](docs/reference/reads.md) |
 | Writes and log | `new`, `patch`, `append`, `frontmatter`, `link`, `supersede`, `merge`, `move`, `delete`, `check`, `report`, `tidy`, `log append\|tail\|grep` | [writes](docs/reference/writes.md) |
 | MCP and hosts | `mcp`, `setup`, `completion`, `manifest` | [mcp-and-setup](docs/reference/mcp-and-setup.md) |
 | Promotion and sync | `promote-from-amem`, `promote`, `sync` | [promotion-and-sync](docs/reference/promotion-and-sync.md) |
@@ -57,6 +57,7 @@ Output: every command prints text for people by default, following agent-hub's C
 - Live cutover of an existing vault writer: outside this repository (see Status).
 - File watching, model calls and embeddings: reads and writes are deterministic and offline.
 - Cross-vault links: `[[x]]` always resolves inside its own vault.
+- Evidence verification of sources outside the same vault's `notes/` (other files, other vaults, URLs, memory ids): those entries are stored and reported `unverified_external` or `unsupported`, never fetched.
 - Scheduled or automatic sync and push.
 - A resolution setting for graph communities.
 - An event-filtered capture read for skill mining.
@@ -88,6 +89,7 @@ The only runtime dependency is the exact first-party pin <!-- facts:amem-pin -->
 - `src/org-promote.ts`: `promoteToOrg`, `screenForOrg`, `dropUnresolvedLinks`, `lintPromoted`
 - `src/sync.ts`: `syncVault`, `sameRemote`
 - `src/source.ts`: `normalizeSource`, `sourceReferences`
+- `src/evidence.ts`: `evidenceReport`, `verifyNoteEvidence`, `verifyEvidenceEntry`, `parseEvidence`, `evidenceProblem`, `screenEvidenceForTarget`, `EVIDENCE_SCHEMA_VERSION`
 - `src/tidy.ts`: `tidyVault`, `parseTidyMap`, `TIDY_RULES`
 - `src/spec-source.ts`: `resolveSpecWorktree`, `discoverSpecs`, `SpecIndex`
 - `src/spec-graph.ts`: `buildSpecGraph`, `specSlice`, `SPEC_EDGE_KINDS`, `MAX_SPEC_INPUTS`, `MAX_SPEC_EDGES`

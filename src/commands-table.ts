@@ -25,6 +25,7 @@ export const COMMANDS = [
   { name: "brief", usage: "brief <vault> --for INTENT [--paths PATH]... [--bytes 256..4096] [--json]", mutates: "cache", section: "Read", description: "rank screened note pointers and one-hop neighbors within a byte cap" },
   { name: "search", usage: "search <vault> <query> [--type TYPE] [--domain DOMAIN] [--limit 1..500] [--json]", mutates: "cache", section: "Read", description: "full-text search notes, optionally by type and domain" },
   { name: "show", usage: "show <vault> <target> [--section TEXT] [--offset 0..2097152] [--max-bytes 1..65536] [--json]", mutates: "cache", section: "Read", description: "print a note's fields and body, paged by section, offset and size" },
+  { name: "evidence", usage: "evidence <vault> <note> [--json]", mutates: false, section: "Read", description: "verify a note's evidence quotes against same-vault source notes; read-only, no cache" },
   { name: "links", usage: "links <vault> <target> [--limit 1..500] [--json]", mutates: "cache", section: "Read", description: "list a note's outgoing, dead and incoming links" },
   { name: "status", usage: "status [--json]", mutates: false, section: "Registry", description: "show the home, registered vaults and spec sources, and vault health" },
   { name: "doctor", usage: "doctor [--json]", mutates: false, section: "Registry", description: "check vault paths, remotes, project registries, pending tidy and spec sources; exits 1 when unhealthy" },
