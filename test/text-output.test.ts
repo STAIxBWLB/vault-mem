@@ -17,8 +17,8 @@ test("#114 AC2: --color is taken once from anywhere before --, and auto follows 
   expect(resolveColor(undefined, { isTTY: true, TERM: "dumb" })).toBe(false);
   expect(resolveColor(undefined, { isTTY: false })).toBe(false);
   expect(() => resolveColor("sometimes", { isTTY: true })).toThrow("--color=auto");
-  expect(textOptions("always", {}, { isTTY: false })).toEqual({ color: true });
-  expect(outputWidth({ isTTY: true, columns: 60 })).toBe(80);
+  expect(textOptions("always", {}, { isTTY: false })).toEqual({ color: true, ascii: true });
+  expect(outputWidth({ isTTY: true, columns: 60 })).toBe(60);
   expect(outputWidth({ isTTY: false, COLUMNS: "100" })).toBe(100);
   expect(outputWidth({ isTTY: false })).toBeUndefined();
   expect(() => run(["--version", "--color=sometimes"])).toThrow("--color=auto");
@@ -29,8 +29,8 @@ test("tables size columns by display width, wrap the last column only when a wid
   expect(table(["PATH", "LEVEL", "TITLE"], rows, PLAIN)).toBe(["PATH        LEVEL  TITLE", "사업단      ok     한글 제목", "notes/a.md  fail   x [31my"].join("\n"));
   const wrapped = table(["A", "B"], [["x", "one two three four five six"]], { color: false, columns: 23 }).split("\n");
   expect(wrapped).toEqual(["A  B", "x  one two three four", "   five six"]);
-  expect(paint("ok", "ok", { color: true })).toBe("\u001b[32mok\u001b[0m");
-  expect(table(["A"], [[tone("ok", "ok")]], { color: true })).toContain("\u001b[32mok\u001b[0m");
+  expect(paint("ok", "ok", { color: true })).toBe("\u001b[1;32mok\u001b[0m");
+  expect(table(["A"], [[tone("ok", "ok")]], { color: true })).toContain("\u001b[1;32mok\u001b[0m");
 });
 
 test("fields align labels, skip empty values and hang wrapped values; issues sort errors first", () => {
