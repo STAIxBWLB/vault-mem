@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalPayloadDigest, proposalRecordDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
+import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
 import { checkStoredBinding, createStoredProposal, readStoredProposal, replaceStoredProposal } from "../src/proposal-storage.ts";
 import { listProposals, proposalReplyBytes, showProposal, submitProposal } from "../src/proposal-provider.ts";
 import { addVault, removeVault, setVaultPii } from "../src/registry.ts";
@@ -81,6 +81,16 @@ test("record replacement binds the exact prior bytes and immutable payload", () 
     expect(() => replaceStoredProposal(home, pending.bindingDigest, pending.id, proposalRecordDigest(rejected), { ...rejected, operation: altered, payloadDigest: proposalPayloadDigest(altered) })).toThrow("immutable");
     expect(readStoredProposal(home, pending.bindingDigest, pending.id)).toEqual(rejected);
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("decision fingerprint binds prior record, writer plan, action and rejection reason", () => {
+  const record = "a".repeat(64), plan = "b".repeat(64);
+  const apply = proposalDecisionFingerprint(record, plan, "apply");
+  expect(apply).not.toBe(proposalDecisionFingerprint("c".repeat(64), plan, "apply"));
+  expect(apply).not.toBe(proposalDecisionFingerprint(record, "d".repeat(64), "apply"));
+  expect(apply).not.toBe(proposalDecisionFingerprint(record, plan, "reject", "not useful"));
+  expect(proposalDecisionFingerprint(record, plan, "reject", "not useful")).not.toBe(proposalDecisionFingerprint(record, plan, "reject", "different reason"));
+  expect(() => proposalDecisionFingerprint(record, plan, "reject", " ")).toThrow("rejection needs");
 });
 
 test("submission screens and validates before storing without changing the vault", () => {

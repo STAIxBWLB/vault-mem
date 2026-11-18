@@ -101,3 +101,11 @@ export function encodeProposalRecord(record: ProposalRecord): Uint8Array {
 export function proposalRecordDigest(record: ProposalRecord): string {
   return createHash("sha256").update(encodeProposalRecord(record)).digest("hex");
 }
+/** Bind the exact prior record and writer plan, including the rejection reason when present. */
+export function proposalDecisionFingerprint(recordDigest: string, writerFingerprint: string, decision: "apply" | "reject", reason?: string): string {
+  if (!digest(recordDigest) || !digest(writerFingerprint) || (decision !== "apply" && decision !== "reject")) throw new Error("proposal: invalid decision inputs; request a new preview");
+  if (decision === "reject" && (typeof reason !== "string" || !reason.trim() || Buffer.byteLength(reason, "utf8") > 4096))
+    throw new Error("proposal: rejection needs a nonempty reason of at most 4096 bytes; provide a reason and preview again");
+  if (decision === "apply" && reason !== undefined) throw new Error("proposal: an apply decision cannot carry a rejection reason; request a new preview");
+  return createHash("sha256").update(JSON.stringify(["vmem-proposal-decision", 1, decision, recordDigest, writerFingerprint, reason ?? null]), "utf8").digest("hex");
+}
