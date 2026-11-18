@@ -4,7 +4,7 @@ import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { loadRegistry } from "./registry.ts";
 import { logBinding, matchesBinding } from "./vault-log.ts";
-import { applyProposalWrite, applyWrite, proposalTargetDigest } from "./writer.ts";
+import { applyProposalWrite, applyWrite, proposalRejectionPlan, proposalTargetDigest, rejectProposalWrite, type ProposalRejectReceipt } from "./writer.ts";
 import { screenMetadata } from "./write-validation.ts";
 import { checkStoredBinding, createStoredProposal, listStoredProposalIds, readStoredProposal, replaceStoredProposal } from "./proposal-storage.ts";
 import { encodeProposalRecord, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, type ProposalRecord } from "./proposals.ts";
@@ -23,6 +23,7 @@ export interface ProposalView { id: string; vault: string; state: ProposalRecord
 export interface ProposalApplyPreview { id: string; vault: string; state: "pending"; fingerprint: string; changes: ChangeReceipt[]; issues: WriteIssue[] }
 export interface ProposalApplyResult { ok: boolean; applied: boolean; state: "pending" | "applied" | "apply_unknown"; logged: boolean | null; issues: WriteIssue[] }
 export interface ProposalReconciliation { id: string; vault: string; state: "apply_unknown"; beforeSha: string | null; afterSha: string | null; observedSha: string | null; matchesBefore: boolean; matchesAfter: boolean; receiptEvidence: "unavailable"; explanation: string }
+export interface ProposalRejectPreview { id: string; vault: string; state: "pending"; reason: string; fingerprint: string }
 const MAX_SHOW_BYTES = 16 * 1024, MAX_RPC_REPLY_BYTES = 48 * 1024;
 
 /** Conservative complete MCP reply size; MCP limits request IDs to 200 UTF-16 units (at most 1200 encoded bytes). */
@@ -150,6 +151,37 @@ export function previewProposalApply(home: string, request: { vault: string; id:
   if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id)) !== recordDigest)
     throw new Error("proposal: record, vault binding or policy changed during preview; request a new preview");
   return { id: record.id, vault: record.vault, state: "pending", fingerprint: proposalDecisionFingerprint(recordDigest, preview.fingerprint, "apply"), changes: preview.changes, issues: preview.issues };
+}
+
+/** Preview a rejection without changing the proposal, notes, graph or log. */
+export function previewProposalReject(home: string, request: { vault: string; id: string; reason: string }, options: ProposalContext): ProposalRejectPreview {
+  if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id", "reason"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string" || typeof request.reason !== "string" || !request.reason.trim() || Buffer.byteLength(request.reason, "utf8") > 4096)
+    throw new Error("proposal: rejection requires a nonempty reason of at most 4096 bytes; provide a reason and preview again");
+  const context = currentBinding(home, request.vault, options.channel);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
+  const record = readStoredProposal(home, context.bindingDigest, request.id);
+  screenForRead(record, context);
+  if (record.state !== "pending") throw new Error(`proposal: ${record.state === "apply_unknown" ? "apply outcome is unknown; reconcile before another decision" : "proposal is no longer pending; inspect the proposal"}`);
+  if (screenMetadata({ reason: request.reason }, { vault: context.vault, config: context.config }, record.operation.path).some(issue => issue.severity === "error"))
+    throw new Error("proposal: current policy refuses the rejection reason; remove prohibited content or inspect the vault policy");
+  const recordDigest = proposalRecordDigest(record), plan = proposalRejectionPlan(home, record.vault, options.channel, context.binding);
+  if (!bindingStillCurrent(home, context) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id)) !== recordDigest)
+    throw new Error("proposal: record, vault binding or policy changed during preview; request a new preview");
+  return { id: record.id, vault: record.vault, state: "pending", reason: request.reason, fingerprint: proposalDecisionFingerprint(recordDigest, plan, "reject", request.reason) };
+}
+
+/** Confirm a rejection using a freshly recomputed plan while holding the vault's mutation lock. */
+export function rejectProposal(home: string, request: { vault: string; id: string; reason: string; fingerprint: string }, options: ProposalContext): ProposalRejectReceipt {
+  if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id", "reason", "fingerprint"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string" || typeof request.reason !== "string" || !request.reason.trim() || Buffer.byteLength(request.reason, "utf8") > 4096 || typeof request.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(request.fingerprint))
+    throw new Error("proposal: invalid rejection confirmation; use the reason and fingerprint from a fresh preview");
+  const context = currentBinding(home, request.vault, options.channel);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
+  const record = readStoredProposal(home, context.bindingDigest, request.id);
+  screenForRead(record, context);
+  if (record.state !== "pending") throw new Error(`proposal: ${record.state === "apply_unknown" ? "apply outcome is unknown; reconcile before another decision" : "proposal is no longer pending; inspect the proposal"}`);
+  const result = rejectProposalWrite(home, record.vault, options.channel, context.binding, { id: record.id, bindingDigest: context.bindingDigest, recordDigest: proposalRecordDigest(record), fingerprint: request.fingerprint, reason: request.reason }, options.now);
+  if (!bindingStillCurrent(home, context)) return { ok: false, rejected: result.rejected, issues: [{ code: "VAULT_DRIFT", severity: "error", message: `vault binding or policy changed${result.rejected ? " after rejection was recorded" : ""}; inspect the registered vault and proposal` }] };
+  return result;
 }
 
 /** Confirm through the existing writer; an applied note remains applied even if logging or receipt persistence fails. */
