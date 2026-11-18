@@ -87,7 +87,7 @@ test("#114 links, log, rebuild and neighbours render tables, counts and next com
   ].join("\n"));
   expect(logAppendText({ ok: true, appended: true, synced: true, bytesWritten: 53, issues: [] }, PLAIN, { vault: "demo", type: "LEARN" })).toBe("appended LEARN to the demo log (53 bytes)");
   expect(logAppendText({ ok: false, appended: false, synced: false, bytesWritten: 0, issues: [{ code: "L09", severity: "error", message: "bad" }] }, PLAIN, { vault: "demo", type: "LEARN" }))
-    .toBe("log append: LEARN not appended\n\nLEVEL  CODE  PATH  MESSAGE\nerror  L09   -     bad");
+    .toBe("log append: LEARN not appended\n\nLEVEL     CODE  PATH  MESSAGE\n✗  error  L09   -     bad");
   expect(rebuildText({ vault: "demo", notes: 2, changed: 1, removed: 0 }, PLAIN)).toBe("rebuilt demo: 2 notes, 1 changed, 0 removed");
   const node = (id: string) => ({ id, label: id.toUpperCase(), type: "method", domain: "", source_file: `notes/${id}.md`, community: 0, degree: 1 });
   const edge = (source: string, target: string) => ({ source, target, relation: "wiki_link" as const, confidence_tag: "EXTRACTED" as const, confidence: 1 as const });

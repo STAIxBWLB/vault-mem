@@ -25,6 +25,10 @@ export function marker(name: Marker, o: TextOptions): string {
   const item = MARKERS[name], text = o.ascii ? item.ascii : item.glyph;
   return paint(text + " ".repeat(Math.max(0, 2 - width(text))), item.role, o);
 }
+/** A status marker with its state word or finding; padding remains visible without color. */
+export function status(name: "ok" | "warn" | "fail" | "unknown" | "pending" | "absent" | "active", text: string, o: TextOptions): string {
+  return `${marker(name, o)} ${paint(clean(text), MARKERS[name].role, o)}`;
+}
 export function summary(counts: { failed?: number; warnings?: number; ok?: number; unknown?: number }, o: TextOptions): string {
   const entries = [["fail", counts.failed, "failed"], ["warn", counts.warnings, "warnings"], ["ok", counts.ok, "ok"], ["unknown", counts.unknown, "unknown"]] as const;
   return entries.filter(([, count]) => count).map(([name, count, label]) => `${marker(name, o)} ${count} ${label}`).join("  ") || `${marker("ok", o)} 0 ok`;
@@ -157,7 +161,7 @@ export const plural = (count: number, one: string, many = `${one}s`) => `${count
 export function issueTable(issues: readonly WriteIssue[], o: TextOptions): string | undefined {
   if (!issues.length) return undefined;
   const sorted = [...issues].sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1));
-  return table(["LEVEL", "CODE", "PATH", "MESSAGE"], sorted.map(issue => [tone(issue.severity, issue.severity === "error" ? "fail" : "warn"), issue.code, issue.path ?? "-", issue.message]), o);
+  return table(["LEVEL", "CODE", "PATH", "MESSAGE"], sorted.map(issue => [tone(`${marker(issue.severity === "error" ? "fail" : "warn", { ...o, color: false })} ${issue.severity}`, issue.severity === "error" ? "fail" : "warn"), issue.code, issue.path ?? "-", issue.message]), o);
 }
 /** The command a person runs next, for example to confirm a preview or read the next page. */
 export const nextCommand = (label: string, command: string, o: TextOptions) => `${label}: ${paint(clean(command), "info", o)}`;

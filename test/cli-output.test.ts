@@ -38,9 +38,9 @@ test("#114 AC1: status prints a title verdict, a vault table, issues and spec so
   expect(renderStatus(STATUS, PLAIN)).toBe([
     "vmem 9.9.9  home /h (VMEM_HOME)  unhealthy",
     "",
-    "VAULT     KIND      WRITE  PII    HEALTH  PATH",
-    "personal  personal  mcp    allow  ok      /v/p",
-    "team      org       none   deny   fail    /v/t",
+    "VAULT     KIND      WRITE  PII    HEALTH   PATH",
+    "personal  personal  mcp    allow  ✓  ok    /v/p",
+    "team      org       none   deny   ✗  fail  /v/t",
     "team: vault path or notes directory unavailable or changed",
     "",
     "SOURCE  WRITE  PII   PATH",
@@ -54,24 +54,24 @@ test("#114 AC1: doctor prints LEVEL/CHECK/FINDING per vault and spec source, the
     "vmem 9.9.9  home /h (VMEM_HOME)",
     "",
     "Vault personal",
-    "LEVEL  CHECK   FINDING",
-    "ok     path    /v/p",
-    "fail   remote  origin differs",
-    "warn   tidy    2 notes to migrate (keys 2); 1 unparsable note skipped",
+    "LEVEL    CHECK   FINDING",
+    "✓  ok    path    /v/p",
+    "✗  fail  remote  origin differs",
+    "⚠  warn  tidy    2 notes to migrate (keys 2); 1 unparsable note skipped",
     "next: vmem tidy personal --all, then confirm its fingerprint to apply the migration",
     "",
     "Vault team",
-    "LEVEL  CHECK  FINDING",
-    "fail   path   /v/t: vault path or notes directory unavailable or changed",
+    "LEVEL    CHECK  FINDING",
+    "✗  fail  path   /v/t: vault path or notes directory unavailable or changed",
     "",
     "Spec source repo",
     "LEVEL  CHECK  FINDING",
-    "ok     root   /r",
+    "✓  ok  root   /r",
     "",
     "unhealthy: 2 failed checks; fix the findings above, then run vmem doctor again",
   ].join("\n"));
   const healthy = renderDoctor({ ...STATUS, healthy: true, vaults: [{ ...STATUS.vaults[0]!, checks: { remote: { ok: true } }, tidy: undefined }] }, PLAIN);
-  expect(healthy).toContain("ok     remote  git@example.com:o/p.git");
+  expect(healthy).toContain("✓  ok  remote  git@example.com:o/p.git");
   expect(healthy.endsWith("healthy: 1 vault and 1 spec source checked")).toBe(true);
 });
 

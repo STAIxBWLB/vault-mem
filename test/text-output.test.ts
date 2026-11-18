@@ -38,7 +38,7 @@ test("fields align labels, skip empty values and hang wrapped values; issues sor
   expect(fields([["note", "alpha beta gamma delta"]], { color: false, columns: 20 })).toBe("  note  alpha beta\n        gamma delta");
   expect(wrap("abcdefghijklmnop", 10)).toEqual(["abcdefghij", "klmnop"]);
   expect(issueTable([{ code: "V02", severity: "warning", message: "w" }, { code: "V01", severity: "error", path: "notes/a.md", message: "e" }], PLAIN))
-    .toBe(["LEVEL    CODE  PATH        MESSAGE", "error    V01   notes/a.md  e", "warning  V02   -           w"].join("\n"));
+    .toBe(["LEVEL       CODE  PATH        MESSAGE", "✗  error    V01   notes/a.md  e", "⚠  warning  V02   -           w"].join("\n"));
   expect(issueTable([], PLAIN)).toBeUndefined();
   expect(shellWord("notes/a.md")).toBe("notes/a.md");
   expect(shellWord("it's here")).toBe(`'it'"'"'s here'`);

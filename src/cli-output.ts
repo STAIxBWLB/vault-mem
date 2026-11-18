@@ -7,7 +7,7 @@ import type { ResolvedHome } from "./home.ts";
 import type { PiiMatrix, PiiRow } from "./pii.ts";
 import { effectivePii, type RecoveryReport } from "./registry.ts";
 import type { SetupReport } from "./setup.ts";
-import { blocks, clean, fields, heading, issueTable, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions } from "./text-output.ts";
+import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions } from "./text-output.ts";
 import { MAX_RATIO_NOTES } from "./vault-index.ts";
 import type { VaultStats } from "./vault-stats.ts";
 
@@ -18,11 +18,15 @@ export type SpecRow = SpecSourceSpec & { healthy?: boolean; issue?: string };
 export interface StatusResult extends ResolvedHome { version: string; healthy: boolean; vaults: VaultRow[]; specs?: SpecRow[] }
 export interface Manifest { name: string; version: string; configVersion: number; mcp: { server: string; tools: (string | { name: string; readOnly: boolean })[] }; commands: string[] }
 
-const OK = tone("ok", "ok"), WARN = tone("warn", "warn"), FAIL = tone("fail", "fail");
+const statuses = (o: TextOptions) => {
+  const plain = { ...o, color: false };
+  return { OK: tone(`${marker("ok", plain)} ok`, "ok"), WARN: tone(`${marker("warn", plain)} warn`, "warn"), FAIL: tone(`${marker("fail", plain)} fail`, "fail") };
+};
 const homeLine = (r: StatusResult, o: TextOptions) => `${heading(`vmem ${r.version}`, o)}  home ${clean(r.home)} (${r.source})`;
 const NO_VAULTS = "no vaults registered; add one with vmem vaults add <id> <absolute-path> --kind personal|org --write mcp|cli|none";
 
 export function renderStatus(r: StatusResult, o: TextOptions): string {
+  const { OK, FAIL } = statuses(o);
   const title = `${homeLine(r, o)}  ${r.healthy ? paint("healthy", "ok", o) : paint("unhealthy", "fail", o)}`;
   const vaults = r.vaults.length ? table(["VAULT", "KIND", "WRITE", "PII", "HEALTH", "PATH"], r.vaults.map(v => [v.id, v.kind, v.write, v.pii, v.healthy ? OK : FAIL, v.path]), o) : paragraph(NO_VAULTS, o);
   const issues = r.vaults.filter(v => v.issue).map(v => paragraph(`${v.id}: ${v.issue}`, o, "fail")).join("\n");
@@ -35,6 +39,7 @@ function tidyFinding(t: NonNullable<VaultRow["tidy"]>): string {
   return [`${plural(t.notes, "note")} to migrate${pending ? ` (${pending})` : ""}`, t.unparsable.length ? `${plural(t.unparsable.length, "unparsable note")} skipped` : ""].filter(Boolean).join("; ");
 }
 export function renderDoctor(r: StatusResult, o: TextOptions): string {
+  const { OK, WARN, FAIL } = statuses(o);
   let failed = 0;
   const vaults = r.vaults.map(v => {
     const rows: CellInput[][] = [[v.healthy ? OK : FAIL, "path", v.healthy ? v.path : `${v.path}: ${v.issue ?? "unavailable"}`]];
