@@ -49,6 +49,8 @@ function entryProblem(value: unknown, sources: Set<string>): string | EvidenceEn
   try { [ref] = sourceReferences(entry.source) as [SourceReference]; } catch { return "source must be one valid source reference"; }
   if (!sources.has(ref.value)) return "source must also be listed in the note source field";
   if (typeof entry.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(entry.sha256)) return "sha256 must be 64 lowercase hex characters";
+  if (typeof entry.quote === "string" && !entry.quote.isWellFormed()) return "quote must be well-formed Unicode (no unpaired surrogates)";
+  if (typeof entry.section === "string" && !entry.section.isWellFormed()) return "section must be well-formed Unicode (no unpaired surrogates)";
   if (typeof entry.quote !== "string" || !entry.quote || bytes(entry.quote) > MAX_QUOTE_BYTES) return `quote must be 1..${MAX_QUOTE_BYTES} UTF-8 bytes`;
   if (entry.section !== undefined && (typeof entry.section !== "string" || !entry.section.trim() || /[\r\n]/.test(entry.section) || bytes(entry.section) > MAX_SECTION_BYTES)) return `section must be one exact H2 heading <=${MAX_SECTION_BYTES} bytes`;
   return { source: ref.value, sha256: entry.sha256, quote: entry.quote, ...(entry.section !== undefined ? { section: entry.section as string } : {}) };
@@ -157,13 +159,13 @@ function noteFile(vault: VaultSpec, target: string, denyPaths: readonly string[]
   const stem = target.replace(/^notes\//, "").replace(/\.md$/, "");
   if (!stem || Buffer.byteLength(stem) > 200 || /[/\\\0]/.test(stem) || stem.startsWith(".")) throw Object.assign(new Error("note: expected a flat note stem or notes/<stem>.md"), { code: "V04" });
   const root = realpathSync(vault.path);
-  if (root !== resolve(vault.path)) throw Object.assign(new Error(`vault ${vault.id}: registered path changed; re-register it`), { code: "V04" });
+  if (root !== resolve(vault.path)) throw Object.assign(new Error(`vault ${vault.id}: registered path changed; re-register it with vmem vaults add and restart the MCP server`), { code: "V04" });
   const file = join(root, "notes", `${stem}.md`);
-  if (isDenied(file, [...denyPaths])) throw Object.assign(new Error("note: denied by the path policy"), { code: "V06" });
+  if (isDenied(file, [...denyPaths])) throw Object.assign(new Error("note: denied by the denyPaths setting or built-in secret rules; check the policy with vmem status"), { code: "V06" });
   for (const part of [join(root, "notes"), file]) {
     let stat;
-    try { stat = lstatSync(part); } catch { throw Object.assign(new Error("note: unknown target"), { code: "V04" }); }
-    if (stat.isSymbolicLink()) throw Object.assign(new Error("note: symlinked paths are refused"), { code: "V04" });
+    try { stat = lstatSync(part); } catch { throw Object.assign(new Error(`note: unknown target; find the note stem with vmem search ${vault.id} <query>`), { code: "V04" }); }
+    if (stat.isSymbolicLink()) throw Object.assign(new Error("note: symlinked paths are refused; replace the link with the note file itself"), { code: "V04" });
   }
   return file;
 }
@@ -174,11 +176,11 @@ function noteFile(vault: VaultSpec, target: string, denyPaths: readonly string[]
  */
 export function evidenceReport(vault: VaultSpec, target: string, denyPaths: readonly string[] = []): EvidenceReport {
   const file = noteFile(vault, target, denyPaths), data = boundedRead(file);
-  if (data === "not_a_file" || data === "oversized") throw Object.assign(new Error(`note: ${data === "oversized" ? "exceeds the read bound" : "not a regular file"}`), { code: "V09" });
+  if (data === "not_a_file" || data === "oversized") throw Object.assign(new Error(`note: ${data === "oversized" ? "exceeds the 2 MiB read bound; split the note" : "not a regular file"}`), { code: "V09" });
   let text: string;
-  try { text = utf8.decode(data); } catch { throw Object.assign(new Error("note: not valid UTF-8"), { code: "V01" }); }
+  try { text = utf8.decode(data); } catch { throw Object.assign(new Error(`note: not valid UTF-8; validate it with vmem check ${vault.id} <file>`), { code: "V01" }); }
   let fm: Record<string, unknown>;
-  try { fm = parseFrontmatter(text).data; } catch { throw Object.assign(new Error("note: frontmatter is not parseable"), { code: "V01" }); }
+  try { fm = parseFrontmatter(text).data; } catch { throw Object.assign(new Error(`note: frontmatter is not parseable; validate it with vmem check ${vault.id} <file>`), { code: "V01" }); }
   const path = `notes/${file.slice(file.lastIndexOf(sep) + 1)}`;
   return { schemaVersion: 1, vault: vault.id, note: { path, sha256: sha256(data) }, evidence: verifyNoteEvidence(vault, fm, denyPaths), truncated: false };
 }

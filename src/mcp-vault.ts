@@ -156,7 +156,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     }) })),
     vmem_list: args => read(args, index => index.list(str(args.prefix) ?? "", (args.limit as number | undefined) ?? 100, str(args.cursor))),
     // Registry is reloaded per call so the source root is rebound on every verification.
-    vmem_evidence: args => { const registry = loadRegistry(home), spec = registry.vaults.find(v => v.id === pick(args).id); if (!spec) throw Object.assign(new Error("unknown vault id"), { code: "V04" }); return evidenceReport(spec, str(args.path)!, registry.denyPaths ?? []); },
+    vmem_evidence: args => { const registry = loadRegistry(home), spec = registry.vaults.find(v => v.id === pick(args).id); if (!spec) throw Object.assign(new Error("unknown vault id; list registered vaults with vmem status"), { code: "V04" }); return evidenceReport(spec, str(args.path)!, registry.denyPaths ?? []); },
     vmem_stats: args => vaultStats(home, pick(args).id, { expectedVault: pick(args), ...(typeof args.days === "number" ? { days: args.days } : {}) }),
     vmem_links: args => read(args, index => {
       const direction = str(args.direction) ?? "both", limit = (args.limit as number | undefined) ?? 50;

@@ -72,9 +72,15 @@ test("E1 malformed metadata is reported by schema validation and as unsupported"
   expect(evidenceProblem(Array.from({ length: 17 }, () => ({ source: "a.md", sha256: sha("x"), quote: "q" })), "a.md")).toContain("1..16");
   expect(evidenceProblem([{ source: "a.md", sha256: sha("x"), quote: "q", extra: 1 }], "a.md")).toContain("unknown key");
   expect(evidenceProblem([{ source: "a.md", sha256: sha("x"), quote: "q", section: "S" }], "a.md")).toBeUndefined();
+  expect(evidenceProblem([{ source: "a.md", sha256: sha("x"), quote: "\ud83d" }], "a.md")).toContain("well-formed");
+  expect(evidenceProblem([{ source: "a.md", sha256: sha("x"), quote: "q", section: "\ude00" }], "a.md")).toContain("well-formed");
   const f = fixture();
-  f.cite("c", [{ source: "vault/notes/src-note.md", sha256: "bad", quote: "q" }]);
-  expect(evidenceReport(f.vaultSpec(), "c").evidence[0]).toMatchObject({ status: "unsupported", reason: "invalid_metadata" });
+  f.cite("c", [{ source: "vault/notes/src-note.md", sha256: "bad", quote: "q" }, entry("\ud83d")]);
+  const results = evidenceReport(f.vaultSpec(), "c").evidence;
+  expect(results[0]).toMatchObject({ status: "unsupported", reason: "invalid_metadata" });
+  // An escaped lone surrogate would match half of the source emoji in UTF-16; it must never verify.
+  expect(results[1]).toMatchObject({ status: "unsupported", reason: "invalid_metadata" });
+  expect(results[1]!.match).toBeUndefined();
 });
 
 test("E2 editing, moving or deleting the cited source never leaves verified, and every call recomputes", () => {
@@ -165,6 +171,8 @@ test("E4 CLI JSON and MCP share the versioned shape; reads are annotated read-on
   expect(readdirSync(f.vault, { recursive: true }).sort()).toEqual(before);
   expect(existsSync(join(f.home, "index"))).toBe(hadState);
   expect(await mcp.handlers.vmem_evidence!({ vault: "mine", path: "../x" })).toMatchObject({ refused: true });
+  const unknown = await mcp.handlers.vmem_evidence!({ vault: "mine", path: "nope" }) as { issues: { message: string }[] };
+  expect(unknown.issues[0]!.message).toContain("vmem search mine");
 });
 
 test("E3 org promotion preview drops non-retained evidence from the transformed note", async () => {
