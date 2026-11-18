@@ -147,7 +147,7 @@ function historyGit(root: string, args: string[], deadline: number, options: Git
   if (result.status === null) refuse(`snapshot: Git was terminated (signal ${result.signal ?? "unavailable"}); retry once the repository is responsive`, "V09");
   if (result.status !== 0 && !options.allowFail) {
     const first = stderr.split(/\r?\n/)[0] ?? "no diagnostic";
-    refuse(`snapshot: Git refused inspection (exit ${result.status}): ${first.slice(0, 240)}`, "V09");
+    refuse(`snapshot: Git refused inspection (exit ${result.status}): ${first.slice(0, 240)}; check the repository with \`git fsck\` and repair it, then retry`, "V09");
   }
   return { status: result.status, stdout, stderr };
 }
@@ -291,7 +291,7 @@ function objectAvailable(git: Snapshot["git"], expression: string): boolean {
 
 function commitObject(git: Snapshot["git"], value: string, label: string): string {
   const commit = fullOid(value, label);
-  if (!objectAvailable(git, `${commit}^{commit}`)) refuse(`revision: ${commit} is not an available commit object; it may be pruned, shallow or belong to another repository`, "V09");
+  if (!objectAvailable(git, `${commit}^{commit}`)) refuse(`revision: ${commit} is not an available commit object; it may be pruned, shallow or belong to another repository. Pick a full commit id from \`vmem history <vault> <note>\``, "V09");
   const resolved = text(git(["rev-parse", "--verify", "--quiet", `${commit}^{commit}`], { allowFail: true }).stdout).trim();
   if (resolved !== commit) refuse(`revision: ${commit} does not name a commit object; pass the full commit id Git reported`, "V04");
   return commit;
@@ -324,7 +324,7 @@ interface HistoryCursor { v: 1; kind: "history"; path: string; head: string; aft
 interface ChangesCursor { v: 1; kind: "changes"; from: string; to: string; after: string }
 function encodeCursor(cursor: HistoryCursor | ChangesCursor): string { return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url"); }
 function decodeCursor(raw: string): HistoryCursor | ChangesCursor {
-  if (typeof raw !== "string" || !raw || raw.length > SNAPSHOT_CURSOR_CHARS) refuse("cursor: expected the opaque continuation from a previous page");
+  if (typeof raw !== "string" || !raw || raw.length > SNAPSHOT_CURSOR_CHARS) refuse("cursor: expected the opaque continuation from a previous page; restart without --cursor");
   let value: unknown;
   try { value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")); }
   catch { refuse("cursor: not a continuation this provider issued; restart without --cursor"); }
@@ -502,9 +502,9 @@ export function readRevision(request: RevisionRequest, limits: SnapshotLimits = 
   const [meta, entryPath] = tree[0]!.split("\t");
   if (entryPath !== path) refuse("revision: Git reported another path than the one requested; nothing read", "V09");
   const [mode, type, blob] = (meta ?? "").split(" ");
-  if (type !== "blob") refuse("revision: the path is not a file at this revision", "V04");
-  if (mode === "120000") refuse("revision: the path is a symlink at this revision; symlinked blobs are refused because a link can leave the vault", "V06");
-  if (!/^100[0-7]{3}$/.test(mode ?? "") || !blob || !FULL_OID.test(blob)) refuse("revision: the path is not a regular file at this revision", "V04");
+  if (type !== "blob") refuse("revision: the path is not a file at this revision; pick another revision from `vmem history <vault> <note>`", "V04");
+  if (mode === "120000") refuse("revision: the path is a symlink at this revision; symlinked blobs are refused because a link can leave the vault. Pick another revision from `vmem history <vault> <note>`", "V06");
+  if (!/^100[0-7]{3}$/.test(mode ?? "") || !blob || !FULL_OID.test(blob)) refuse("revision: the path is not a regular file at this revision; pick another revision from `vmem history <vault> <note>`", "V04");
   if (!objectAvailable(snapshot.git, blob)) return unavailable();
   const size = Number(text(snapshot.git(["cat-file", "-s", blob]).stdout).trim());
   if (!Number.isSafeInteger(size) || size < 0) return unavailable();
@@ -512,7 +512,7 @@ export function readRevision(request: RevisionRequest, limits: SnapshotLimits = 
   const raw = snapshot.git(["cat-file", "blob", blob], { maxBuffer: size + 1 }).stdout;
   if (raw.length !== size) refuse("revision: the blob changed while it was read; retry", "V09");
   const source = raw.toString("utf8");
-  if (!Buffer.from(source).equals(raw)) refuse("revision: the historical blob is not valid UTF-8 text; vmem reads text notes only", "V01");
+  if (!Buffer.from(source).equals(raw)) refuse("revision: the historical blob is not valid UTF-8 text; vmem reads text notes only. Read that blob with `git cat-file blob` outside vmem", "V01");
   const sha256 = createHash("sha256").update(raw).digest("hex");
   const start = offset ?? 0;
   let page: ReturnType<typeof readPage>, headings: RevisionResult["headings"], headingsTruncated: boolean | undefined;
