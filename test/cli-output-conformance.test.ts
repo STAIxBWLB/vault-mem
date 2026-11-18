@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { errorLine, paint, marker, resolveColor, stripTerminal, table, textOptions, width } from "../src/text-output.ts";
 import { run } from "../src/cli.ts";
+import { renderStatus } from "../src/cli-output.ts";
 
 const plain = { color: false, ascii: true };
 const color = { color: true, ascii: true };
@@ -13,6 +14,14 @@ test("shared roles and markers render a report with and without color", () => {
   const roles = ["header", "section", "key", "value", "success", "warning", "error", "hint", "accent"] as const;
   const codes = roles.map(role => paint("sample", role, color).match(/\[([0-9;]+)m/)?.[1] ?? "default");
   expect(codes).toEqual(["1;34", "1;35", "34", "default", "1;32", "1;33", "1;31", "90", "36"]);
+});
+test("status report is golden with color off and on", () => {
+  const report = { home: "/synthetic", source: "VMEM_HOME" as const, version: "9.0.0", healthy: true, vaults: [] };
+  const expected = "vmem 9.0.0  home /synthetic (VMEM_HOME)  ok healthy\n\nno vaults registered; add one with vmem vaults add <id> <absolute-path> --kind personal|org --write mcp|cli|none";
+  expect(renderStatus(report, plain)).toBe(expected);
+  const colored = renderStatus(report, color);
+  expect(stripTerminal(colored)).toBe(expected);
+  expect([...colored.matchAll(/\[([0-9;]+)m/g)].map(match => match[1])).toEqual(["1;34", "0", "1;32", "0", "1;32", "0"]);
 });
 test("color precedence and JSON on pipes", () => {
   const env = { isTTY: false, TERM: "dumb", FORCE_COLOR: "1" };
@@ -59,7 +68,7 @@ test("stderr decides color independently of stdout", () => {
 test("usage and operation failures have distinct process exits", () => {
   const bin = new URL("../bin/vmem.js", import.meta.url).pathname;
   const env = { ...process.env, LANG: "C", VMEM_HOME: "/nonexistent-vmem-test-home" };
-  for (const args of [["lint"], ["check"], ["not-a-command"], ["lint", "--bad"], ["status", "extra"], ["search"], ["log"], ["sync"], ["graph", "path"], ["spec", "unknown"], ["skills", "unknown"]]) {
+  for (const args of [["lint"], ["check"], ["not-a-command"], ["lint", "--bad"], ["status", "extra"], ["search"], ["log"], ["sync"], ["graph", "path"], ["spec", "unknown"], ["skills", "unknown"], ["brief"], ["brief", "--bad"], ["tidy", "v"], ["check", "v", "-", "--unknown"]]) {
     const result = Bun.spawnSync([process.execPath, bin, ...args], { env, stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode).toBe(2);
     expect(result.stderr.toString()).toContain("vmem: ");

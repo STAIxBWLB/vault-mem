@@ -4,6 +4,7 @@ import { unenforceablePii, type VaultSpec } from "./config.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry } from "./registry.ts";
 import { VaultIndex, type BriefPointer } from "./vault-index.ts";
+import { UsageError } from "./text-output.ts";
 import { screenContent, screenMetadata } from "./write-validation.ts";
 
 export interface VaultBrief { vault: string; lines: string[]; omitted: number; bytes: number }
@@ -76,15 +77,15 @@ export function runBriefCommand(args: string[], home: string): { text: string; c
     const arg = args[i]!;
     if (!arg.startsWith("-")) { positional.push(arg); continue; }
     if (arg === "--json" && !json) { json = true; continue; }
-    if (!["--for", "--paths", "--bytes"].includes(arg)) throw new Error(`brief: unknown or repeated option ${arg}; run vmem brief --help`);
+    if (!["--for", "--paths", "--bytes"].includes(arg)) throw new UsageError(`brief: unknown or repeated option ${arg}; run vmem brief --help`);
     const value = args[++i];
-    if (!value || value.startsWith("--")) throw new Error(`brief: ${arg} requires a value; run vmem brief --help`);
+    if (!value || value.startsWith("--")) throw new UsageError(`brief: ${arg} requires a value; run vmem brief --help`);
     if (arg === "--paths") paths.push(value);
     else if (arg === "--for" && intent === undefined) intent = value;
     else if (arg === "--bytes" && bytes === undefined && /^[0-9]+$/.test(value)) bytes = Number(value);
-    else throw new Error(`brief: repeated option or invalid value for ${arg}; run vmem brief --help`);
+    else throw new UsageError(`brief: repeated option or invalid value for ${arg}; run vmem brief --help`);
   }
-  if (positional.length !== 1 || intent === undefined) throw new Error("brief: requires one registered vault and --for intent; run vmem brief --help");
+  if (positional.length !== 1 || intent === undefined) throw new UsageError("brief: requires one registered vault and --for intent; run vmem brief --help");
   const result = vaultBrief(home, { vault: positional[0]!, intent, paths, bytes });
   return { text: json ? JSON.stringify(result) : briefText(result), code: 0 };
 }

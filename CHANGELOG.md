@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 - Add optional version-1 `evidence` frontmatter (`source`, `sha256`, `quote`, optional exact H2 `section`; at most 16 entries and 16 KiB, each source also listed in `source`) and the read-only `vmem evidence <vault> <note> [--json]` / `vmem_evidence` (schemaVersion 1). Flat `notes/*.md` sources in the same vault, resolved through the workspace root of the vault registry, are re-read on every call and reported `verified`, `stale`, `missing`, `ambiguous` or `unsupported` with UTF-8 byte offsets; other references are `unverified_external` without I/O. Newly introduced malformed evidence is a V01 write error; source drift is the new lint warning L16, never a write refusal. Org promotion removes evidence whose source is not retained in the target vault and lists the removals (`evidenceRemoved`, index and reason only). Existing notes and JSON shapes are unchanged.
-- Adopt the shared CLI output colors and markers and add lint/check summaries. Invalid color options, unknown commands, and argument errors in registry, read, analysis, write, log, spec, sync, promotion and skills commands now exit 2 instead of 1; operation failures remain exit 1. JSON schemas and report streams are unchanged (#228).
+- Adopt the shared CLI output colors and markers and add lint/check summaries. Invalid color options, unknown commands, and argument errors in registry, read, brief, analysis, write, log, spec, sync, promotion and skills commands now exit 2 instead of 1; operation failures remain exit 1. JSON schemas and report streams are unchanged (#228).
 
 ## [0.9.1] - 2026-11-17
 
