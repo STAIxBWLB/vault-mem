@@ -214,6 +214,7 @@ topics: ["[[people]]"]
 | `from`, `to`, `held_on`, `on` | world time, civil date | author | only by a new revision | `at` |
 | `recorded_at` | record time, writer clock, UTC, second precision | vmem at append | no (chain-protected) | `as_of` |
 | `seg`, `seq`, `prev`, `hash` | none | vmem at append | no | ordering, tamper evidence |
+| `parents` (`revise` and `retract` only) | none | vmem at append, from the heads the client read | no (in `hash`) | revision order, concurrent revisions |
 | `channel`, `actor` | none | vmem, unauthenticated | no | attribution only |
 | note `created`/`updated` | vmem write date or author text | vmem or author | yes | never |
 | Git author and committer dates | commit metadata | Git | yes (rebase, amend) | never |
@@ -264,7 +265,9 @@ topics: ["[[people]]"]
 - `retract` appends a record-time withdrawal with a `reason` of `recorded_in_error`, `evidence_withdrawn` or `other`. From its `recorded_at` on, the assertion is left out of answers; history still shows it. It does not claim the state stopped holding.
 - A new value for the same subject and relation never ends an existing assertion. Overlaps are reported instead.
 - Revising or retracting a retracted assertion is refused; assert a new id instead.
-- Concurrent revisions with the same revision number from two segments are both returned, flagged `revisionConflict`, until a later revision resolves them.
+- Every `revise` and `retract` records `parents`: the hashes of the entries it supersedes. Its `rev` is one more than the highest `rev` among them. An assertion's heads are its kept entries that no other kept entry names as a parent.
+- Concurrent revisions: two clones that both revise the same head produce two heads. Both are returned, each with its own `answer`, flagged `revisionConflict`; none is dropped or chosen. A concurrent `retract` head is reported in the same conflict set, and the revision heads are still answered. The conflict is resolved only by a later `revise` or `retract` whose `parents` name every head.
+- Record time follows the parents. A `revise` or `retract` must be recorded at or after every parent, whichever segment holds it. The write contract refuses a local append that would break this (`CLOCK`). An entry from another clone with a skewed clock can still break it. Such an entry gets an effective record time: the later of its own `recorded_at` and the effective record times of its parents. `as_of` and ordering use the effective time, so a revision never counts before the entry it revises. The response flags it `clockInverted: true` and shows both times.
 
 ### Limits on historical proof
 
@@ -342,17 +345,17 @@ A purged line keeps every hashed field, drops `payload` and adds `"purged": {"at
 ### Write contract
 
 - Proposed surface: `vmem assert <vault> --batch FILE|- [--dry-run] [--log JSON] [--json]` and MCP `vmem_assert` with the same schema. Final names must be reconciled with the CLI presentation work in issue 228.
-- Input is `{ops: [...]}` with 1 to 32 operations. The client never supplies `recorded_at`, `seg`, `seq`, `id`, `rev`, `prev`, `hash` or `actor`. `revise` and `retract` carry `expected_rev`, the latest revision the client read.
+- Input is `{ops: [...]}` with 1 to 32 operations. The client never supplies `recorded_at`, `seg`, `seq`, `id`, `rev`, `prev`, `hash` or `actor`. `revise` and `retract` carry `expected_heads`, the hashes of the assertion's heads as the client read them (one hash unless it saw a `revisionConflict`). vmem records them as `parents`.
 - Validation runs before any append, and any error refuses the whole batch:
   - Vault write policy (`none`, `cli`, `mcp`), as in `src/writer.ts#applyWrite`.
-  - Shapes and bounds; the subject declared earlier or in the same batch; the target of `revise` or `retract` exists, is not retracted and has `expected_rev` as its latest revision.
+  - Shapes and bounds; the subject declared earlier or in the same batch; the target of `revise` or `retract` exists and is not retracted, and `expected_heads` equals its current head set in the local index. A stale or partial set is refused, naming the current heads and the next step: re-read the assertion and resend with every head. A partial set would leave a conflict silently unresolved.
   - Temporal rules from the precision section.
   - Evidence in the issue 233 version 1 shape, each entry checked with `src/evidence.ts#verifyEvidenceEntry`. `src/evidence.ts#evidenceProblem` is not reused: its rule that every evidence source is also listed in the note `source` field has no counterpart in an assertion.
   - A path source is workspace-relative, resolved against `src/source.ts#sourceWorkspaceRoot` (the workspace that holds the vault registry), never against the vault. A vault note is therefore cited as, for example, `vault/notes/x.md`; a bare `notes/x.md` resolves outside the vault and fails.
   - Sources denied by current policy are refused (V06). A path source must be `verified` at append; any other result refuses the whole batch with the entry index and reason. That includes `unresolved_source_root` for a vault with no resolvable workspace root, and the refusal names the next step: register the workspace root, or cite the source as an external reference.
   - Non-path references are stored as `unverified_external` without I/O, as `verifyEvidenceEntry` classifies them before resolving any root.
   - Screening with `src/write-validation.ts#screenContent` over the canonical payload (secrets always, PII per vault policy), plus a traversal like `src/write-validation.ts#screenMetadata`.
-  - Clock: `recorded_at` must not precede the segment's last `recorded_at`, otherwise the batch is refused with `CLOCK`. There is no clamping.
+  - Clock: `recorded_at` must not precede the segment's last `recorded_at`. For a `revise` or `retract`, it also must not precede the `recorded_at` of any parent, whichever segment holds it, including entries synced from other clones. Otherwise the batch is refused with `CLOCK`, naming the later time to wait for or the clock to correct. There is no clamping.
   - Segment health: the clone's segment tail must match the writer record and verify; otherwise the batch goes to a new segment and the receipt says so.
 - Append: under `assertions.lock`, verify the tail, write the whole batch with one `O_APPEND` write, fsync the file (and the directory when the file is new), then update the writer record. A short write is truncated back, as in `src/vault-log.ts#appendLog`.
 - Receipt: `{ok, applied, segment, recordedAt, entries: [{seq, id, rev, op, hash}], issues, indexUpdated}`. A dry run validates without lock or append and has no `recordedAt`.
@@ -395,9 +398,9 @@ A purged line keeps every hashed field, drops `payload` and adds `"purged": {"at
 ### Evaluation
 
 1. Verify each segment from seq 1: contiguous seq, `prev`, `hash`, `payload_sha256` unless purged, non-decreasing `recorded_at`, supported `v`. Stop the segment at the first failure and report `untrusted`, or `unsupported` for an unknown version, from that seq. Ignore a final line without LF (`tornTail`) and any batch with missing entries.
-2. Keep entries within the `as_of` cutoff.
-3. Order kept entries by (`recorded_at`, segment, seq).
-4. For each assertion id take the latest revision; drop retracted and purged assertions except in history.
+2. Compute each entry's effective record time: its `recorded_at`, raised to the latest effective record time of its `parents`. Flag a raised entry `clockInverted`. Parents are resolved across segments; a parent missing from every verified segment marks the entry `untrusted`.
+3. Keep entries whose effective record time is within the `as_of` cutoff, and order them by (effective record time, segment, seq).
+4. For each assertion id, find its heads among the kept entries: the entries no other kept entry names as a parent. One revision head is the current revision. Several heads are all returned with `revisionConflict`, each answered. A retraction head excludes the assertion only when it is the sole head. Drop retracted and purged assertions except in history.
 5. Evaluate `answer` at `at`.
 6. Group overlaps, apply current policy, page within bounds.
 
@@ -444,11 +447,11 @@ Proposed `test/assertions.test.ts` with synthetic fixtures under `test/fixtures/
 - T1 corpus: Q1 to Q10 and the scenario 3 table, exactly.
 - T2 boundaries: `from` inclusive, `to` exclusive; a date `as_of` covers the whole UTC day; an instant `as_of` is inclusive; a cutoff before the first entry reports `before_first_entry`.
 - T3 precision: unknown start, unknown end, open end, month event, month interval and `held_on` give distinct answers; always-unknown and unsatisfiable bounds are refused.
-- T4 no latest-wins: coexisting values return one overlap group; same-number revisions from two segments report `revisionConflict`.
-- T5 correction and retraction: revisions keep earlier answers under earlier cutoffs; a retraction excludes from its time on and stays in history; revising a retracted id and a stale `expected_rev` are refused.
+- T4 no latest-wins: coexisting values return one overlap group. Two clones revising the same head each return a head with `revisionConflict` and neither is dropped. A revision naming only one of two heads is refused. A revision naming both resolves the conflict. A concurrent retraction head is reported in the conflict set.
+- T5 correction and retraction: revisions keep earlier answers under earlier cutoffs; a retraction excludes from its time on and stays in history; revising a retracted id and a stale `expected_heads` are refused.
 - T6 clock independence: changing note `created`/`updated`, file mtimes, Git commit dates, `confidence` or graph output changes no answer.
 - T7 tamper evidence: an edited value, a reordered line, a removed middle line and a changed `recorded_at` each mark that entry and later ones `untrusted`; a torn tail and a partial batch are ignored and truncated on the next append; truncation of the local segment is detected through the writer record; whole-segment deletion is documented as undetected.
-- T8 clock regression: refused with `CLOCK`, nothing appended.
+- T8 clock regression: refused with `CLOCK`, nothing appended. Also refused: a local revision whose clock is behind a parent synced from another clone's segment. A synced revision recorded before its parent is answered at its parent's effective time, flagged `clockInverted`, and never counted at a cutoff before its parent.
 - T9 rebuild: deleting the SQLite index and rebuilding yields byte-identical JSON for every T1 query.
 - T10 policy: denied evidence returns `withheld` with no path, quote or hash; deleted or purged evidence returns `unavailable`; a denied `assertions/` path refuses reads (V06); secrets and PII are refused at append and withheld at read after a policy change.
 - T11 identity: vmem move and merge of a subject note leave answers unchanged and report `missing` or `superseded` links.
