@@ -7,7 +7,7 @@ import type { ResolvedHome } from "./home.ts";
 import type { PiiMatrix, PiiRow } from "./pii.ts";
 import { effectivePii, type RecoveryReport } from "./registry.ts";
 import type { SetupReport } from "./setup.ts";
-import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paint, paragraph, plural, shellWord, table, tone, type CellInput, type TextOptions } from "./text-output.ts";
+import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paragraph as formatParagraph, plural, shellWord, status, table, tone, type CellInput, type TextOptions, type Tone } from "./text-output.ts";
 import { MAX_RATIO_NOTES } from "./vault-index.ts";
 import type { VaultStats } from "./vault-stats.ts";
 
@@ -22,12 +22,13 @@ const statuses = (o: TextOptions) => {
   const plain = { ...o, color: false };
   return { OK: tone(`${marker("ok", plain)} ok`, "ok"), WARN: tone(`${marker("warn", plain)} warn`, "warn"), FAIL: tone(`${marker("fail", plain)} fail`, "fail") };
 };
+const paragraph = (text: string, o: TextOptions, toneName?: Tone, indent = "") => formatParagraph(toneName === "ok" || toneName === "warn" || toneName === "fail" ? `${marker(toneName, { ...o, color: false })} ${text}` : text, o, toneName, indent);
 const homeLine = (r: StatusResult, o: TextOptions) => `${heading(`vmem ${r.version}`, o)}  home ${clean(r.home)} (${r.source})`;
 const NO_VAULTS = "no vaults registered; add one with vmem vaults add <id> <absolute-path> --kind personal|org --write mcp|cli|none";
 
 export function renderStatus(r: StatusResult, o: TextOptions): string {
   const { OK, FAIL } = statuses(o);
-  const title = `${homeLine(r, o)}  ${r.healthy ? paint("healthy", "ok", o) : paint("unhealthy", "fail", o)}`;
+  const title = `${homeLine(r, o)}  ${status(r.healthy ? "ok" : "fail", r.healthy ? "healthy" : "unhealthy", o)}`;
   const vaults = r.vaults.length ? table(["VAULT", "KIND", "WRITE", "PII", "HEALTH", "PATH"], r.vaults.map(v => [v.id, v.kind, v.write, v.pii, v.healthy ? OK : FAIL, v.path]), o) : paragraph(NO_VAULTS, o);
   const issues = r.vaults.filter(v => v.issue).map(v => paragraph(`${v.id}: ${v.issue}`, o, "fail")).join("\n");
   const specs = r.specs?.length ? table(["SOURCE", "WRITE", "PII", "PATH"], r.specs.map(s => [s.id, s.write, s.pii, s.path]), o) : undefined;

@@ -9,7 +9,7 @@ import type { LintCode, LintReport } from "./analysis-types.ts";
 import type { GraphNeighborhood, GraphPath } from "./vault-graph.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
 import type { EvidenceReport } from "./evidence.ts";
-import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paint, paragraph, plural, shellWord, summary, table, tableParts, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
+import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paint, paragraph, plural, shellWord, status, summary, table, tableParts, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
 
 const command = (...words: string[]) => ["vmem", ...words].map(shellWord).join(" ");
 
@@ -28,7 +28,7 @@ export function showText(r: NoteReadResult, o: TextOptions, c: { vault: string; 
   const head = [heading(r.path, o), fields([["section", r.section], ["sha256", r.hash.slice(0, 12)], ["bytes", Buffer.byteLength(r.content)], ["offset", r.offset]], o)].join("\n");
   if (!r.truncated) return blocks(head, stripTerminal(r.content).replace(/\n+$/, ""));
   const words = ["show", c.vault, c.target, ...(r.section ? ["--section", r.section] : []), ...(c.maxBytes !== undefined ? ["--max-bytes", String(c.maxBytes)] : []), "--offset", String(r.nextOffset)];
-  const tail = [paint("truncated", "warn", o), ...(r.nextOffset !== undefined ? [nextCommand("next", command(...words), o)] : [])];
+  const tail = [status("warn", "truncated", o), ...(r.nextOffset !== undefined ? [nextCommand("next", command(...words), o)] : [])];
   const headings = r.headings?.length ? ["H2 headings (read one with --section):", ...r.headings.map(h => `  ${clean(h)}`), ...(r.headingsTruncated ? [paint("  ... more headings", "muted", o)] : [])].join("\n") : undefined;
   return blocks(head, stripTerminal(r.content).replace(/\n+$/, ""), tail.join("\n"), headings);
 }
@@ -39,7 +39,7 @@ export function linksText(links: SuggestedLink[], o: TextOptions, c: { vault: st
   const count = `${plural(links.length, "link")} from ${clean(from)}`;
   if (!links.length) return count;
   const target = (l: ResolvedLink) => l.target + (l.heading !== null ? `#${l.heading}` : "") + (l.block !== null ? `#^${l.block}` : "");
-  const resolution = (l: SuggestedLink): CellInput => l.resolved ?? tone(`${l.reason ?? "unresolved"}${l.suggested ? `; suggested ${clean(l.suggested.path)} (${l.suggested.score.toFixed(3)})` : ""}`, "warn");
+  const resolution = (l: SuggestedLink): CellInput => l.resolved ?? tone(`${marker("warn", { ...o, color: false })} ${l.reason ?? "unresolved"}${l.suggested ? `; suggested ${clean(l.suggested.path)} (${l.suggested.score.toFixed(3)})` : ""}`, "warn");
   const rows = links.map(l => [target(l), resolution(l), l.line]);
   const more = links.length >= c.limit && c.limit < 500 ? nextCommand("next", command("links", c.vault, c.target, "--limit", String(Math.min(500, c.limit * 2))), o) : undefined;
   return blocks(heading("OUT", o) + "\n" + table(["TARGET", "RESOLVED", "LINE"], rows, o), [count, more].filter(Boolean).join("\n"));
@@ -49,17 +49,17 @@ export function rebuildText(r: { vault: string; notes: number; changed: number; 
   return `rebuilt ${clean(r.vault)}: ${plural(r.notes, "note")}, ${r.changed} changed, ${r.removed} removed${r.skipped?.length ? `, ${r.skipped.length} skipped` : ""}`;
 }
 
-const warnings = (list: string[], o: TextOptions) => list.length ? list.map(w => paint(`warning: ${clean(w)}`, "warn", o)).join("\n") : undefined;
+const warnings = (list: string[], o: TextOptions) => list.length ? list.map(w => status("warn", `warning: ${w}`, o)).join("\n") : undefined;
 export function logReadText(r: LogReadResult, o: TextOptions, c: { command: "tail" | "grep"; vault: string; pattern?: string; limit: number; type?: string }): string {
-  if (!r.ok) return blocks(paint(`log ${c.command}: not read`, "fail", o), issueTable(r.issues, o), warnings(r.warnings, o));
+  if (!r.ok) return blocks(status("fail", `log ${c.command}: not read`, o), issueTable(r.issues, o), warnings(r.warnings, o));
   const count = `${plural(r.lines.length, "line")}${r.dataLines !== null ? ` (log has ${r.dataLines})` : ""}`;
   const words = ["log", c.command, c.vault, ...(c.pattern !== undefined ? [c.pattern] : []), ...(c.type ? ["--type", c.type] : []), "--limit", String(Math.min(200, c.limit * 2))];
   const more = r.lines.length >= c.limit && c.limit < 200 ? nextCommand("next", command(...words), o) : undefined;
   return blocks(r.lines.length ? r.lines.map(clean).join("\n") : undefined, [count, more].filter(Boolean).join("\n"), warnings(r.warnings, o), issueTable(r.issues, o));
 }
 export function logAppendText(r: LogReceipt, o: TextOptions, c: { vault: string; type: string }): string {
-  const line = r.ok && r.appended ? paint(`appended ${clean(c.type)} to the ${clean(c.vault)} log${r.bytesWritten ? ` (${plural(r.bytesWritten, "byte")})` : ""}`, "ok", o)
-    : paint(`log append: ${clean(c.type)} not appended${r.rolledBack ? " (rolled back)" : ""}`, "fail", o);
+  const line = r.ok && r.appended ? status("ok", `appended ${clean(c.type)} to the ${clean(c.vault)} log${r.bytesWritten ? ` (${plural(r.bytesWritten, "byte")})` : ""}`, o)
+    : status("fail", `log append: ${clean(c.type)} not appended${r.rolledBack ? " (rolled back)" : ""}`, o);
   return blocks(line, issueTable(r.issues, o));
 }
 
@@ -78,12 +78,12 @@ export function lintText(d: { report: LintReport; notes: number; titles: Record<
 /** `lint --write` and `graph build`: what was written or would be, then issues and the log event. */
 export function analysisWriteText(r: { ok: boolean; applied: boolean; summary: unknown; paths: string[]; receipts: WriteReceipt[]; log?: LogReceipt }, o: TextOptions, c: { kind: "lint" | "graph"; dryRun: boolean }): string {
   const verb = c.dryRun && r.ok ? "would write" : r.applied ? "wrote" : "did not write";
-  const line = paint(`${c.kind === "lint" ? "lint" : "graph build"}: ${verb} ${plural(r.paths.length, "report")}`, r.ok ? "ok" : "fail", o);
+  const line = status(r.ok ? "ok" : "fail", `${c.kind === "lint" ? "lint" : "graph build"}: ${verb} ${plural(r.paths.length, "report")}`, o);
   const s = (r.summary ?? {}) as Record<string, unknown>;
   const counts = c.kind === "lint" ? verdict(s as { errors: number; warnings: number; summary: string }, o)
     : fields((["nodes", "edges", "communities", "work_docs"] as const).map(k => [k.replace("_", " "), typeof s[k] === "number" ? s[k] : undefined]), o);
   const issues: WriteIssue[] = [...r.receipts.flatMap(x => x.issues), ...(r.log?.issues ?? [])];
-  const logged = r.log ? (r.log.ok ? `logged ${c.kind === "lint" ? "LINT" : "GRAPH"} event` : paint("log event not appended", "fail", o)) : undefined;
+  const logged = r.log ? (r.log.ok ? `logged ${c.kind === "lint" ? "LINT" : "GRAPH"} event` : status("fail", "log event not appended", o)) : undefined;
   const lintSummary = c.kind === "lint" ? summary({ failed: Number(s.errors ?? 0) || (r.ok ? 0 : 1), warnings: Number(s.warnings ?? 0), ok: r.ok && !s.errors && !s.warnings ? 1 : 0 }, o) : undefined;
   return blocks(line, r.paths.map(p => `  ${clean(p)}`).join("\n"), counts, issueTable(issues, o), logged, lintSummary);
 }

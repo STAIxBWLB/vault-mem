@@ -36,11 +36,11 @@ test("#114 spec get prints a title line, a field block, the body without escapes
     "spec root: Synthetic root",
     "",
     "  type       goal",
-    "  status     active",
+    "  status     ✓  active",
     "  paths      src/a.ts, src/b.ts",
     "  path       SPEC.md",
     "  source     repo",
-    "  freshness  stale: 2 commits since verified-against, uncommitted changes",
+    "  freshness  ⚠  stale: 2 commits since verified-against, uncommitted changes",
     "  backlinks  parent api",
     "  children   api (1 of 3)",
     "  section    Scope",
@@ -57,22 +57,22 @@ test("#114 spec validate prints LEVEL/CHECK/FINDING sections and a verdict; --re
     "spec validate repo",
     "",
     "Findings",
-    "LEVEL    CHECK          FINDING",
-    "error    dangling_link  specs/api.md parent -> gone: frontmatter link names no graph node",
-    "warning  orphan         specs/b.md parent: non-goal spec has no parent",
+    "LEVEL       CHECK          FINDING",
+    "✗  error    dangling_link  specs/api.md parent -> gone: frontmatter link names no graph node",
+    "⚠  warning  orphan         specs/b.md parent: non-goal spec has no parent",
     "",
     "Discovery",
     "LEVEL  CHECK         FINDING",
     "note   skipped_path  specs/link.md: symlink skipped",
     "",
     "Freshness",
-    "LEVEL    CHECK  FINDING",
-    "warning  stale  SPEC.md (root): 1 commit since verified-against; review the scope and refresh verified-against",
+    "LEVEL       CHECK  FINDING",
+    "⚠  warning  stale  SPEC.md (root): 1 commit since verified-against; review the scope and refresh verified-against",
     "",
-    "fail: 1 error, 1 warning, 1 stale scope",
+    "✗  fail: 1 error, 1 warning, 1 stale scope",
   ].join("\n"));
   const clean = renderSpecValidate({ ...report, ok: true, errors: 0, warnings: 0, items: [], diagnostics: [], freshness: [] }, PLAIN, { args: ["validate", "--repo", "/r"], values: { requireFresh: true }, repo: "/r" });
-  expect(clean).toBe("spec validate --repo /r\n\nok: 0 errors, 0 warnings, 0 stale scopes");
+  expect(clean).toBe("spec validate --repo /r\n\n✓  ok: 0 errors, 0 warnings, 0 stale scopes");
   expect(renderSpecValidate(report, PLAIN, { args: ["validate"], values: { requireFresh: true } })).not.toContain("Freshness");
 });
 
@@ -82,10 +82,10 @@ test("#114 spec graph lists the slice breadth-first with EDGE and DEPTH; spec gr
     edges: [{ source: "api", target: "root", kind: "parent" }, { source: "db", target: "api", kind: "parent" }, { source: "db", target: "root", kind: "depends-on" }] }, PLAIN, { args: ["graph", "root"], values: { direction: "neighbors" } });
   expect(graph).toBe([
     "spec graph root: neighbors, all edges, depth 1", "",
-    "ID    TYPE    STATUS  EDGE        DEPTH  TITLE",
-    "root  goal    active  -           0      Root",
-    "api   module  -       parent      1      API",
-    "db    module  -       depends-on  1      DB", "",
+    "ID    TYPE    STATUS     EDGE        DEPTH  TITLE",
+    "root  goal    ✓  active  -           0      Root",
+    "api   module  -          parent      1      API",
+    "db    module  -          depends-on  1      DB", "",
     "SOURCE  EDGE    TARGET",
     "db      parent  api", "",
     "3 nodes, 3 edges",
@@ -93,7 +93,7 @@ test("#114 spec graph lists the slice breadth-first with EDGE and DEPTH; spec gr
   ].join("\n"));
   const grep = renderSpecGrep({ source: "repo", worktree: "/w", offset: 0, truncated: true, nextOffset: 1,
     hits: [{ id: "root", path: "SPEC.md", title: "Root", type: "goal", status: "active", snippet: "line\none \u001b[31mred\u001b[0m" }] }, PLAIN, { args: ["grep", "--literal", "--", "red"], values: {} });
-  expect(grep).toBe("ID    TYPE  STATUS  TITLE\nroot  goal  active  Root\n  line one red\n\nhits 1-1, more remain\nnext: vmem spec grep --literal --offset 1 -- red");
+  expect(grep).toBe("ID    TYPE  STATUS     TITLE\nroot  goal  ✓  active  Root\n  line one red\n\nhits 1-1, more remain\nnext: vmem spec grep --literal --offset 1 -- red");
   expect(renderSpecGrep({ source: "repo", worktree: "/w", offset: 0, truncated: false, hits: [] }, PLAIN, { args: ["grep"], values: {} })).toBe("no specs matched");
   expect(offsetCommand(["get", "my spec", "--offset", "5", "--body"], 9)).toBe("vmem spec get 'my spec' --body --offset 9");
 });

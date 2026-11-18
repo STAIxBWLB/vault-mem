@@ -36,12 +36,12 @@ const STATUS: StatusResult = {
 
 test("#114 AC1: status prints a title verdict, a vault table, issues and spec sources", () => {
   expect(renderStatus(STATUS, PLAIN)).toBe([
-    "vmem 9.9.9  home /h (VMEM_HOME)  unhealthy",
+    "vmem 9.9.9  home /h (VMEM_HOME)  ✗  unhealthy",
     "",
     "VAULT     KIND      WRITE  PII    HEALTH   PATH",
     "personal  personal  mcp    allow  ✓  ok    /v/p",
     "team      org       none   deny   ✗  fail  /v/t",
-    "team: vault path or notes directory unavailable or changed",
+    "✗  team: vault path or notes directory unavailable or changed",
     "",
     "SOURCE  WRITE  PII   PATH",
     "repo    none   deny  /r",
@@ -68,7 +68,7 @@ test("#114 AC1: doctor prints LEVEL/CHECK/FINDING per vault and spec source, the
     "LEVEL  CHECK  FINDING",
     "✓  ok  root   /r",
     "",
-    "unhealthy: 2 failed checks; fix the findings above, then run vmem doctor again",
+    "✗  unhealthy: 2 failed checks; fix the findings above, then run vmem doctor again",
   ].join("\n"));
   const healthy = renderDoctor({ ...STATUS, healthy: true, vaults: [{ ...STATUS.vaults[0]!, checks: { remote: { ok: true } }, tidy: undefined }] }, PLAIN);
   expect(healthy).toContain("✓  ok  remote  git@example.com:o/p.git");
@@ -115,13 +115,13 @@ test("#114 AC1/AC4: registry lists, adds and remove previews print their result 
   expect(listed).toContain("operations, people, ai-practice");
   expect(listed).toContain("/v/m");
   expect(renderVaultsList([], PLAIN)).toContain("no vaults registered");
-  expect(renderVaultAdd({ vault: { id: "mine", path: "/v/m", kind: "org", write: "cli" } }, PLAIN)).toBe("registered vault mine: org, write cli, PII deny, at /v/m");
+  expect(renderVaultAdd({ vault: { id: "mine", path: "/v/m", kind: "org", write: "cli" } }, PLAIN)).toBe("✓  registered vault mine: org, write cli, PII deny, at /v/m");
   expect(renderRemove("vaults", { applied: false, vault: { id: "it's", path: "/v/m" } }, PLAIN))
     .toBe(`dry run: would unregister vault it's at /v/m; its files stay on disk\n\nconfirm: vmem vaults remove 'it'"'"'s' --confirm`);
-  expect(renderRemove("specs", { applied: true, spec: { id: "repo", path: "/r" } }, PLAIN)).toBe("unregistered spec source repo at /r; the repository stays on disk");
+  expect(renderRemove("specs", { applied: true, spec: { id: "repo", path: "/r" } }, PLAIN)).toBe("✓  unregistered spec source repo at /r; the repository stays on disk");
   expect(renderSpecsList([{ id: "repo", path: "/r", write: "none", pii: "deny" }], PLAIN)).toBe("SOURCE  WRITE  PII   PATH\nrepo    none   deny  /r");
   expect(renderSpecsList([], PLAIN)).toContain("no spec sources registered");
-  expect(renderSpecAdd({ spec: { id: "repo", path: "/r", write: "none", pii: "deny" } }, PLAIN)).toBe("registered spec source repo: write none, PII deny, at /r");
+  expect(renderSpecAdd({ spec: { id: "repo", path: "/r", write: "none", pii: "deny" } }, PLAIN)).toBe("✓  registered spec source repo: write none, PII deny, at /r");
 });
 
 test("#114 AC1/AC4: vaults pii shows the matrix, loosened cells and the confirm command of a preview", () => {
@@ -137,7 +137,7 @@ test("#114 AC1/AC4: vaults pii shows the matrix, loosened cells and the confirm 
     "",
     "allow list: 1 entry (shown with --json)",
     "",
-    "loosens phone.notes: deny -> allow",
+    "⚠  loosens phone.notes: deny -> allow",
     "",
     "confirm: vmem vaults pii mine --set allow --confirm",
   ].join("\n"));
@@ -159,9 +159,9 @@ test("#114 AC1/AC4: recover says what it would remove and prints the confirm com
     "confirm: vmem recover --confirm",
   ].join("\n"));
   expect(renderRecover({ applied: true, lock: { ...lock, removed: true }, temporaryFiles: [".config-1.tmp"], removedTemporaryFiles: [".config-1.tmp"] }, PLAIN))
-    .toBe("recovered: removed the stale registry lock and 1 temporary config file");
+    .toBe("✓  recovered: removed the stale registry lock and 1 temporary config file");
   expect(renderRecover({ applied: false, lock: { ...lock, state: "live" }, temporaryFiles: [], removedTemporaryFiles: [], blocked: "a live writer holds the lock" }, PLAIN))
-    .toStartWith("recovery blocked: a live writer holds the lock\n\n  lock");
+    .toStartWith("✗  recovery blocked: a live writer holds the lock\n\n  lock");
   expect(renderRecover({ applied: false, lock: { path: "/h/.lock", state: "absent", removed: false }, temporaryFiles: [], removedTemporaryFiles: [] }, PLAIN)).toStartWith("nothing to recover");
 });
 
@@ -179,7 +179,7 @@ test("#114 AC1: stats prints field blocks, manifest marks read-only tools and se
     "  skipped    1 source reference, 1 not a file", "  truncated  4 notes past the 10000-note cap", "  largest    notes/a.md 1.2", "",
     "Modified", "  last 7 days   1", "  last 30 days  3", "",
     "Log since 2026-10-06 (30 days)", "  total  2", "  LEARN  2", "",
-    "warning: skipped 1 line",
+    "⚠  warning: skipped 1 line",
   ].join("\n"));
   const empty = renderStats({ vault: "mine", asOf: "2026-11-04", notes: { total: 0, byType: {}, byDomain: {}, byStatus: {} }, modified: { last7Days: 0, last30Days: 0 },
     size: { total: { notes: 0, bytes: 0, words: 0 }, byType: {}, byDomain: {} },
@@ -200,7 +200,7 @@ test("#114 AC1: stats prints field blocks, manifest marks read-only tools and se
     "  server  /opt/bun --smol /opt/vmem/bin/vmem.js mcp", "",
     "HOST    CHANGE   PATH                   REASON", "claude  add      /u/.claude.json", "codex   refused  /u/.codex/config.toml  unparsable TOML", "",
     "restart the host session", "",
-    "1 host refused; see REASON.", "",
+    "✗  1 host refused; see REASON.", "",
     "apply: vmem setup all --apply",
   ].join("\n"));
   expect(renderSetup({ ...report, mode: "apply", applied: true, actions: [report.actions[0]!] }, PLAIN, "x")).not.toContain("REASON");
