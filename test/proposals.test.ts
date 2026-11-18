@@ -493,6 +493,29 @@ test("changed evidence source or vault policy invalidates an apply preview", () 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("patch proposals verify the target note's existing evidence at submit and preview", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-patch-evidence-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
+  try {
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(root, "workspace.config.yaml"), "name: synthetic\n");
+    const registry = join(root, "projects.yaml"); writeFileSync(registry, "projects: []\n");
+    const source = "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n";
+    writeFileSync(join(notes, "research.md"), source);
+    const reference = "vault/notes/research.md", evidence = [{ source: reference, sha256: "0".repeat(64), quote: "# Research" }];
+    const note = `---\ntype: insight\ndomain: research\ndescription: Synthetic citation.\ntopics: ["[[research]]"]\nsource: ${JSON.stringify([reference])}\nevidence: ${JSON.stringify(evidence)}\n---\n# Citation\n\nOriginal body.\n\n## Topics\n\n- [[research]]\n`;
+    writeFileSync(join(notes, "citation.md"), note);
+    addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp", registry });
+    const operation = { op: "patch", path: "citation", expectedSha: sha256(note), edits: [{ oldString: "Original body.", newString: "Revised body." }] };
+    const submitted = submitProposal(home, { vault: "test", operation }, { channel: "mcp" });
+    expect(submitted.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "EVIDENCE", message: expect.stringContaining("stale") })]));
+    const preview = previewProposalApply(home, { vault: "test", id: submitted.id }, { channel: "mcp" });
+    expect(preview.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "EVIDENCE", message: expect.stringContaining("stale") })]));
+    expect(JSON.stringify(preview.issues)).not.toContain("# Research");
+    expect(readFileSync(join(notes, "citation.md"), "utf8")).toBe(note);
+    expect(existsSync(join(vaultPath, "log"))).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("newly denied store metadata is refused before the file is opened", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-deny-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
   try {
