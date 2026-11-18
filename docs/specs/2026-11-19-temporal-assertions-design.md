@@ -11,7 +11,7 @@ Status: awaiting the owner's selection (issue 237 D5). This draft is not accepte
 
 - Contract: issue 237 in STAIxBWLB/vault-mem, parent plan issue 232.
 - Read contracts reviewed: issue 233 (evidence anchors) and issue 235 (Git snapshot history). Issue 233 is implemented in PR 243 (merge 32495c0, `src/evidence.ts#verifyEvidenceEntry` verifies one entry independent of a note). Issue 235 is not implemented and is treated here as a proposed contract.
-- Source read: `src/` at commit 53ac9af. `src/` is unchanged since 9a789a8, the commit issue 237 cites.
+- Source read: `src/` at commit 53ac9af for the writer, index, log and snapshot contracts; `src/` was unchanged between 9a789a8, the commit issue 237 cites, and 53ac9af. `src/evidence.ts` and `src/source.ts` were read at 24cdd49 (main after PRs 243, 241, 246 and 248), where the cited writer, validation and log symbols still exist.
 - Concept reference: the Utopia time design pinned by issue 237 (commit 4fec6cb).
 
 ## Summary
@@ -309,7 +309,7 @@ Entry E2, first line (hash values are placeholders):
     "from": "2025-09-01",
     "to": "2026-04-01",
     "evidence": [
-      { "source": "notes/meeting-2026-04-09.md", "sha256": "<64-hex>", "quote": "moves to lead on April 1", "section": "Decisions" }
+      { "source": "vault/notes/meeting-2026-04-09.md", "sha256": "<64-hex>", "quote": "moves to lead on April 1", "section": "Decisions" }
     ]
   },
   "hash": "<64-hex>"
@@ -347,7 +347,10 @@ A purged line keeps every hashed field, drops `payload` and adds `"purged": {"at
   - Vault write policy (`none`, `cli`, `mcp`), as in `src/writer.ts#applyWrite`.
   - Shapes and bounds; the subject declared earlier or in the same batch; the target of `revise` or `retract` exists, is not retracted and has `expected_rev` as its latest revision.
   - Temporal rules from the precision section.
-  - Evidence in the issue 233 version 1 shape. Sources denied by current policy are refused (V06). Same-vault note evidence must verify at append; other references are stored as `unverified_external`.
+  - Evidence in the issue 233 version 1 shape, each entry checked with `src/evidence.ts#verifyEvidenceEntry`. `src/evidence.ts#evidenceProblem` is not reused: its rule that every evidence source is also listed in the note `source` field has no counterpart in an assertion.
+  - A path source is workspace-relative, resolved against `src/source.ts#sourceWorkspaceRoot` (the workspace that holds the vault registry), never against the vault. A vault note is therefore cited as, for example, `vault/notes/x.md`; a bare `notes/x.md` resolves outside the vault and fails.
+  - Sources denied by current policy are refused (V06). A path source must be `verified` at append; any other result refuses the whole batch with the entry index and reason. That includes `unresolved_source_root` for a vault with no resolvable workspace root, and the refusal names the next step: register the workspace root, or cite the source as an external reference.
+  - Non-path references are stored as `unverified_external` without I/O, as `verifyEvidenceEntry` classifies them before resolving any root.
   - Screening with `src/write-validation.ts#screenContent` over the canonical payload (secrets always, PII per vault policy), plus a traversal like `src/write-validation.ts#screenMetadata`.
   - Clock: `recorded_at` must not precede the segment's last `recorded_at`, otherwise the batch is refused with `CLOCK`. There is no clamping.
   - Segment health: the clone's segment tail must match the writer record and verify; otherwise the batch goes to a new segment and the receipt says so.
@@ -373,7 +376,7 @@ A purged line keeps every hashed field, drops `payload` and adds `"purged": {"at
     "id": "a:3f9c2e1d0a4b5c6d:2", "rev": 1, "subject": "s:person-a", "relation": "role",
     "value": "member", "kind": "state", "from": "2025-09-01", "to": "open", "answer": "yes",
     "recordedAt": "2025-09-02T09:00:00Z",
-    "evidence": [{ "source": "notes/onboarding-2025-09.md", "status": "verified", "quote": "joins as member" }],
+    "evidence": [{ "source": "vault/notes/onboarding-2025-09.md", "status": "verified", "quote": "joins as member" }],
     "subjectNote": { "path": "notes/person-a.md", "status": "present" }
   }],
   "overlaps": [],
@@ -501,6 +504,6 @@ Fallback if C is not selected: retain snapshot history only, meaning alternative
 - The Utopia time design was read through a fetched summary of the pinned document, not line by line.
 - `isDenied` was read in agent-mem 0.25.0 from the main checkout; the pinned 0.28.0 is not installed in this worktree. The design relies only on it being a path policy evaluated at call time.
 - Bun YAML date parsing was observed with Bun 1.4.4 locally; no repository test covers it.
-- Issues 233 and 235 are unimplemented. Every reference to their outcomes and bounds is to their proposed contracts.
+- Issue 235 is not merged (PR 245 is in review). Every reference to its outcomes and bounds is to its proposed contract. Issue 233 is merged (PR 243), and its contract is cited from the code.
 - Whether `vmem lint` or the workspace graph would react to an `assertions/` directory was not checked.
 - All bounds are proposals; nothing was measured.
