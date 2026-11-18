@@ -56,7 +56,7 @@ test("A1 tracked-changed is flagged with its count, unchanged is not, untracked-
   expect(report.findings.L17).toEqual([
     "`notes/a.md`: source `docs/changed.md` has 2 commits after updated; re-check the note against it, then save it to refresh updated",
     "`notes/b.md`: source `docs/changed.md` has 1 commit after updated; re-check the note against it, then save it to refresh updated",
-    "`notes/c.md`: source `docs/untracked.md` modified after updated (untracked); re-check the note against it, then save it to refresh updated",
+    "`notes/c.md`: source `docs/untracked.md` modified after updated (not tracked by the workspace repository, judged by mtime); re-check the note against it, then save it to refresh updated",
   ]);
   expect(report.markdown).toContain("## L17 — source changed after updated (warn, 3건)");
 });
@@ -112,5 +112,33 @@ test("control characters and pathspec magic never reach git as expressions", () 
   const snapshot = analysisInput(f.home, "mine").snapshot;
   const result = sourceAgeFindings(snapshot.notes, f.root, []);
   // The literal untracked file is judged by its own mtime, and the glob does not expand to docs/changed.md.
-  expect(result.findings["a.md"]).toEqual(["source `docs/:(glob)*` modified after updated (untracked); re-check the note against it, then save it to refresh updated"]);
+  expect(result.findings["a.md"]).toEqual(["source `docs/:(glob)*` modified after updated (not tracked by the workspace repository, judged by mtime); re-check the note against it, then save it to refresh updated"]);
+});
+
+test("A1 a merge after updated counts once even when the merged branch commits predate updated", () => {
+  const f = fixture();
+  git(f.root, "2026-01-05T12:00:00", "checkout", "-q", "-b", "side");
+  writeFileSync(join(f.root, "docs", "same.md"), "side\n");
+  git(f.root, "2026-01-05T12:00:00", "commit", "-qam", "side edit");
+  git(f.root, "2026-01-05T12:00:00", "checkout", "-q", "main");
+  git(f.root, "2026-04-01T12:00:00", "merge", "-q", "--no-ff", "-m", "merge side", "side");
+  writeFileSync(join(f.notes, "a.md"), note("a", "docs/same.md", "2026-02-01"));
+  const report = lintVault(analysisInput(f.home, "mine", { hints: true }).snapshot);
+  expect(report.findings.L17).toEqual(["`notes/a.md`: source `docs/same.md` has 1 commit after updated; re-check the note against it, then save it to refresh updated"]);
+});
+
+test("the pathspec byte cap counts the rest as skipped instead of risking E2BIG", () => {
+  const f = fixture();
+  writeFileSync(join(f.notes, "a.md"), note("a", ["docs/changed.md", "docs/same.md"], "2026-02-01"));
+  const snapshot = analysisInput(f.home, "mine").snapshot;
+  const capped = sourceAgeFindings(snapshot.notes, f.root, [], { maxArgvBytes: 30 });
+  expect(capped.skipped).toBe(1);
+  expect(capped.findings["a.md"]).toHaveLength(1);
+});
+
+test("a directory source is credited by the commits of the files under it", () => {
+  const f = fixture();
+  writeFileSync(join(f.notes, "a.md"), note("a", "docs", "2026-02-01"));
+  const snapshot = analysisInput(f.home, "mine").snapshot;
+  expect(sourceAgeFindings(snapshot.notes, f.root, []).findings["a.md"]).toEqual(["source `docs` has 2 commits after updated; re-check the note against it, then save it to refresh updated"]);
 });

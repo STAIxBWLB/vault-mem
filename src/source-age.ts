@@ -9,6 +9,8 @@ import { specGit } from "./spec-git.ts";
 export const SOURCE_AGE_MAX_PATHS = 2000;
 /** Bound on one batched `git log` name listing; past it the tracked check is skipped and reported. */
 const LOG_OUTPUT_BYTES = 8 * 1024 * 1024, LIST_OUTPUT_BYTES = 1024 * 1024;
+/** Total literal pathspec bytes per git call, well under the smallest ARG_MAX (macOS, ~1 MiB with the environment). */
+export const SOURCE_AGE_MAX_ARGV_BYTES = 256 * 1024;
 /** Hardened read-only `git log`: no signature verification programs, no rename following from repo config. */
 const LOG_FLAGS = ["-c", "log.showSignature=false", "-c", "log.follow=false"];
 
@@ -37,11 +39,12 @@ function dayAfter(updated: unknown): number | undefined {
  * `git ls-files` and `lstat`; no source file is opened and nothing is written. Missing paths (L14), denied paths, URLs,
  * memory ids and paths that resolve outside the workspace root are skipped. Git work is two batched calls per run.
  */
-export function sourceAgeFindings(notes: readonly { path: string; source: string }[], root: string, denyPaths: readonly string[], options: { env?: NodeJS.ProcessEnv; maxPaths?: number } = {}): SourceAge {
+export function sourceAgeFindings(notes: readonly { path: string; source: string }[], root: string, denyPaths: readonly string[], options: { env?: NodeJS.ProcessEnv; maxPaths?: number; maxArgvBytes?: number } = {}): SourceAge {
   const result: SourceAge = { findings: Object.create(null) as Record<string, string[]>, unknownAge: 0, skipped: 0 };
   let rootReal: string;
   try { rootReal = realpathSync(root); } catch { return result; }
-  const maxPaths = options.maxPaths ?? SOURCE_AGE_MAX_PATHS;
+  const maxPaths = options.maxPaths ?? SOURCE_AGE_MAX_PATHS, maxArgv = options.maxArgvBytes ?? SOURCE_AGE_MAX_ARGV_BYTES;
+  let argvBytes = 0;
   // Per note: its threshold and the existing, allowed source paths, in source order without duplicates.
   const plan: { note: string; after: number; paths: string[] }[] = [], all = new Set<string>();
   for (const note of notes) {
@@ -65,7 +68,10 @@ export function sourceAgeFindings(notes: readonly { path: string; source: string
     if (after === undefined) { result.unknownAge++; continue; }
     const kept: string[] = [];
     for (const path of paths) {
-      if (all.has(path) || all.size < maxPaths) { all.add(path); kept.push(path); } else result.skipped++;
+      const cost = Buffer.byteLength(path) + 11; // ":(literal)" plus the argv terminator
+      if (all.has(path)) kept.push(path);
+      else if (all.size < maxPaths && argvBytes + cost <= maxArgv) { all.add(path); argvBytes += cost; kept.push(path); }
+      else result.skipped++;
     }
     if (kept.length) plan.push({ note: note.path, after, paths: kept });
   }
@@ -81,7 +87,9 @@ export function sourceAgeFindings(notes: readonly { path: string; source: string
       tracked = new Set(listed.split("\0").filter(Boolean));
       if (tracked.size) {
         const since = Math.min(...plan.map(item => item.after));
-        const log = specGit(rootReal, [...LOG_FLAGS, "log", "--no-show-signature", "--no-renames", "--relative", "-z", "--format=%x01%ct", "--name-only", `--since=@${Math.floor(since / 1000)}`, "--", ...literal], { env: options.env, maxBuffer: LOG_OUTPUT_BYTES }).stdout.toString("utf8");
+        // The mainline only, each commit (merges included) diffed against its first parent: a change that reached the
+        // workspace through a merge after `updated` counts once, at the merge, even when the branch commits are older.
+        const log = specGit(rootReal, [...LOG_FLAGS, "log", "--no-show-signature", "--no-renames", "--first-parent", "--diff-merges=first-parent", "--relative", "-z", "--format=%x01%ct", "--name-only", `--since=@${Math.floor(since / 1000)}`, "--", ...literal], { env: options.env, maxBuffer: LOG_OUTPUT_BYTES }).stdout.toString("utf8");
         for (const record of log.split("\x01").slice(1)) {
           const [time, ...files] = record.split(/\0\n?|\n/).filter(Boolean);
           commits.push({ time: Number(time) * 1000, files });
@@ -89,24 +97,32 @@ export function sourceAgeFindings(notes: readonly { path: string; source: string
       }
     }
   } catch (error) {
-    tracked = new Set(); commits = [];
-    const failedTracked = plan.reduce((sum, item) => sum + item.paths.length, 0);
-    result.gitUnavailable = `${error instanceof Error ? error.message.slice(0, 200) : "git inspection failed"}; tracked sources were not checked`;
-    result.skipped += failedTracked;
+    result.gitUnavailable = `${error instanceof Error ? error.message.slice(0, 200) : "git inspection failed"}; no source was checked. Check that git is installed and that the registry's workspace root is a readable repository, then rerun lint`;
+    result.skipped += all.size;
     return result;
   }
-  const under = (file: string, path: string) => file === path || file.startsWith(path.replace(/\/$/, "") + "/");
+  // One pass over listed files: each file credits every planned path that is it or one of its directories.
+  const planned = new Set(all), prefixes = (file: string) => {
+    const out = [file], parts = file.split("/");
+    for (let i = parts.length - 1; i > 0; i--) out.push(parts.slice(0, i).join("/"));
+    return out.filter(path => planned.has(path) || planned.has(path + "/"));
+  };
+  const key = (path: string) => path.replace(/\/$/, "");
+  const trackedPaths = new Set<string>();
+  for (const file of tracked) for (const path of prefixes(file)) trackedPaths.add(key(path));
+  /** Commit times per planned path (one entry per commit). */
+  const times = new Map<string, number[]>();
+  for (const commit of commits) for (const path of new Set(commit.files.flatMap(prefixes).map(key))) (times.get(path) ?? times.set(path, []).get(path)!).push(commit.time);
   for (const item of plan) {
     const lines: string[] = [];
     for (const path of item.paths) {
-      const isTracked = inRepo && [...tracked].some(file => under(file, path));
-      if (isTracked) {
-        const count = commits.filter(commit => commit.time >= item.after && commit.files.some(file => under(file, path))).length;
+      if (inRepo && trackedPaths.has(key(path))) {
+        const count = (times.get(key(path)) ?? []).filter(time => time >= item.after).length;
         if (count) lines.push(`source \`${path}\` has ${count} commit${count === 1 ? "" : "s"} after updated; re-check the note against it, then save it to refresh updated`);
       } else {
         let mtime: number;
         try { mtime = lstatSync(resolve(rootReal, path)).mtimeMs; } catch { continue; }
-        if (mtime >= item.after) lines.push(`source \`${path}\` modified after updated (untracked); re-check the note against it, then save it to refresh updated`);
+        if (mtime >= item.after) lines.push(`source \`${path}\` modified after updated (not tracked by the workspace repository, judged by mtime); re-check the note against it, then save it to refresh updated`);
       }
     }
     if (lines.length) result.findings[item.note] = lines;
