@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addVault } from "../src/registry.ts";
@@ -334,6 +334,44 @@ test("a symlink, a non-UTF-8 blob and an oversized blob are refused, and a symli
   expect(changes.changed.map(change => change.path).sort()).toEqual(["notes/binary.md", "notes/huge.md"]);
   expect(changes.skippedSymlink).toBe(1);
   expect(JSON.stringify(changes)).not.toContain("link.md");
+});
+
+test("each refusal a snapshot read can raise names the next step, because the sentence is its only signal", () => {
+  const f = fixture();
+  f.write("notes/alpha.md", note("Alpha", "text"));
+  f.commit("alpha");
+  // A directory at the note path is a tree entry, so that revision holds no file there.
+  f.write("notes/dir.md/inner.md", note("Inner", "inside"));
+  symlinkSync("/etc/passwd", join(f.vault, "notes", "link.md"));
+  f.write("notes/binary.md", Buffer.from([0xff, 0xfe, 0x41]));
+  const head = f.commit("shapes");
+  const message = (call: () => unknown): string => {
+    try { call(); } catch (error) { return error instanceof Error ? error.message : String(error); }
+    throw new Error("expected a refusal");
+  };
+  const revision = (path: string) => () => readRevision({ vault: f.spec, home: f.home, note: path, revision: head, env: gitEnv });
+  expect(message(revision("notes/dir.md"))).toMatch(/not a file at this revision; pick another revision from `vmem history <vault> <note>`$/);
+  expect(message(revision("notes/link.md"))).toMatch(/symlinked blobs are refused because a link can leave the vault\. Pick another revision from `vmem history <vault> <note>`$/);
+  expect(message(revision("notes/binary.md"))).toMatch(/not valid UTF-8 text; vmem reads text notes only\. Read that blob with `git cat-file blob` outside vmem$/);
+  expect(message(() => f.read("notes/alpha.md", { cursor: "a".repeat(SNAPSHOT_CURSOR_CHARS + 1) })))
+    .toMatch(/expected the opaque continuation from a previous page; restart without --cursor$/);
+  expect(message(() => readChanges({ vault: f.spec, home: f.home, from: "0".repeat(40), to: head, env: gitEnv })))
+    .toMatch(/not an available commit object; it may be pruned, shallow or belong to another repository\. Pick a full commit id from `vmem history <vault> <note>`$/);
+
+  // Git itself exits nonzero only for a repository it cannot read, so a corrupt object stands in for that: the two
+  // branches of the same condition share one sentence, and git refuses to build a blob entry with a non-blob mode
+  // (`mktree` canonicalises 100664 to 100644 and rejects 100649), which leaves the "not a regular file" line a guard
+  // no reachable tree exercises.
+  const broken = fixture();
+  broken.write("notes/alpha.md", note("Alpha", "one"));
+  const first = broken.commit("one");
+  broken.write("notes/alpha.md", note("Alpha", "two"));
+  broken.commit("two");
+  const object = join(broken.vault, ".git", "objects", first.slice(0, 2), first.slice(2));
+  chmodSync(object, 0o644);
+  writeFileSync(object, "corrupt");
+  expect(message(() => broken.read("notes/alpha.md")))
+    .toMatch(/^snapshot: Git refused inspection \(exit 128\): .+; check the repository with `git fsck` and repair it, then retry$/);
 });
 
 test("a denied path is refused by current policy and only counted, never disclosed, by changes", () => {
