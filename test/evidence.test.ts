@@ -187,3 +187,19 @@ test("E3 org promotion preview drops non-retained evidence from the transformed 
   expect(preview.text).not.toContain("PRIVATE_QUOTE_MARKER");
   expect(preview.text).toContain("https://example.invalid/a");
 });
+
+test("bounds: 16 KiB serialized evidence and sources over 2 MiB", () => {
+  const big = Array.from({ length: 9 }, () => ({ source: "a.md", sha256: sha("x"), quote: "q".repeat(2000) }));
+  expect(evidenceProblem(big, "a.md")).toContain("16384 bytes");
+  const f = fixture();
+  writeFileSync(join(f.notes, "huge.md"), "x".repeat(2 * 1024 * 1024 + 1));
+  f.cite("c", [{ source: "vault/notes/huge.md", sha256: sha("x"), quote: "x" }], ["vault/notes/huge.md"]);
+  expect(evidenceReport(f.vaultSpec(), "c").evidence[0]).toMatchObject({ status: "unsupported", reason: "oversized" });
+});
+
+test("verifyNoteEvidence reads each cited source once per run memo", async () => {
+  const { verifyNoteEvidence } = await import("../src/evidence.ts");
+  const f = fixture(), reads = new Map(), data = { source: "vault/notes/src-note.md", evidence: [entry("인용"), entry("문장")] };
+  verifyNoteEvidence(f.vaultSpec(), data, [], reads); verifyNoteEvidence(f.vaultSpec(), data, [], reads);
+  expect(reads.size).toBe(1);
+});

@@ -10,7 +10,7 @@ import type { AnalysisSnapshot } from "./analysis-types.ts";
 import { deadLinkScan } from "./vault-lint.ts";
 import type { TitleSuggestion } from "./links.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
-import { verifyNoteEvidence } from "./evidence.ts";
+import { verifyNoteEvidence, type EvidenceReads } from "./evidence.ts";
 import { loadRegistry } from "./registry.ts";
 import { VaultIndex } from "./vault-index.ts";
 /** Largest auxiliary input one read takes, and the default bound of `analysisRead` and `analysisReadWithSize`. */
@@ -92,10 +92,10 @@ export function analysisInput(home: string, id: string, options: { today?: strin
     }catch{ /* Invalid frontmatter remains visible to L02; do not infer missing source paths. */ }
     if(Object.keys(warnings).length)snapshot.sourceWarnings=warnings;
     // Evidence drift is a read/lint finding: status and reason only, never the quote or source text.
-    const drift:Record<string,string[]>=Object.create(null);
+    const drift:Record<string,string[]>=Object.create(null),reads:EvidenceReads=new Map();
     for(const note of snapshot.notes)try{
       const data=parseFrontmatter(note.source).data;if(data.evidence===undefined)continue;
-      const found=verifyNoteEvidence(vault,data,config.denyPaths??[]).filter(r=>r.status!=="verified"&&r.status!=="unverified_external").map(r=>`evidence[${r.index}] ${r.status}${r.reason?` (${r.reason})`:""}`);
+      const found=verifyNoteEvidence(vault,data,config.denyPaths??[],reads).filter(r=>r.status!=="verified"&&r.status!=="unverified_external").map(r=>`evidence[${r.index}] ${r.status}${r.reason?` (${r.reason})`:""}`);
       if(found.length)drift[note.path]=found;
     }catch{ /* Invalid frontmatter remains visible to L02. */ }
     if(Object.keys(drift).length)snapshot.evidenceWarnings=drift;

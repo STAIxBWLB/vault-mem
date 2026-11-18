@@ -94,17 +94,18 @@ function boundedRead(file: string): Buffer | "not_a_file" | "oversized" {
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /** Resolve a workspace-relative path reference to a flat `notes/*.md` of `vault`, or the reason it is not one. */
-function resolveVaultNote(vault: VaultSpec, root: string, value: string, denyPaths: readonly string[]): string | EvidenceReason {
+type Resolved = { ok: true; path: string } | { ok: false; reason: EvidenceReason };
+function resolveVaultNote(vault: VaultSpec, root: string, value: string, denyPaths: readonly string[]): Resolved {
   const lexical = resolve(root, value);
-  if (isDenied(canonicalPath(lexical), [...denyPaths]) || isDenied(value, [...denyPaths])) return "denied";
+  if (isDenied(canonicalPath(lexical), [...denyPaths]) || isDenied(value, [...denyPaths])) return { ok: false, reason: "denied" };
   let real: string, vaultReal: string;
-  try { vaultReal = realpathSync(vault.path); } catch { return "source_not_found"; }
-  try { real = realpathSync(lexical); } catch { return "source_not_found"; }
+  try { vaultReal = realpathSync(vault.path); } catch { return { ok: false, reason: "source_not_found" }; }
+  try { real = realpathSync(lexical); } catch { return { ok: false, reason: "source_not_found" }; }
   const notes = join(vaultReal, "notes") + sep;
-  if (!real.startsWith(notes) || real.slice(notes.length).includes(sep) || !/^[^/\\]+\.md$/.test(real.slice(notes.length))) return "outside_vault";
-  if (isDenied(real, [...denyPaths])) return "denied";
-  try { if (lstatSync(real).isSymbolicLink()) return "outside_vault"; } catch { return "source_not_found"; }
-  return real;
+  if (!real.startsWith(notes) || real.slice(notes.length).includes(sep) || !/^[^/\\]+\.md$/.test(real.slice(notes.length))) return { ok: false, reason: "outside_vault" };
+  if (isDenied(real, [...denyPaths])) return { ok: false, reason: "denied" };
+  try { if (lstatSync(real).isSymbolicLink()) return { ok: false, reason: "outside_vault" }; } catch { return { ok: false, reason: "source_not_found" }; }
+  return { ok: true, path: real };
 }
 /** Literal occurrence count (overlapping) and the first index, capped at two. */
 function occurrences(haystack: string, needle: string): { count: number; first: number } {
@@ -114,17 +115,22 @@ function occurrences(haystack: string, needle: string): { count: number; first: 
 }
 
 /** Verify one parsed entry. Every call reads the source afresh; nothing is cached. */
-export function verifyEvidenceEntry(vault: VaultSpec, entry: EvidenceEntry, index: number, denyPaths: readonly string[] = []): EvidenceResult {
+/** Per-run read memo keyed by resolved real path. Callers create one per run; it is never kept across calls. */
+export type EvidenceReads = Map<string, ReturnType<typeof boundedRead>>;
+export function verifyEvidenceEntry(vault: VaultSpec, entry: EvidenceEntry, index: number, denyPaths: readonly string[] = [], reads?: EvidenceReads): EvidenceResult {
   const ref = sourceReferences(entry.source)[0]!;
   const base: EvidenceResult = { index, source: ref.value, kind: ref.kind, ...(entry.section !== undefined ? { section: entry.section } : {}), expectedSha256: entry.sha256, status: "unsupported" };
   if (ref.kind !== "path") return { ...base, status: "unverified_external", reason: "external_reference" };
   const root = sourceWorkspaceRoot(vault);
   if (!root) return { ...base, reason: "unresolved_source_root" };
   const located = resolveVaultNote(vault, root, ref.value, denyPaths);
-  if (located === "source_not_found") return { ...base, status: "missing", reason: located };
-  if (!located.startsWith("/") && !/^[A-Za-z]:/.test(located)) return { ...base, reason: located as EvidenceReason };
+  if (!located.ok) return located.reason === "source_not_found" ? { ...base, status: "missing", reason: located.reason } : { ...base, reason: located.reason };
   let data: ReturnType<typeof boundedRead>;
-  try { data = boundedRead(located); } catch { return { ...base, status: "missing", reason: "source_not_found" }; }
+  try {
+    const cached = reads?.get(located.path);
+    data = cached ?? boundedRead(located.path);
+    if (!cached) reads?.set(located.path, data);
+  } catch { return { ...base, status: "missing", reason: "source_not_found" }; }
   if (data === "not_a_file" || data === "oversized") return { ...base, reason: data };
   let text: string;
   try { text = utf8.decode(data); } catch { return { ...base, reason: "invalid_utf8" }; }
@@ -146,12 +152,12 @@ export function verifyEvidenceEntry(vault: VaultSpec, entry: EvidenceEntry, inde
   return { ...seen, status: "verified", matches: 1, match };
 }
 /** Verify every evidence entry of a parsed note's frontmatter, in order. Malformed entries are `unsupported`/`invalid_metadata`. */
-export function verifyNoteEvidence(vault: VaultSpec, data: Record<string, unknown>, denyPaths: readonly string[] = []): EvidenceResult[] {
+export function verifyNoteEvidence(vault: VaultSpec, data: Record<string, unknown>, denyPaths: readonly string[] = [], reads?: EvidenceReads): EvidenceResult[] {
   const parsed = parseEvidence(data.evidence, data.source);
   if (parsed.problem) return [{ index: 0, source: null, kind: null, expectedSha256: null, status: "unsupported", reason: "invalid_metadata" }];
   return parsed.entries.map((entry, index) => "problem" in entry
     ? { index, source: null, kind: null, expectedSha256: null, status: "unsupported", reason: "invalid_metadata" }
-    : verifyEvidenceEntry(vault, entry, index, denyPaths));
+    : verifyEvidenceEntry(vault, entry, index, denyPaths, reads));
 }
 
 /** Locate a flat note of `vault` by stem or `notes/<stem>.md` without the index, refusing links and denied paths. */
@@ -201,8 +207,8 @@ export function screenEvidenceForTarget(value: unknown, source: unknown, target:
     if (ref.kind === "memory") { removed.push({ index, reason: "memory_not_retained" }); continue; }
     if (!root) { removed.push({ index, reason: "unresolved_source_root" }); continue; }
     const located = resolveVaultNote(target, root, ref.value, denyPaths);
-    if (located.startsWith("/") || /^[A-Za-z]:/.test(located)) kept.push(entry);
-    else removed.push({ index, reason: located === "denied" ? "denied" : "not_in_destination" });
+    if (located.ok) kept.push(entry);
+    else removed.push({ index, reason: located.reason === "denied" ? "denied" : "not_in_destination" });
   }
   return { kept: kept.length ? kept : undefined, removed };
 }
