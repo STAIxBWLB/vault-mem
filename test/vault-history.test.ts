@@ -1,14 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addVault } from "../src/registry.ts";
 import { run } from "../src/cli.ts";
+import { COMMANDS } from "../src/commands-table.ts";
 import { validArguments } from "../src/mcp.ts";
 import { createVaultMcp, VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
 import { MAX_NOTE_BYTES } from "../src/vault-index.ts";
-import { CHANGES_PAGE_LIMIT, HISTORY_PAGE_LIMIT, HISTORY_SCAN_LIMIT, SNAPSHOT_TRANSPORT_BYTES, readChanges, readHistory, readRevision } from "../src/vault-history.ts";
+import { CHANGES_PAGE_LIMIT, HISTORY_PAGE_LIMIT, HISTORY_SCAN_LIMIT, SNAPSHOT_CURSOR_CHARS, SNAPSHOT_TRANSPORT_BYTES, readChanges, readHistory, readRevision } from "../src/vault-history.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -21,6 +22,8 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.toString().trim();
 }
 const note = (title: string, body: string) => `---\ntitle: ${JSON.stringify(title)}\ndescription: Synthetic history evidence.\ntype: insight\ndomain: research\n---\n# ${title}\n\n${body}\n`;
+/** What one result costs on the wire: the MCP transport stringifies the handler result into the JSON-RPC frame. */
+const frameBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(JSON.stringify(value)));
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-history-"))); roots.push(root);
   const home = join(root, "state"), vault = join(root, "vault");
@@ -76,7 +79,8 @@ test("history lists one note's first-parent revisions with Git blob ids, sizes a
     committedAt: f.git(f.vault, "log", "-1", "--format=%cI", first) });
   expect(result.revisions[0]!.blob).toBe(f.git(f.vault, "rev-parse", `${head}:notes/alpha.md`));
   expect(result.revisions[0]!.bytes).toBe(Buffer.byteLength(headBody));
-  expect(result.scanned).toBe(2);
+  // `scanned` counts commits traversed, not commits that touched the path: the unrelated commit is walked too.
+  expect(result.scanned).toBe(3);
   expect(result.scanLimit).toBe(HISTORY_SCAN_LIMIT);
   expect(result.pageLimit).toBe(HISTORY_PAGE_LIMIT);
   expect(result.stopReason).toBe("history_end");
@@ -179,7 +183,8 @@ test("a merge commit is the boundary for a note changed only on a merged branch"
   expect(result.firstParent).toBe(true);
   expect(result.revisions.map(revision => revision.revision)).toEqual([merge, base]);
   expect(result.revisions[0]!.blob).toBe(f.git(f.vault, "rev-parse", `${merge}:notes/alpha.md`));
-  expect(result.scanned).toBe(2);
+  // merge, the main-only commit and base: the side branch is never traversed.
+  expect(result.scanned).toBe(3);
 });
 
 test("uncommitted edits are counted only by dirtyNotes and never appear as a revision", () => {
@@ -252,7 +257,7 @@ test("a shallow clone reports incomplete coverage and never claims a full histor
   expect(result.revisions[0]!.blob).toBe(f.git(f.vault, "rev-parse", `${head}:notes/alpha.md`));
 });
 
-test("a missing blob marks coverage incomplete and refuses the read instead of serving current content", () => {
+test("a missing object reports the object_unavailable capability in history and in a revision read", () => {
   const f = fixture();
   f.write("notes/alpha.md", note("Alpha", "first text"));
   const first = f.commit("one");
@@ -265,7 +270,20 @@ test("a missing blob marks coverage incomplete and refuses the read instead of s
   expect(result.capability).toBe("object_unavailable");
   expect(result.coverage).toEqual({ complete: false, reason: "object_unavailable" });
   expect(result.revisions[0]!.blob).not.toBe(blob);
-  expect(() => readRevision({ vault: f.spec, home: f.home, note: "notes/alpha.md", revision: first, env: gitEnv })).toThrow(/Git refused inspection/);
+  // A pruned blob is a capability result, not a generic refusal and never the current note.
+  const pruned = readRevision({ vault: f.spec, home: f.home, note: "notes/alpha.md", revision: first, env: gitEnv });
+  expect(pruned.found).toBe(false);
+  expect(pruned.capability).toBe("object_unavailable");
+  expect(pruned.coverage).toEqual({ complete: false, reason: "object_unavailable" });
+  expect(pruned.revision).toBe(first);
+  expect(pruned.content).toBeUndefined();
+  expect(JSON.stringify(pruned)).not.toContain("second text");
+  expect(run(["show", "demo", "alpha", "--revision", first], f.env).text).toContain("no historical content: object_unavailable");
+  // The same holds for a commit object that is gone.
+  const missing = "f".repeat(40);
+  const absent = readRevision({ vault: f.spec, home: f.home, note: "notes/alpha.md", revision: missing, env: gitEnv });
+  expect(absent.capability).toBe("object_unavailable");
+  expect(absent.found).toBe(false);
 });
 
 test("note targets outside notes/ or with dot segments are refused before any Git call", () => {
@@ -293,7 +311,9 @@ test("only one full lowercase commit id is accepted, and an unreachable commit s
   f.git(f.vault, "checkout", "--quiet", "main");
   expect(() => readRevision({ vault: f.spec, home: f.home, note: "notes/alpha.md", revision: side, env: gitEnv })).toThrow(/not reachable from the vault HEAD/);
   expect(() => readChanges({ vault: f.spec, home: f.home, from: side, to: base, env: gitEnv })).toThrow(/not reachable from the vault HEAD/);
-  expect(() => readRevision({ vault: f.spec, home: f.home, note: "notes/alpha.md", revision: "0".repeat(40), env: gitEnv })).toThrow(/not an available commit object/);
+  // A commit object that is not there is a capability result, so an all-zero id is answered rather than refused.
+  expect(readRevision({ vault: f.spec, home: f.home, note: "notes/alpha.md", revision: "0".repeat(40), env: gitEnv }).capability).toBe("object_unavailable");
+  expect(() => readChanges({ vault: f.spec, home: f.home, from: "0".repeat(40), to: base, env: gitEnv })).toThrow(/not an available commit object/);
 });
 
 test("a symlink, a non-UTF-8 blob and an oversized blob are refused, and a symlink is only counted", () => {
@@ -453,15 +473,34 @@ test("complete responses stay within the transport budget, including escape-heav
     f.commit(`c${version}`);
   }
   const whole = f.read("notes/alpha.md", {});
-  expect(Buffer.byteLength(JSON.stringify(whole))).toBeLessThanOrEqual(SNAPSHOT_TRANSPORT_BYTES);
+  expect(frameBytes(whole)).toBeLessThanOrEqual(SNAPSHOT_TRANSPORT_BYTES);
   const tight = readHistory({ vault: f.spec, home: f.home, note: "notes/alpha.md", env: gitEnv }, { transportBytes: 900 });
-  expect(Buffer.byteLength(JSON.stringify(tight))).toBeLessThanOrEqual(900);
+  expect(frameBytes(tight)).toBeLessThanOrEqual(900);
   expect(tight.truncated).toBe(true);
   expect(["transport_limit", "page_full"]).toContain(tight.stopReason);
   expect(tight.revisions.length).toBeLessThan(5);
   const changes = readChanges({ vault: f.spec, home: f.home, from: whole.revisions.at(-1)!.revision, to: whole.head!, env: gitEnv }, { transportBytes: 700 });
-  expect(Buffer.byteLength(JSON.stringify(changes))).toBeLessThanOrEqual(700);
+  expect(frameBytes(changes)).toBeLessThanOrEqual(700);
   expect(changes.truncated).toBe(true);
+});
+
+test("the bound is measured on the JSON-RPC frame, and a heading-heavy page drops headings before overshooting", () => {
+  const f = fixture();
+  const headings = Array.from({ length: 40 }, (_, index) => `## ${"\"\\".repeat(20)}${index}`).join("\n\n");
+  // A truncated 64 KiB page of quotes is a 128 KiB JSON text before the frame escapes it again.
+  const body = note("Heavy", `intro\n\n${headings}\n\n${"\"".repeat(70_000)}`);
+  f.write("notes/heavy.md", body);
+  const head = f.commit("heavy");
+  const result = readRevision({ vault: f.spec, home: f.home, note: "notes/heavy.md", revision: head, maxBytes: 65536, env: gitEnv });
+  expect(frameBytes(result)).toBeLessThanOrEqual(SNAPSHOT_TRANSPORT_BYTES);
+  expect(result.transportLimited).toBe(true);
+  expect(result.content!.length).toBeGreaterThan(0);
+  // A small budget cannot hold content plus headings, so the list goes and its flag says so.
+  const tiny = readRevision({ vault: f.spec, home: f.home, note: "notes/heavy.md", revision: head, maxBytes: 65536, env: gitEnv }, { transportBytes: 2000 });
+  expect(frameBytes(tiny)).toBeLessThanOrEqual(2000);
+  expect(tiny.headings).toBeUndefined();
+  expect(tiny.headingsTruncated).toBe(true);
+  expect(tiny.transportLimited).toBe(true);
 });
 
 test("a historical read trims on a UTF-8 boundary within 48 KiB and resumes at nextOffset", () => {
@@ -471,7 +510,7 @@ test("a historical read trims on a UTF-8 boundary within 48 KiB and resumes at n
   f.write("notes/heavy.md", body);
   const head = f.commit("heavy");
   const result = readRevision({ vault: f.spec, home: f.home, note: "notes/heavy.md", revision: head, maxBytes: 65536, env: gitEnv });
-  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(SNAPSHOT_TRANSPORT_BYTES);
+  expect(frameBytes(result)).toBeLessThanOrEqual(SNAPSHOT_TRANSPORT_BYTES);
   expect(result.transportLimited).toBe(true);
   expect(result.truncated).toBe(true);
   expect(result.nextOffset).toBe(Buffer.byteLength(result.content!));
@@ -518,7 +557,7 @@ test("the CLI renders history, a pinned revision and a tree comparison with the 
   expect(JSON.parse(run(["history", "demo", "alpha", "--json"], f.env).text).revisions).toHaveLength(2);
   expect(() => run(["history", "demo", "alpha", "--limit", "101"], f.env)).toThrow(/limit: expected integer 1\.\.100/);
   expect(() => run(["history", "demo", "alpha", "--cursor", "nope"], f.env)).toThrow(/not a continuation/);
-  expect(() => run(["changes", "demo", "--from", first], f.env)).toThrow(/--from and --to are required/);
+  expect(() => run(["changes", "demo", "--from", first], f.env)).toThrow(/requires one vault id plus --from and --to/);
   const show = run(["show", "demo", "alpha", "--revision", first, "--max-bytes", "12"], f.env).text;
   expect(show).toContain(`show demo notes/alpha.md at ${first.slice(0, 12)}`);
   expect(show).toContain(first);
@@ -559,6 +598,150 @@ test("MCP exposes the same provider as read-only tools and refuses a prefix revi
   expect(revision.content).toBe(note("Alpha", "v1"));
   const changes = await server.handlers.vmem_changes!({ from: first, to: head }) as { changed: { status: string }[] };
   expect(changes.changed.map(change => change.status)).toEqual(["M"]);
+});
+
+test("a cursor cannot resume from a commit off the pinned first-parent chain", () => {
+  const f = fixture();
+  f.write("notes/alpha.md", note("Alpha", "base"));
+  const base = f.commit("base");
+  f.git(f.vault, "checkout", "--quiet", "-b", "side");
+  f.write("notes/side.md", note("Side", "only on the branch"));
+  const side = f.commit("side change");
+  f.git(f.vault, "checkout", "--quiet", "main");
+  f.write("notes/alpha.md", note("Alpha", "main"));
+  f.commit("main change");
+  f.git(f.vault, "merge", "--quiet", "--no-ff", "-m", "merge side", "side");
+  const pin = f.git(f.vault, "rev-parse", "HEAD");
+  const page = f.read("notes/alpha.md", { limit: 1 });
+  expect(page.head).toBe(pin);
+  const cursor = (after: string) => Buffer.from(JSON.stringify({ v: 1, kind: "history", path: "notes/alpha.md", head: pin, after }), "utf8").toString("base64url");
+  // `side` is reachable from HEAD through the merge, but this walk never visits it.
+  expect(() => f.read("notes/alpha.md", { cursor: cursor(side) })).toThrow(/not on the first-parent chain of the pinned .*restart without --cursor/);
+  expect(() => f.read("notes/alpha.md", { cursor: cursor("0".repeat(40)) })).toThrow(/not an available commit object/);
+  // The continuation this provider issued still resumes the walk.
+  expect(f.read("notes/alpha.md", { cursor: page.continuation }).revisions.map(revision => revision.revision)).toEqual([base]);
+});
+
+test("a note path with a control character is refused instead of becoming a Git expression", () => {
+  const f = fixture();
+  f.write("notes/alpha.md", note("Alpha", "plain"));
+  f.write("notes/secret.md", note("Secret", "hidden text"));
+  f.write("notes/two\nlines.md", note("Split", "committed under a newline"));
+  const head = f.commit("notes");
+  for (const target of ["notes/two\nlines.md", "notes/alpha.md\nnotes/secret.md", "notes/two\rlines.md", "notes/two\tlines.md"]) {
+    expect(() => f.read(target)).toThrow(/note: expected a note target/);
+    expect(() => readRevision({ vault: f.spec, home: f.home, note: target, revision: head, env: gitEnv })).toThrow(/note: expected a note target/);
+  }
+  // Nothing from the second expression reaches the refusal text or an earlier read.
+  let message = "";
+  try { f.read("notes/alpha.md\nnotes/secret.md"); } catch (error) { message = error instanceof Error ? error.message : String(error); }
+  expect(message).not.toContain("secret");
+  const alpha = f.read("notes/alpha.md");
+  expect(JSON.stringify(alpha)).not.toContain("two");
+  expect(JSON.stringify(alpha)).not.toContain("hidden text");
+});
+
+test("a repository's own log.follow, log.showSignature and gpg.program settings never take effect", () => {
+  const f = fixture();
+  f.write("notes/old-name.md", note("Old", "content"));
+  const added = f.commit("add old");
+  f.git(f.vault, "mv", "notes/old-name.md", "notes/new-name.md");
+  const renamed = f.commit("rename note");
+  // A commit that carries a signature header, so Git really consults gpg.program while walking.
+  const bodyFile = join(f.root, "signed-commit.txt");
+  writeFileSync(bodyFile, ["tree " + f.git(f.vault, "rev-parse", "HEAD^{tree}"), "parent " + renamed,
+    "author Fixture <fixture@example.invalid> 1700000000 +0000", "committer Fixture <fixture@example.invalid> 1700000000 +0000",
+    "gpgsig -----BEGIN PGP SIGNATURE-----", " ", " ZmFrZXNpZw==", " -----END PGP SIGNATURE-----", "", "signed snapshot", ""].join("\n"));
+  const signed = f.git(f.vault, "hash-object", "-t", "commit", "-w", bodyFile);
+  f.git(f.vault, "update-ref", "refs/heads/main", signed);
+  f.git(f.vault, "config", "log.follow", "true");
+  const marker = join(f.root, "gpg-ran"), program = join(f.root, "fake-gpg.sh");
+  writeFileSync(program, `#!/bin/sh\nprintf ran >> ${JSON.stringify(marker)}\ncat >/dev/null\n`, { mode: 0o755 });
+  f.git(f.vault, "config", "log.showSignature", "true");
+  f.git(f.vault, "config", "gpg.program", program);
+  // The settings are live in this fixture: plain Git runs the configured program, and this output is not a signature.
+  try { f.git(f.vault, "log", "--format=%H", "-1"); } catch { /* verification output is reported, not raised */ }
+  expect(existsSync(marker)).toBe(true);
+  rmSync(marker);
+  expect(f.read("notes/old-name.md").revisions.map(revision => revision.revision)).toEqual([added]);
+  expect(f.read("notes/new-name.md").revisions.map(revision => revision.revision)).toEqual([renamed]);
+  expect(readRevision({ vault: f.spec, home: f.home, note: "notes/new-name.md", revision: renamed, env: gitEnv }).found).toBe(true);
+  expect(readChanges({ vault: f.spec, home: f.home, from: added, to: signed, env: gitEnv }).changed).toHaveLength(2);
+  expect(existsSync(marker)).toBe(false);
+});
+
+test("a clean filter configured for notes/ stops the dirty-note count instead of running it", () => {
+  const f = fixture();
+  f.write("notes/alpha.md", note("Alpha", "v1"));
+  f.commit("one");
+  for (const [attributes, label] of [["notes/*.md filter=evil\n", "value"], ["notes/*.md -filter\n", "unset"], ["notes/*.md filter\n", "set"]] as const) {
+    f.write(".gitattributes", attributes);
+    f.commit(`attributes ${label}`);
+    const result = f.read("notes/alpha.md");
+    expect(result.dirtyNotes).toBeNull();
+    expect(result.dirtyNotesReason).toMatch(/clean filter is configured for notes\//);
+  }
+  f.write(".gitattributes", "# no filter attribute\n");
+  f.commit("no attribute");
+  expect(f.read("notes/alpha.md").dirtyNotes).toBe(0);
+});
+
+test("the scan limit bounds commits traversed, and an empty page still continues the walk", () => {
+  const f = fixture();
+  f.write("notes/alpha.md", note("Alpha", "v1"));
+  const first = f.commit("one");
+  for (const index of [2, 3, 4]) { f.write("notes/other.md", note("Other", `o${index}`)); f.commit(`other${index}`); }
+  f.write("notes/alpha.md", note("Alpha", "v2"));
+  const head = f.commit("alpha again");
+  const whole = f.read("notes/alpha.md");
+  expect(whole.revisions.map(revision => revision.revision)).toEqual([head, first]);
+  // Every first-parent commit from HEAD, not only the two that touched the note.
+  expect(whole.scanned).toBe(5);
+  const page1 = readHistory({ vault: f.spec, home: f.home, note: "notes/alpha.md", env: gitEnv }, { scanLimit: 2 });
+  expect(page1.scanned).toBe(2);
+  expect(page1.revisions.map(revision => revision.revision)).toEqual([head]);
+  expect(page1.stopReason).toBe("scan_limit");
+  expect(page1.truncated).toBe(true);
+  // The limit belongs to the request, not the cursor: a continuation is read with its own scan limit.
+  const page2 = readHistory({ vault: f.spec, home: f.home, note: "notes/alpha.md", cursor: page1.continuation, env: gitEnv }, { scanLimit: 2 });
+  expect(page2.scanned).toBe(2);
+  expect(page2.revisions).toEqual([]);
+  expect(page2.stopReason).toBe("scan_limit");
+  expect(page2.continuation).toBeTruthy();
+  const page3 = readHistory({ vault: f.spec, home: f.home, note: "notes/alpha.md", cursor: page2.continuation, env: gitEnv }, { scanLimit: 2 });
+  expect(page3.revisions.map(revision => revision.revision)).toEqual([first]);
+  expect(page3.stopReason).toBe("history_end");
+  expect(page3).not.toHaveProperty("continuation");
+});
+
+test("a continuation survives a note path longer than the old 1024-character cursor cap", () => {
+  const f = fixture();
+  const deep = `notes/${"d".repeat(200)}/${"d".repeat(200)}/${"d".repeat(200)}/${"e".repeat(195)}.md`;
+  f.write(deep, note("Deep", "v1"));
+  const first = f.commit("one");
+  f.write(deep, note("Deep", "v2"));
+  f.commit("two");
+  const page = f.read(deep, { limit: 1 });
+  expect(page.stopReason).toBe("page_full");
+  expect(page.continuation!.length).toBeGreaterThan(1024);
+  expect(f.read(deep, { cursor: page.continuation }).revisions.map(revision => revision.revision)).toEqual([first]);
+  const tool = createVaultMcp(f.home, { VMEM_HOME: f.home }).tools.find(entry => entry.name === "vmem_history")!;
+  expect(validArguments({ path: deep, cursor: page.continuation }, tool.inputSchema)).toBe(true);
+  expect(validArguments({ path: deep, cursor: "x".repeat(SNAPSHOT_CURSOR_CHARS + 1) }, tool.inputSchema)).toBe(false);
+});
+
+test("history and changes are published read-only, and the MCP handlers use the server's own environment", async () => {
+  const f = fixture();
+  f.write("notes/alpha.md", note("Alpha", "v1"));
+  const head = f.commit("one");
+  expect(COMMANDS.find(item => item.name === "history")!.mutates).toBe(false);
+  expect(COMMANDS.find(item => item.name === "changes")!.mutates).toBe(false);
+  const manifest = JSON.parse(run(["manifest", "--json"], f.env).text) as { mcp: { tools: (string | { name: string; readOnly?: boolean })[] } };
+  for (const name of ["vmem_history", "vmem_changes"]) expect(manifest.mcp.tools).toContainEqual({ name, readOnly: true });
+  const broken = createVaultMcp(f.home, { VMEM_HOME: f.home, PATH: join(f.root, "no-git") });
+  expect((await broken.handlers.vmem_history!({ path: "notes/alpha.md" }) as { capability?: string }).capability).toBe("git_unavailable");
+  expect((await broken.handlers.vmem_read!({ path: "notes/alpha.md", revision: head }) as { capability?: string }).capability).toBe("git_unavailable");
+  expect((await broken.handlers.vmem_changes!({ from: head, to: head }) as { capability?: string }).capability).toBe("git_unavailable");
 });
 
 test("unavailable Git and an exhausted deadline are explicit, never current content", () => {
