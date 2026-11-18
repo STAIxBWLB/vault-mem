@@ -97,3 +97,7 @@ export function encodeProposalRecord(record: ProposalRecord): Uint8Array {
   decodeProposalRecord(bytes);
   return bytes;
 }
+/** Digest the complete canonical record so decisions can bind both payload and state. */
+export function proposalRecordDigest(record: ProposalRecord): string {
+  return createHash("sha256").update(encodeProposalRecord(record)).digest("hex");
+}

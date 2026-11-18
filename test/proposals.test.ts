@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalPayloadDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
-import { checkStoredBinding, createStoredProposal, readStoredProposal } from "../src/proposal-storage.ts";
+import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalPayloadDigest, proposalRecordDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
+import { checkStoredBinding, createStoredProposal, readStoredProposal, replaceStoredProposal } from "../src/proposal-storage.ts";
 import { listProposals, proposalReplyBytes, showProposal, submitProposal } from "../src/proposal-provider.ts";
 import { addVault, removeVault, setVaultPii } from "../src/registry.ts";
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -63,6 +63,23 @@ test("private record storage refuses overwrite, linked files and permissive dire
     rmSync(file);
     symlinkSync(join(home, "outside"), file);
     expect(() => readStoredProposal(home, record.bindingDigest, record.id)).toThrow();
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("record replacement binds the exact prior bytes and immutable payload", () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-cas-")));
+  const operation = parseProposalOperation({ op: "create", path: "synthetic", frontmatter: {}, body: "safe" });
+  const pending: ProposalRecord = { schemaVersion: 1, id: "12345678-1234-4123-8123-123456789abc", vault: "test", bindingDigest: "a".repeat(64), state: "pending", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", operation, payloadDigest: proposalPayloadDigest(operation) };
+  const rejected: ProposalRecord = { ...pending, state: "rejected", decisionReason: "not needed", updatedAt: "2026-01-02T00:00:00.000Z" };
+  try {
+    createStoredProposal(home, pending);
+    const before = proposalRecordDigest(pending);
+    replaceStoredProposal(home, pending.bindingDigest, pending.id, before, rejected);
+    expect(readStoredProposal(home, pending.bindingDigest, pending.id)).toEqual(rejected);
+    expect(() => replaceStoredProposal(home, pending.bindingDigest, pending.id, before, rejected)).toThrow("changed since preview");
+    const altered = parseProposalOperation({ op: "create", path: "other", frontmatter: {}, body: "safe" });
+    expect(() => replaceStoredProposal(home, pending.bindingDigest, pending.id, proposalRecordDigest(rejected), { ...rejected, operation: altered, payloadDigest: proposalPayloadDigest(altered) })).toThrow("immutable");
+    expect(readStoredProposal(home, pending.bindingDigest, pending.id)).toEqual(rejected);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 

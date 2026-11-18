@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { syncDirectory } from "./registry.ts";
 import { capturePublicationPath, cleanupOwnedFile, publishFile } from "./write-files.ts";
-import { decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RECORD_BYTES, type ProposalRecord } from "./proposals.ts";
+import { decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RECORD_BYTES, proposalRecordDigest, type ProposalRecord } from "./proposals.ts";
 
 const DIGEST = /^[a-f0-9]{64}$/;
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -141,13 +141,15 @@ export function listStoredProposalIds(home: string, binding: string): string[] {
   } finally { try { entries.closeSync(); } finally { closeSync(fd); } }
   return ids.sort();
 }
-/** Publishes a new record atomically without overwriting any existing proposal. */
-export function createStoredProposal(home: string, record: ProposalRecord): void {
-  const bytes = encodeProposalRecord(record), root = resolve(home), base = join(root, "proposals");
+/** Serializes store updates and keeps the descriptor for the lock throughout cleanup. */
+function withStoreLock<T>(home: string, create: boolean, work: (root: string) => T): T {
+  const root = resolve(home), base = join(root, "proposals");
   if (realpathSync(root) !== root) throw new Error("proposal: configured home is linked; inspect the configured home");
-  let made = false;
-  try { mkdirSync(base, { mode: 0o700 }); made = true; } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-  if (made) syncDirectory(root);
+  if (create) {
+    let made = false;
+    try { mkdirSync(base, { mode: 0o700 }); made = true; } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    if (made) syncDirectory(root);
+  }
   validateDirectory(base);
   const lock = join(base, ".binding.lock");
   let fd: number;
@@ -158,11 +160,55 @@ export function createStoredProposal(home: string, record: ProposalRecord): void
   }
   try {
     writeFileSync(fd, JSON.stringify({ pid: process.pid, token: randomUUID() })); fsyncSync(fd); syncDirectory(base);
+    return work(root);
+  } finally {
+    try { cleanupOwnedFile(lock, fd); syncDirectory(base); } finally { closeSync(fd); }
+  }
+}
+/** Publishes a new record atomically without overwriting any existing proposal. */
+export function createStoredProposal(home: string, record: ProposalRecord): void {
+  const bytes = encodeProposalRecord(record);
+  withStoreLock(home, true, root => {
     const found = checkStoredBinding(root, record.vault, record.bindingDigest);
     const { file } = recordFile(root, record.bindingDigest, record.id, true), dir = directory(root, record.bindingDigest, false);
     if (!found) publishNew(root, dir, join(dir, "binding.json"), Buffer.from(JSON.stringify({ schemaVersion: 1, vault: record.vault, bindingDigest: record.bindingDigest }), "utf8"));
     publishNew(root, dir, file, bytes);
-  } finally {
-    try { cleanupOwnedFile(lock, fd); syncDirectory(base); } finally { closeSync(fd); }
+  });
+}
+
+/** Compare-and-replace a record while retaining the proposal payload and vault identity. */
+export function replaceStoredProposal(home: string, binding: string, id: string, expectedDigest: string, next: ProposalRecord): void {
+  if (!DIGEST.test(expectedDigest)) throw new Error("proposal: invalid record fingerprint; request a new preview");
+  const bytes = encodeProposalRecord(next);
+  let published = false;
+  try { withStoreLock(home, false, root => {
+    const { file } = recordFile(root, binding, id, false), dir = directory(root, binding, false);
+    const sourceFd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const before = fstatSync(sourceFd); validRecordFile(before);
+      const current = readStoredProposal(root, binding, id);
+      if (proposalRecordDigest(current) !== expectedDigest) throw new Error("proposal: record changed since preview; request a new preview");
+      if (current.id !== next.id || current.vault !== next.vault || current.bindingDigest !== next.bindingDigest || current.createdAt !== next.createdAt || current.payloadDigest !== next.payloadDigest || current.agentLabel !== next.agentLabel)
+        throw new Error("proposal: decision cannot change immutable record fields; request a new preview");
+      if (!checkStoredBinding(root, current.vault, binding)) throw new Error("proposal: vault binding is missing; inspect the proposal store");
+      const path = capturePublicationPath(root, file), temporary = join(dir, `.proposal-${randomUUID()}.tmp`);
+      const tempFd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      try {
+        writeFileSync(tempFd, bytes); fsyncSync(tempFd);
+        const named = lstatSync(file), held = fstatSync(sourceFd); validRecordFile(named); validRecordFile(held);
+        if (before.dev !== held.dev || before.ino !== held.ino || before.size !== held.size || before.mtimeMs !== held.mtimeMs || before.ctimeMs !== held.ctimeMs || named.dev !== held.dev || named.ino !== held.ino)
+          throw new Error("proposal: record changed during decision; request a new preview");
+        publishFile(path, { kind: "rename", temp: temporary }, () => { published = true; });
+        syncDirectory(dir);
+      } catch (error) {
+        if (published) throw new Error("proposal: record update was published but durability or path verification failed; inspect the proposal store before retrying", { cause: error });
+        throw error;
+      } finally {
+        try { if (!published) cleanupOwnedFile(temporary, tempFd); } finally { closeSync(tempFd); }
+      }
+    } finally { closeSync(sourceFd); }
+  }); } catch (error) {
+    if (published) throw new Error("proposal: record update was published but finalization failed; inspect the proposal store before retrying", { cause: error });
+    throw error;
   }
 }
