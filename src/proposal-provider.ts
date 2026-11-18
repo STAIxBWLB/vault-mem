@@ -4,7 +4,7 @@ import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { loadRegistry } from "./registry.ts";
 import { logBinding, matchesBinding } from "./vault-log.ts";
-import { applyProposalWrite, applyWrite } from "./writer.ts";
+import { applyProposalWrite, applyWrite, proposalTargetDigest } from "./writer.ts";
 import { screenMetadata } from "./write-validation.ts";
 import { checkStoredBinding, createStoredProposal, listStoredProposalIds, readStoredProposal, replaceStoredProposal } from "./proposal-storage.ts";
 import { encodeProposalRecord, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, type ProposalRecord } from "./proposals.ts";
@@ -22,6 +22,7 @@ export interface ProposalShowRequest { vault: string; id: string; offset?: numbe
 export interface ProposalView { id: string; vault: string; state: ProposalRecord["state"]; path: string; createdAt: string; payloadDigest: string; agentLabelUnverified?: string; decisionReason?: string; content: string; offset: number; nextOffset: number | null; truncated: boolean }
 export interface ProposalApplyPreview { id: string; vault: string; state: "pending"; fingerprint: string; changes: ChangeReceipt[]; issues: WriteIssue[] }
 export interface ProposalApplyResult { ok: boolean; applied: boolean; state: "pending" | "applied" | "apply_unknown"; logged: boolean | null; issues: WriteIssue[] }
+export interface ProposalReconciliation { id: string; vault: string; state: "apply_unknown"; beforeSha: string | null; afterSha: string | null; observedSha: string | null; matchesBefore: boolean; matchesAfter: boolean; receiptEvidence: "unavailable"; explanation: string }
 const MAX_SHOW_BYTES = 16 * 1024, MAX_RPC_REPLY_BYTES = 48 * 1024;
 
 /** Conservative complete MCP reply size; MCP limits request IDs to 200 UTF-16 units (at most 1200 encoded bytes). */
@@ -184,4 +185,21 @@ export function applyProposal(home: string, request: { vault: string; id: string
   } catch { /* Failure to read the state cannot prove that publication did not start. */ }
   if (!bindingStillCurrent(home, context)) return { ok: false, applied: false, state: "apply_unknown", logged, issues: [{ code: "VAULT_DRIFT", severity: "error", message: "vault binding or policy changed; inspect the proposal before retrying" }] };
   return { ok: false, applied: false, state, logged, issues: receipt.issues };
+}
+
+/** Compare recorded intent to the current target without inferring attribution or changing state. */
+export function reconcileProposal(home: string, request: { vault: string; id: string }, options: ProposalContext): ProposalReconciliation {
+  if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string")
+    throw new Error("proposal: invalid reconciliation request; provide a vault and proposal id");
+  const context = currentBinding(home, request.vault, options.channel);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
+  const record = readStoredProposal(home, context.bindingDigest, request.id);
+  screenForRead(record, context);
+  if (record.state !== "apply_unknown" || !record.intent) throw new Error("proposal: reconciliation needs an uncertain apply; inspect the proposal state");
+  const recordDigest = proposalRecordDigest(record), observedSha = proposalTargetDigest(home, record.vault, record.operation.path, context.binding);
+  if (!bindingStillCurrent(home, context) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id)) !== recordDigest)
+    throw new Error("proposal: record, vault binding or policy changed during reconciliation; retry with the current policy");
+  return { id: record.id, vault: record.vault, state: "apply_unknown", beforeSha: record.intent.beforeSha, afterSha: record.intent.afterSha, observedSha,
+    matchesBefore: observedSha === record.intent.beforeSha, matchesAfter: observedSha === record.intent.afterSha, receiptEvidence: "unavailable",
+    explanation: "Matching content does not prove this proposal published it; inspect independent receipt evidence before any manual recovery." };
 }

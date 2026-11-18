@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
 import { checkStoredBinding, createStoredProposal, readStoredProposal, replaceStoredProposal } from "../src/proposal-storage.ts";
-import { applyProposal, listProposals, previewProposalApply, proposalReplyBytes, showProposal, submitProposal } from "../src/proposal-provider.ts";
+import { applyProposal, listProposals, previewProposalApply, proposalReplyBytes, reconcileProposal, showProposal, submitProposal } from "../src/proposal-provider.ts";
 import { addVault, loadRegistry, removeVault, setVaultPii } from "../src/registry.ts";
 import { logBinding } from "../src/vault-log.ts";
 import { applyProposalWrite, applyWrite } from "../src/writer.ts";
@@ -190,8 +190,16 @@ test("writer guard records intent under the mutation lock and refuses a stale de
     const after = readStoredProposal(home, bindingDigest, record.id);
     expect(after.state).toBe("apply_unknown");
     expect(after.intent).toMatchObject({ fingerprint, beforeSha: null, afterSha: applied.changes[0]!.sha256 });
+    const observed = reconcileProposal(home, { vault: "test", id: record.id }, { channel: "mcp" });
+    expect(observed).toMatchObject({ state: "apply_unknown", matchesBefore: false, matchesAfter: true, receiptEvidence: "unavailable" });
+    expect(readStoredProposal(home, bindingDigest, record.id)).toEqual(after);
     expect(applyProposalWrite(home, request, { binding, proposal: decision }).applied).toBe(false);
     expect(() => previewProposalApply(home, { vault: "test", id: record.id }, { channel: "mcp" })).toThrow("outcome is unknown");
+    const second = submitProposal(home, { vault: "test", operation: { ...input, path: "precrash", body: input.body.replace("Proposed", "Precrash") } }, { channel: "mcp" });
+    const pending = readStoredProposal(home, bindingDigest, second.id);
+    replaceStoredProposal(home, bindingDigest, second.id, proposalRecordDigest(pending), { ...pending, state: "apply_unknown", intent: { fingerprint: "a".repeat(64), beforeSha: null, afterSha: "b".repeat(64) } });
+    expect(reconcileProposal(home, { vault: "test", id: second.id }, { channel: "mcp" })).toMatchObject({ state: "apply_unknown", observedSha: null, matchesBefore: true, matchesAfter: false, receiptEvidence: "unavailable" });
+    expect(existsSync(join(notes, "precrash.md"))).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

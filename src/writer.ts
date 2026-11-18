@@ -69,6 +69,17 @@ function readPlain(root: string, path: string, maximum = MAX_NOTE_BYTES): string
     return text;
   } finally { closeSync(fd); }
 }
+/** Read one approved note for proposal reconciliation without opening the index or taking a write lock. */
+export function proposalTargetDigest(home: string, vaultId: string, target: string, binding: LogBinding): string | null {
+  const config = loadRegistry(home), vault = config.vaults.find(item => item.id === vaultId);
+  if (!vault || !matchesBinding(config, vaultId, binding)) throw new Error("proposal: vault binding or policy changed; inspect the registered vault before reconciliation");
+  const path = notePath(target), root = realpathSync(vault.path);
+  if (root !== vault.path || isDenied(root, config.denyPaths ?? []) || isDenied(join(root, path), config.denyPaths ?? []))
+    throw new Error("proposal: reconciliation target is denied or changed; inspect the vault policy and path");
+  const text = readPlain(root, path);
+  if (!matchesBinding(loadRegistry(home), vaultId, binding)) throw new Error("proposal: vault binding or policy changed during reconciliation; retry with the current policy");
+  return text === null ? null : sha256(text);
+}
 /** Flat `notes/*.md` snapshot used by every mutation (other directories such as templates/ and self/ are never read). */
 export function snapshot(root: string, denyPaths: string[] = []): Map<string, string> {
   const dir = join(root, "notes");
