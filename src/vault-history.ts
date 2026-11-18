@@ -9,9 +9,9 @@ import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { isDenied, memoryGitArgv, memoryGitEnv } from "./platform.ts";
-import { VaultIndex, MAX_NOTE_BYTES, MAX_READ_BYTES, h2Sections, readPage } from "./vault-index.ts";
+import { VaultIndex, MAX_NOTE_BYTES, MAX_READ_BYTES, h2Sections, headingMetadata, readPage } from "./vault-index.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { blocks, clean, fields, heading, nextCommand, paint, plural, shellWord, stripTerminal, table, tone, type TextOptions } from "./text-output.ts";
+import { blocks, clean, fields, heading, nextCommand, paint, plural, shellWord, status, stripTerminal, summary, table, tone, type TextOptions } from "./text-output.ts";
 import type { VaultSpec } from "./config.ts";
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
@@ -26,7 +26,14 @@ export const SNAPSHOT_DEADLINE_MS = 5000;
  * tighter than the 256 KiB aggregate the transport accepts, so a page is trimmed to fit instead of being refused there.
  */
 export const SNAPSHOT_TRANSPORT_BYTES = 48 * 1024;
-const ENVELOPE_RESERVE = 256;
+/**
+ * The MCP transport measures a handler's result after stringifying it into the JSON-RPC frame, so every payload byte
+ * is counted twice through its escaping. This reserves the frame around it: `{"jsonrpc":"2.0","id":…,"result":
+ * {"content":[{"type":"text","text":…}]}}` with a request id of at most 200 characters, plus the newline.
+ */
+const FRAME_RESERVE = 512;
+/** A cursor carries one note path (at most 1024 bytes), up to two commit ids and its JSON keys, base64url-expanded. */
+export const SNAPSHOT_CURSOR_CHARS = 4 * (1024 + 64 + 64 + 160);
 const LOG_BUFFER_BYTES = 1024 * 1024;
 const DIFF_BUFFER_BYTES = 4 * 1024 * 1024;
 const BATCH_BUFFER_BYTES = 64 * 1024;
@@ -35,7 +42,7 @@ const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const NOTE_PATH = /^notes\/(?:[^/]+\/)*[^/]+\.md$/;
 const ZERO_OID = /^0+$/;
 type GitOutcome = { status: number | null; stdout: Buffer; stderr: string };
-type GitOptions = { input?: string; maxBuffer?: number; allowFail?: boolean; env?: NodeJS.ProcessEnv };
+type GitOptions = { input?: string | Buffer; maxBuffer?: number; allowFail?: boolean; env?: NodeJS.ProcessEnv };
 
 /** Why a snapshot read cannot answer, reported as a result rather than as current content. */
 export type SnapshotCapability = "not_a_repository" | "vault_not_repository_root" | "git_unavailable" | "no_commits" | "shallow_history" | "object_unavailable";
@@ -103,18 +110,25 @@ export interface SnapshotLimits { pageLimit?: number; scanLimit?: number; deadli
 
 function refuse(message: string, code = "V04"): never { throw Object.assign(new Error(message), { code }); }
 function text(value: Buffer): string { return value.toString("utf8"); }
-function byteLength(value: unknown): number { return Buffer.byteLength(JSON.stringify(value)); }
+/** The bytes this result costs on the wire: stringified for `--json`, then escaped again inside the MCP frame. */
+function byteLength(value: unknown): number { return Buffer.byteLength(JSON.stringify(JSON.stringify(value))); }
+const fits = (value: unknown, transportBytes: number) => byteLength(value) <= transportBytes - FRAME_RESERVE;
 function boundary(bytes: Buffer, proposed: number): number {
   let end = Math.min(proposed, bytes.length);
   while (end > 0 && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
   return end;
 }
 
-/** Hardened Git call: no pager, hooks, fsmonitor, external diff, prompts, lazy fetch or inherited Git directories. */
+/**
+ * Hardened Git call: no pager, hooks, fsmonitor, external diff, prompts, lazy fetch or inherited Git directories. The
+ * extra `-c` entries pin the three settings a repository can still turn on by itself: `log.follow` renames a path
+ * projection, `log.showSignature` runs `gpg.program`, and that program is emptied here as well.
+ */
+const HARDENED_CONFIG = ["-c", "log.follow=false", "-c", "log.showSignature=false", "-c", "gpg.program="];
 function historyGit(root: string, args: string[], deadline: number, options: GitOptions = {}): GitOutcome {
   const remaining = deadline - Date.now();
   if (remaining <= 0) refuse(`snapshot: the ${SNAPSHOT_DEADLINE_MS / 1000} s Git budget is spent; retry once the repository is responsive`, "V09");
-  const argv = memoryGitArgv(["-C", root, ...args]);
+  const argv = memoryGitArgv([...HARDENED_CONFIG, "-C", root, ...args]);
   const env = memoryGitEnv({ ...(options.env ?? process.env), GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }, { repositoryIsolation: true, readOnlyDiagnostic: true });
   // Literal pathspecs after the projection, which drops every inherited GIT_* key: a note path is never a glob.
   env.GIT_LITERAL_PATHSPECS = "1";
@@ -174,7 +188,26 @@ function coverageOf(snapshot: Snapshot): SnapshotCoverage {
   return snapshot.shallow ? { complete: false, reason: "shallow_history" } : { complete: true };
 }
 
+/**
+ * A repository clean filter is a command `.gitattributes` (never the note) selects, and `git status` runs it over every
+ * tracked note. `check-attr` only reads attributes, so it decides first whether the count can be taken at all.
+ */
+function cleanFilterPaths(git: Snapshot["git"]): { filtered: boolean; reason?: string } {
+  const listed = git(["ls-files", "-z", "--", "notes"], { allowFail: true, maxBuffer: STATUS_BUFFER_BYTES });
+  if (listed.status !== 0) return { filtered: false, reason: "Git could not list the tracked notes" };
+  if (!listed.stdout.length) return { filtered: false };
+  // The NUL-separated paths go back in as the bytes Git wrote, so a non-UTF-8 filename is not re-encoded.
+  const attrs = git(["check-attr", "-z", "--stdin", "filter"], { allowFail: true, input: listed.stdout, maxBuffer: STATUS_BUFFER_BYTES });
+  if (attrs.status !== 0) return { filtered: false, reason: "Git could not read the notes attributes" };
+  const tokens = text(attrs.stdout).split("\0");
+  for (let i = 2; i < tokens.length; i += 3) if (tokens[i] && tokens[i] !== "unspecified") return { filtered: true };
+  return { filtered: false };
+}
+
 function dirtyNoteCount(git: Snapshot["git"]): { count: number | null; reason?: string } {
+  const filter = cleanFilterPaths(git);
+  if (filter.filtered) return { count: null, reason: "a clean filter is configured for notes/; the dirty-note count is not taken" };
+  if (filter.reason) return { count: null, reason: filter.reason };
   const out = git(["status", "--porcelain=v1", "-z", "--untracked-files=normal", "--", "notes"], { allowFail: true, maxBuffer: STATUS_BUFFER_BYTES });
   if (out.status !== 0) return { count: null, reason: "git status is unavailable" };
   const parts = text(out.stdout).split("\0").filter(Boolean);
@@ -194,10 +227,13 @@ function fullOid(value: string, label: string): string {
   return value;
 }
 
-/** `notes/<path>.md` with no traversal, dot segment, backslash or NUL; the only path shape historical reads accept. */
+/**
+ * `notes/<path>.md` with no traversal, dot segment, backslash or control character; the only path shape historical
+ * reads accept. A control character is refused because Git's own line-oriented plumbing would read it as a second
+ * path expression.
+ */
 function notesPath(value: string): string | undefined {
-  if (Buffer.byteLength(value) > 1024 || value.includes("\\") || value.includes("\0")) return undefined;
-  if (!NOTE_PATH.test(value)) return undefined;
+  if (!NOTE_PATH.test(value) || Buffer.byteLength(value) > 1024 || /[\\\u0000-\u001f]/.test(value)) return undefined;
   const parts = value.split("/").slice(1);
   return parts.some(part => part === "." || part === ".." || part.startsWith(".")) ? undefined : value;
 }
@@ -207,15 +243,14 @@ function resolveNote(vault: VaultSpec, home: string, note: string): string {
   const literal = notesPath(note);
   if (literal) return literal;
   const relative = typeof note === "string" ? note.replace(/^notes\//i, "") : "";
-  // A target is one note's stem or alias: no path separator, dot segment, backslash, NUL or control character.
-  const unsafe = typeof note !== "string" || !relative || Buffer.byteLength(note) > 1024 || note.includes("\\") || note.includes("\0")
-    || /[/\u0000-\u001f]/.test(relative) || relative.startsWith(".");
-  if (unsafe) refuse("note: expected a note target or a vault-relative notes/<path>.md path; other paths are not readable");
+  // A target is one note's stem or alias: no path separator, dot segment, backslash or control character.
+  if (!relative || Buffer.byteLength(note) > 1024 || /[/\\\u0000-\u001f]/.test(relative) || relative.startsWith(".")) {
+    refuse("note: expected a note target or a vault-relative notes/<path>.md path; other paths are not readable");
+  }
   const index = new VaultIndex(home, vault, [vault.path], { memory: true });
   try {
     index.scan();
-    const resolved = index.show(note, 1);
-    return `notes/${resolved.path}`;
+    return `notes/${index.resolve(note)}`;
   } catch (error) {
     const message = error instanceof Error ? error.message : "note lookup failed";
     if (message.startsWith("note:")) refuse(`${message}; pass the note's notes/<path>.md to read a deleted note's history`);
@@ -239,10 +274,24 @@ function reachable(git: Snapshot["git"], commit: string, head: string): void {
   if (out.status !== 0) refuse(`revision: reachability of ${commit} could not be checked (exit ${out.status}); inspect the repository`, "V09");
 }
 
+/**
+ * Whether `commit` sits on `pin`'s own first-parent chain, which is the walk a page continues from. Bounded by the
+ * scan limit: a chain longer than the bound cannot be proved, and is refused rather than walked further.
+ */
+function onFirstParentChain(git: Snapshot["git"], commit: string, pin: string, limit: number): boolean {
+  const out = git(["rev-list", "--first-parent", `--max-count=${limit + 1}`, pin], { allowFail: true, maxBuffer: LOG_BUFFER_BYTES });
+  if (out.status !== 0) refuse(`cursor: the first-parent chain of ${pin} could not be read (exit ${out.status}); restart without --cursor`, "V09");
+  return text(out.stdout).split("\n").some(line => line.trim() === commit);
+}
+
+/** Whether one object expression (`<commit>^{commit}` or a blob id) is present in this repository's object store. */
+function objectAvailable(git: Snapshot["git"], expression: string): boolean {
+  return git(["cat-file", "-e", expression], { allowFail: true }).status === 0;
+}
+
 function commitObject(git: Snapshot["git"], value: string, label: string): string {
   const commit = fullOid(value, label);
-  const exists = git(["cat-file", "-e", `${commit}^{commit}`], { allowFail: true });
-  if (exists.status !== 0) refuse(`revision: ${commit} is not an available commit object; it may be pruned, shallow or belong to another repository`, "V09");
+  if (!objectAvailable(git, `${commit}^{commit}`)) refuse(`revision: ${commit} is not an available commit object; it may be pruned, shallow or belong to another repository`, "V09");
   const resolved = text(git(["rev-parse", "--verify", "--quiet", `${commit}^{commit}`], { allowFail: true }).stdout).trim();
   if (resolved !== commit) refuse(`revision: ${commit} does not name a commit object; pass the full commit id Git reported`, "V04");
   return commit;
@@ -275,7 +324,7 @@ interface HistoryCursor { v: 1; kind: "history"; path: string; head: string; aft
 interface ChangesCursor { v: 1; kind: "changes"; from: string; to: string; after: string }
 function encodeCursor(cursor: HistoryCursor | ChangesCursor): string { return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url"); }
 function decodeCursor(raw: string): HistoryCursor | ChangesCursor {
-  if (typeof raw !== "string" || !raw || raw.length > 1024) refuse("cursor: expected the opaque continuation from a previous page");
+  if (typeof raw !== "string" || !raw || raw.length > SNAPSHOT_CURSOR_CHARS) refuse("cursor: expected the opaque continuation from a previous page");
   let value: unknown;
   try { value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")); }
   catch { refuse("cursor: not a continuation this provider issued; restart without --cursor"); }
@@ -299,42 +348,56 @@ function unsupportedHistory(vault: VaultSpec, path: string, capability: Snapshot
 
 /** The page and the cursor are trimmed until the whole result, envelope included, fits the transport bound. */
 function fitHistory(result: HistoryResult, transportBytes: number): HistoryResult {
-  if (byteLength(result) <= transportBytes - ENVELOPE_RESERVE) return result;
+  if (fits(result, transportBytes)) return result;
   const revisions = [...result.revisions];
   while (revisions.length) {
     revisions.pop();
     const after = revisions.at(-1)?.revision;
     const candidate: HistoryResult = { ...result, revisions, truncated: true, stopReason: revisions.length ? "page_full" : "transport_limit",
       ...(after ? { continuation: encodeCursor({ v: 1, kind: "history", path: result.path, head: result.head ?? "", after }) } : { continuation: undefined }) };
-    if (byteLength(candidate) <= transportBytes - ENVELOPE_RESERVE) return candidate;
+    if (fits(candidate, transportBytes)) return candidate;
   }
   return { ...result, revisions: [], truncated: true, stopReason: "transport_limit", continuation: undefined };
 }
 
-function fitRevision(result: RevisionResult, transportBytes: number): RevisionResult {
-  if (byteLength(result) <= transportBytes - ENVELOPE_RESERVE) return result;
-  const bytes = Buffer.from(result.content ?? "", "utf8");
-  let low = 0, high = bytes.length, best = 0;
+/** The longest UTF-8 prefix of `bytes` that fits, or undefined when not even an empty page does. */
+function trimContent(base: RevisionResult, bytes: Buffer, transportBytes: number): RevisionResult | undefined {
+  const render = (cut: number): RevisionResult => ({ ...base, content: bytes.subarray(0, cut).toString("utf8"), truncated: true,
+    ...(cut > 0 ? { nextOffset: (base.offset ?? 0) + cut } : {}), transportLimited: true });
+  let low = 0, high = bytes.length, best = -1;
   while (low <= high) {
     const middle = (low + high) >> 1, cut = boundary(bytes, middle);
-    const candidate: RevisionResult = { ...result, content: bytes.subarray(0, cut).toString("utf8"), truncated: true,
-      nextOffset: (result.offset ?? 0) + cut, transportLimited: true };
-    if (byteLength(candidate) <= transportBytes - ENVELOPE_RESERVE) { best = cut; low = middle + 1; }
+    if (fits(render(cut), transportBytes)) { best = cut; low = middle + 1; }
     else high = middle - 1;
   }
-  const cut = boundary(bytes, best);
-  return { ...result, content: bytes.subarray(0, cut).toString("utf8"), truncated: true, nextOffset: (result.offset ?? 0) + cut, transportLimited: true };
+  return best < 0 ? undefined : render(boundary(bytes, best));
+}
+
+/**
+ * Content is trimmed first, then the heading list (a page can be heading-heavy while its body is short): both count
+ * towards the same bound, and the flag says the list was cut.
+ */
+function fitRevision(result: RevisionResult, transportBytes: number): RevisionResult {
+  if (fits(result, transportBytes)) return result;
+  const bytes = Buffer.from(result.content ?? "", "utf8");
+  const trimmed = trimContent(result, bytes, transportBytes);
+  if (trimmed) return trimmed;
+  const dropped = { ...result };
+  delete dropped.headings;
+  delete dropped.headingsTruncated;
+  const base: RevisionResult = { ...dropped, ...(result.headings?.length ? { headingsTruncated: true } : {}) };
+  return trimContent(base, bytes, transportBytes) ?? { ...base, content: "", truncated: true, transportLimited: true };
 }
 
 function fitChanges(result: ChangesResult, transportBytes: number): ChangesResult {
-  if (byteLength(result) <= transportBytes - ENVELOPE_RESERVE) return result;
+  if (fits(result, transportBytes)) return result;
   const changed = [...result.changed];
   while (changed.length) {
     changed.pop();
     const after = changed.at(-1)?.path;
     const candidate: ChangesResult = { ...result, changed, truncated: true,
       ...(after ? { continuation: encodeCursor({ v: 1, kind: "changes", from: result.from, to: result.to, after }) } : { continuation: undefined }) };
-    if (byteLength(candidate) <= transportBytes - ENVELOPE_RESERVE) return candidate;
+    if (fits(candidate, transportBytes)) return candidate;
   }
   return { ...result, changed: [], truncated: true, continuation: undefined };
 }
@@ -357,38 +420,53 @@ export function readHistory(request: HistoryRequest, limits: SnapshotLimits = {}
     if (cursor.path !== path) refuse("cursor: belongs to another note path; restart without --cursor");
     pin = commitObject(snapshot.git, cursor.head, "cursor.head");
     reachable(snapshot.git, pin, snapshot.head);
-    start = commitParent(snapshot.git, commitObject(snapshot.git, cursor.after, "cursor.after"));
+    // A cursor resumes a walk, so the commit it resumes after must be one this walk could have reached.
+    const after = commitObject(snapshot.git, cursor.after, "cursor.after");
+    if (!onFirstParentChain(snapshot.git, after, pin, scanLimit)) {
+      refuse(`cursor: ${after} is not on the first-parent chain of the pinned ${pin}; restart without --cursor`, "V06");
+    }
+    start = commitParent(snapshot.git, after);
     if (start === null) {
       return { ...baseResult(request.vault, pin, coverageOf(snapshot), { ...(snapshot.shallow ? { capability: "shallow_history" as const } : {}), dirtyNotes: dirty.count, ...(dirty.reason ? { dirtyNotesReason: dirty.reason } : {}) }),
         path, revisions: [], scanned: 0, scanLimit, pageLimit, stopReason: "history_end", truncated: false, skippedSymlink: 0 };
     }
   }
   const perPage = Math.min(request.limit ?? pageLimit, pageLimit);
-  const out = snapshot.git(["log", "-z", "--first-parent", "--raw", "--no-renames", "--no-textconv", "--no-abbrev", "--format=%x01%H%x09%cI",
-    `--max-count=${scanLimit + 1}`, start, "--", path], { maxBuffer: LOG_BUFFER_BYTES });
+  // The window bounds commits traversed, not commits that touched the path: `rev-list` walks first-parent, and `log`
+  // then projects each of those commits onto this one path without walking any further.
+  const walked = text(snapshot.git(["rev-list", "--first-parent", `--max-count=${scanLimit + 1}`, start], { maxBuffer: LOG_BUFFER_BYTES }).stdout)
+    .split("\n").map(line => line.trim()).filter(Boolean);
+  if (walked.some(commit => !FULL_OID.test(commit))) refuse("snapshot: Git returned an unexpected commit id; retry", "V09");
+  const moreCommits = walked.length > scanLimit, traversed = walked.slice(0, scanLimit);
+  const out = traversed.length
+    ? snapshot.git(["log", "--no-walk=unsorted", "--stdin", "-z", "--first-parent", "--raw", "--no-renames", "--no-textconv", "--no-abbrev",
+      "--format=%x01%H%x09%cI", "--", path], { input: `${traversed.join("\n")}\n`, maxBuffer: LOG_BUFFER_BYTES })
+    : { status: 0, stdout: Buffer.alloc(0), stderr: "" };
   const parsed = parseLogRaw(text(out.stdout), path);
-  const moreCommits = parsed.length > scanLimit, scanned = parsed.slice(0, scanLimit);
-  const noteRecords = scanned.filter(record => (record.mode === "100644" || record.mode === "100755") && !ZERO_OID.test(record.blob) && record.status !== "D");
-  const skippedSymlink = scanned.filter(record => record.mode === "120000").length;
+  const noteRecords = parsed.filter(record => (record.mode === "100644" || record.mode === "100755") && !ZERO_OID.test(record.blob) && record.status !== "D");
+  const skippedSymlink = parsed.filter(record => record.mode === "120000").length;
   let incomplete: string | undefined;
   const revisions: HistoryRevision[] = [];
   if (noteRecords.length) {
-    const batch = snapshot.git(["cat-file", "--batch-check"], { input: noteRecords.map(record => `${record.revision}:${path}\n`).join(""), maxBuffer: BATCH_BUFFER_BYTES });
+    // Keyed by the blob id `--raw` reported, never by `<commit>:<path>`: a path is data, not a second expression.
+    const batch = snapshot.git(["cat-file", "--batch-check"], { input: `${noteRecords.map(record => record.blob).join("\n")}\n`, maxBuffer: BATCH_BUFFER_BYTES });
     const lines = text(batch.stdout).split("\n");
     for (const [index, record] of noteRecords.entries()) {
       const parts = (lines[index] ?? "").split(" ");
       const blob = parts[0] ?? "", type = parts[1] ?? "", size = Number(parts[2]);
-      if (type !== "blob" || !Number.isSafeInteger(size) || size < 0) { incomplete = "object_unavailable"; continue; }
+      if (type !== "blob" || blob !== record.blob || !Number.isSafeInteger(size) || size < 0) { incomplete = "object_unavailable"; continue; }
       revisions.push({ revision: record.revision, blob, bytes: size, committedAt: record.committedAt });
     }
   }
   const page = revisions.slice(0, perPage);
   const stopReason: HistoryStopReason = revisions.length > perPage ? "page_full" : moreCommits ? "scan_limit" : "history_end";
-  const continuation = stopReason === "history_end" ? undefined : page.length ? encodeCursor({ v: 1, kind: "history", path, head: pin, after: page.at(-1)!.revision }) : undefined;
+  // A scan-limited page with no matching revision still continues: from the oldest commit the window traversed.
+  const resume = page.at(-1)?.revision ?? (moreCommits ? traversed.at(-1) : undefined);
+  const continuation = stopReason === "history_end" || !resume ? undefined : encodeCursor({ v: 1, kind: "history", path, head: pin, after: resume });
   const result: HistoryResult = {
     ...baseResult(request.vault, pin, incomplete ? { complete: false, reason: incomplete } : coverageOf(snapshot),
       { ...(snapshot.shallow ? { capability: "shallow_history" as const } : {}), ...(incomplete ? { capability: "object_unavailable" as const } : {}), dirtyNotes: dirty.count, ...(dirty.reason ? { dirtyNotesReason: dirty.reason } : {}) }),
-    path, revisions: page, scanned: scanned.length, scanLimit, pageLimit, stopReason, truncated: stopReason !== "history_end", ...(continuation ? { continuation } : {}), skippedSymlink,
+    path, revisions: page, scanned: traversed.length, scanLimit, pageLimit, stopReason, truncated: stopReason !== "history_end", ...(continuation ? { continuation } : {}), skippedSymlink,
   };
   return fitHistory(result, transportBytes);
 }
@@ -409,11 +487,16 @@ export function readRevision(request: RevisionRequest, limits: SnapshotLimits = 
     return { ...baseResult(request.vault, null, { complete: false, reason: opened.reason ?? opened.capability }, { capability: opened.capability, dirtyNotes: null }), path, found: false };
   }
   const snapshot = opened.snapshot, dirty = dirtyNoteCount(snapshot.git);
+  const coverage = coverageOf(snapshot);
+  const base = { ...baseResult(request.vault, snapshot.head, coverage, { ...(snapshot.shallow ? { capability: "shallow_history" as const } : {}), dirtyNotes: dirty.count, ...(dirty.reason ? { dirtyNotesReason: dirty.reason } : {}) }),
+    path, found: false, revision: requested } as RevisionResult;
+  /** A pruned, shallow or missing object is a capability result, never a generic refusal and never current content. */
+  const unavailable = (): RevisionResult => ({ ...base, found: false,
+    coverage: { complete: false, reason: "object_unavailable" }, capability: "object_unavailable" });
+  if (!objectAvailable(snapshot.git, `${requested}^{commit}`)) return unavailable();
   const commit = commitObject(snapshot.git, requested, "revision");
   reachable(snapshot.git, commit, snapshot.head);
-  const coverage = coverageOf(snapshot);
-  const common: RevisionResult = { ...baseResult(request.vault, snapshot.head, coverage, { ...(snapshot.shallow ? { capability: "shallow_history" as const } : {}), dirtyNotes: dirty.count, ...(dirty.reason ? { dirtyNotesReason: dirty.reason } : {}) }),
-    path, found: false, revision: commit };
+  const common: RevisionResult = { ...base, revision: commit };
   const tree = text(snapshot.git(["ls-tree", "-z", commit, "--", path], { maxBuffer: 8192 }).stdout).split("\0").filter(Boolean);
   if (!tree.length) return common;
   const [meta, entryPath] = tree[0]!.split("\t");
@@ -422,8 +505,9 @@ export function readRevision(request: RevisionRequest, limits: SnapshotLimits = 
   if (type !== "blob") refuse("revision: the path is not a file at this revision", "V04");
   if (mode === "120000") refuse("revision: the path is a symlink at this revision; symlinked blobs are refused because a link can leave the vault", "V06");
   if (!/^100[0-7]{3}$/.test(mode ?? "") || !blob || !FULL_OID.test(blob)) refuse("revision: the path is not a regular file at this revision", "V04");
+  if (!objectAvailable(snapshot.git, blob)) return unavailable();
   const size = Number(text(snapshot.git(["cat-file", "-s", blob]).stdout).trim());
-  if (!Number.isSafeInteger(size) || size < 0) refuse("revision: Git returned an invalid blob size; retry", "V09");
+  if (!Number.isSafeInteger(size) || size < 0) return unavailable();
   if (size > MAX_NOTE_BYTES) refuse(`revision: the historical note is ${size} bytes, over the ${MAX_NOTE_BYTES}-byte read bound; read it outside vmem or split it`, "V09");
   const raw = snapshot.git(["cat-file", "blob", blob], { maxBuffer: size + 1 }).stdout;
   if (raw.length !== size) refuse("revision: the blob changed while it was read; retry", "V09");
@@ -442,10 +526,10 @@ export function readRevision(request: RevisionRequest, limits: SnapshotLimits = 
     page = readPage(raw.subarray(start, start + maxBytes + 4), maxBytes, start, raw.length);
   }
   if (page.truncated) {
-    const sections = h2Sections(parseFrontmatter(source).body);
-    const bounded = sections.filter(item => Buffer.byteLength(item.name) <= 1024).slice(0, 64);
-    headings = bounded.map(item => item.name);
-    headingsTruncated = sections.length > bounded.length;
+    // The same bounded heading list the current reader reports, so a historical page pages the same way.
+    const metadata = headingMetadata(h2Sections(parseFrontmatter(source).body));
+    headings = metadata.headings;
+    headingsTruncated = metadata.headingsTruncated;
   }
   const result: RevisionResult = { ...common, found: true, revision: commit, blob, sha256, bytes: size, content: page.content,
     truncated: page.truncated, ...(request.section !== undefined ? { section: request.section } : {}), ...(offset !== undefined ? { offset } : {}),
@@ -516,26 +600,28 @@ export function readChanges(request: ChangesRequest, limits: SnapshotLimits = {}
 }
 
 const command = (...words: string[]) => ["vmem", ...words].map(shellWord).join(" ");
-function basisFields(result: SnapshotBase, o: TextOptions) {
+function basisFields(result: SnapshotBase, o: TextOptions, extra: [string, number | string | undefined][] = []) {
   return fields([["basis", result.basis], ["head", result.head ? result.head.slice(0, 12) : undefined],
     ["dirty notes", result.dirtyNotes === null ? (result.dirtyNotesReason ?? "unavailable") : String(result.dirtyNotes)],
-    ["coverage", result.coverage.complete ? "complete" : `incomplete: ${result.coverage.reason ?? "unknown"}`]], o);
+    ["coverage", result.coverage.complete ? "complete" : `incomplete: ${result.coverage.reason ?? "unknown"}`], ...extra], o);
 }
 
 /** Plain-text history: the pinned HEAD, the page of revisions and the exact continuation command. */
 export function historyText(result: HistoryResult, o: TextOptions, c: { vault: string; note: string; limit?: number; cursor?: string }): string {
-  const head = heading(`history ${c.vault} ${result.path}`, o) + "\n" + basisFields(result, o);
+  const head = heading(`history ${c.vault} ${result.path}`, o) + "\n" + basisFields(result, o, [
+    ["scanned commits", result.scanned], ["page limit", result.pageLimit], ["skipped symlinks", result.skippedSymlink || undefined],
+  ]);
   if (!result.revisions.length) {
-    const why = result.capability ? paint(`no snapshot history: ${clean(result.capability)}`, "warn", o) : `no recorded revisions of ${clean(result.path)} on the first-parent history`;
+    const why = result.capability ? status("warn", `no snapshot history: ${result.capability}`, o)
+      : status("absent", `no recorded revisions of ${result.path} on the first-parent history`, o);
     return blocks(head, why);
   }
   const rows = result.revisions.map(revision => [revision.revision.slice(0, 12), revision.blob.slice(0, 12), revision.bytes, revision.committedAt]);
-  const count = `${plural(result.revisions.length, "revision")} of ${plural(result.scanned, "scanned commit")}`;
   const more = result.continuation ? nextCommand("next", command("history", c.vault, result.path, ...(c.limit !== undefined ? ["--limit", String(c.limit)] : []), "--cursor", result.continuation), o) : undefined;
-  const stop = result.stopReason === "scan_limit" ? paint(`stopped after the ${result.scanLimit}-commit scan limit; continue from the cursor`, "warn", o)
-    : result.stopReason === "transport_limit" ? paint("result reached the 48 KiB transport bound; page with a smaller --limit", "warn", o) : undefined;
-  const skipped = result.skippedSymlink ? paint(`${plural(result.skippedSymlink, "symlinked revision")} left out`, "warn", o) : undefined;
-  return blocks(head, table(["REVISION", "BLOB", "BYTES", "COMMITTED (GIT METADATA)"], rows, o), [count, stop, skipped, more].filter(Boolean).join("\n"));
+  const stop = result.stopReason === "scan_limit" ? status("warn", `stopped after the ${result.scanLimit}-commit scan limit; continue from the cursor`, o)
+    : result.stopReason === "transport_limit" ? status("warn", "result reached the 48 KiB transport bound; page with a smaller --limit", o) : undefined;
+  const counts = summary({ ok: result.revisions.length, warnings: result.skippedSymlink }, o);
+  return blocks(head, table(["REVISION", "BLOB", "BYTES", "COMMITTED (GIT METADATA)"], rows, o), [counts, stop, more].filter(Boolean).join("\n"));
 }
 
 /** Plain-text historical read: commit, blob and content hashes, then the paged content. */
@@ -543,29 +629,34 @@ export function revisionText(result: RevisionResult, o: TextOptions, c: { vault:
   const where = result.revision ? result.revision.slice(0, 12) : c.revision.slice(0, 12);
   const head = heading(`show ${c.vault} ${result.path} at ${where}`, o) + "\n" + fields([
     ["revision", result.revision], ["blob", result.blob], ["sha256", result.sha256?.slice(0, 12)], ["bytes", result.bytes],
-    ["offset", result.offset], ["coverage", result.coverage.complete ? "complete" : `incomplete: ${result.coverage.reason ?? "unknown"}`],
+    ["offset", result.offset], ["dirty notes", result.dirtyNotes === null ? (result.dirtyNotesReason ?? "unavailable") : String(result.dirtyNotes)],
+    ["coverage", result.coverage.complete ? "complete" : `incomplete: ${result.coverage.reason ?? "unknown"}`],
   ], o);
   if (!result.found) {
-    const why = result.capability ? paint(`no historical content: ${clean(result.capability)}`, "warn", o) : `the note did not exist at ${where}`;
+    const why = result.capability ? status("warn", `no historical content: ${result.capability}`, o)
+      : status("absent", `the note did not exist at ${where}`, o);
     return blocks(head, why);
   }
   const body = stripTerminal(result.content ?? "").replace(/\n+$/, "");
   if (!result.truncated) return blocks(head, body);
   const words = ["show", c.vault, c.note, "--revision", result.revision ?? c.revision, ...(result.section ? ["--section", result.section] : []),
     ...(c.maxBytes !== undefined ? ["--max-bytes", String(c.maxBytes)] : []), "--offset", String(result.nextOffset)];
-  const tail = [paint("truncated", "warn", o), ...(result.nextOffset !== undefined ? [nextCommand("next", command(...words), o)] : [])];
+  const tail = [status("warn", result.transportLimited ? "truncated at the 48 KiB transport bound" : "truncated", o),
+    ...(result.nextOffset !== undefined ? [nextCommand("next", command(...words), o)] : [])];
   const headings = result.headings?.length ? ["H2 headings (read one with --section):", ...result.headings.map(name => `  ${clean(name)}`), ...(result.headingsTruncated ? [paint("  ... more headings", "muted", o)] : [])].join("\n") : undefined;
   return blocks(head, body, tail.join("\n"), headings);
 }
 
 /** Plain-text tree comparison. */
 export function changesText(result: ChangesResult, o: TextOptions, c: { vault: string; from: string; to: string; limit?: number }): string {
-  const head = heading(`changes ${c.vault} ${result.from.slice(0, 12)}..${result.to.slice(0, 12)}`, o) + "\n" + basisFields(result, o);
-  if (!result.changed.length) return blocks(head, `no note changes between ${clean(result.from.slice(0, 12))} and ${clean(result.to.slice(0, 12))}`);
+  const head = heading(`changes ${c.vault} ${result.from.slice(0, 12)}..${result.to.slice(0, 12)}`, o) + "\n" + basisFields(result, o, [
+    ["total changes", result.total], ["skipped denied", result.skippedDenied || undefined], ["skipped symlinks", result.skippedSymlink || undefined],
+  ]);
+  if (!result.changed.length) return blocks(head, status("absent", `no note changes between ${result.from.slice(0, 12)} and ${result.to.slice(0, 12)}`, o));
   const rows = result.changed.map(item => [tone(item.status, item.status === "D" ? "warn" : "ok"), item.path, item.before?.slice(0, 12) ?? "-", item.after?.slice(0, 12) ?? "-"]);
-  const count = `${plural(result.changed.length, "note change")}${result.total > result.changed.length ? ` of ${result.total}` : ""}`;
   const more = result.continuation ? nextCommand("next", command("changes", c.vault, "--from", result.from, "--to", result.to, ...(c.limit !== undefined ? ["--limit", String(c.limit)] : []), "--cursor", result.continuation), o) : undefined;
-  const denied = result.skippedDenied ? paint(`${plural(result.skippedDenied, "denied path")} left out by current policy`, "warn", o) : undefined;
-  const symlinked = result.skippedSymlink ? paint(`${plural(result.skippedSymlink, "symlinked or non-file entry")} left out`, "warn", o) : undefined;
-  return blocks(head, table(["ST", "PATH", "BEFORE", "AFTER"], rows, o), [count, denied, symlinked, more].filter(Boolean).join("\n"));
+  const denied = result.skippedDenied ? status("warn", `${plural(result.skippedDenied, "denied path")} left out by current policy`, o) : undefined;
+  const symlinked = result.skippedSymlink ? status("warn", `${plural(result.skippedSymlink, "symlinked or non-file entry")} left out`, o) : undefined;
+  const counts = summary({ ok: result.changed.length, warnings: result.skippedDenied + result.skippedSymlink }, o);
+  return blocks(head, table(["ST", "PATH", "BEFORE", "AFTER"], rows, o), [counts, denied, symlinked, more].filter(Boolean).join("\n"));
 }
