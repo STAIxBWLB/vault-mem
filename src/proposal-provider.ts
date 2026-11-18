@@ -7,7 +7,8 @@ import { logBinding, matchesBinding } from "./vault-log.ts";
 import { applyWrite } from "./writer.ts";
 import { screenMetadata } from "./write-validation.ts";
 import { checkStoredBinding, createStoredProposal, listStoredProposalIds, readStoredProposal } from "./proposal-storage.ts";
-import { encodeProposalRecord, parseProposalOperation, proposalPayloadDigest, type ProposalRecord } from "./proposals.ts";
+import { encodeProposalRecord, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, type ProposalRecord } from "./proposals.ts";
+import type { ChangeReceipt, WriteIssue } from "./write-types.ts";
 import { unenforceablePii } from "./config.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 
@@ -19,6 +20,7 @@ export interface ProposalListRequest { vault: string; state?: ProposalRecord["st
 export interface ProposalPage { items: ProposalSummary[]; nextCursor: string | null }
 export interface ProposalShowRequest { vault: string; id: string; offset?: number; maxBytes?: number }
 export interface ProposalView { id: string; vault: string; state: ProposalRecord["state"]; path: string; createdAt: string; payloadDigest: string; agentLabelUnverified?: string; decisionReason?: string; content: string; offset: number; nextOffset: number | null; truncated: boolean }
+export interface ProposalApplyPreview { id: string; vault: string; state: "pending"; fingerprint: string; changes: ChangeReceipt[]; issues: WriteIssue[] }
 const MAX_SHOW_BYTES = 16 * 1024, MAX_RPC_REPLY_BYTES = 48 * 1024;
 
 /** Conservative complete MCP reply size; MCP limits request IDs to 200 UTF-16 units (at most 1200 encoded bytes). */
@@ -123,4 +125,22 @@ export function showProposal(home: string, request: ProposalShowRequest, options
   if (proposalReplyBytes(result) > MAX_RPC_REPLY_BYTES || (low === 0 && chars.length > 0)) throw new Error("proposal: page cannot fit the requested bounds; increase maxBytes or inspect the record");
   if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding)) throw new Error("proposal: vault binding or policy changed during read; retry with the current policy");
   return result;
+}
+
+/** Produce a read-only preview whose fingerprint binds the current writer plan and exact record. */
+export function previewProposalApply(home: string, request: { vault: string; id: string }, options: ProposalContext): ProposalApplyPreview {
+  if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string")
+    throw new Error("proposal: invalid apply preview request; provide a vault and proposal id");
+  const context = currentBinding(home, request.vault, options.channel);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
+  const record = readStoredProposal(home, context.bindingDigest, request.id);
+  screenForRead(record, context);
+  if (record.state !== "pending") throw new Error(`proposal: ${record.state === "apply_unknown" ? "apply outcome is unknown; reconcile before another decision" : "proposal is no longer pending; inspect the proposal"}`);
+  const recordDigest = proposalRecordDigest(record);
+  const preview = applyWrite(home, { vault: record.vault, operation: record.operation, channel: options.channel, dryRun: true }, { binding: context.binding, env: options.env, now: options.now });
+  if (!preview.ok || !preview.fingerprint) throw new Error(`proposal: apply preview refused (${[...new Set(preview.issues.filter(issue => issue.severity === "error").map(issue => issue.code))].join(", ") || "unknown"}); correct the vault or proposal and retry`);
+  if (preview.changes.length !== 1) throw new Error("proposal: apply preview is not a single note change; inspect the proposal");
+  if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id)) !== recordDigest)
+    throw new Error("proposal: record, vault binding or policy changed during preview; request a new preview");
+  return { id: record.id, vault: record.vault, state: "pending", fingerprint: proposalDecisionFingerprint(recordDigest, preview.fingerprint, "apply"), changes: preview.changes, issues: preview.issues };
 }

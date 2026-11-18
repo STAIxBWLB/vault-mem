@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RPC_BYTES, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, proposalRpcBytes, type ProposalRecord } from "../src/proposals.ts";
 import { checkStoredBinding, createStoredProposal, readStoredProposal, replaceStoredProposal } from "../src/proposal-storage.ts";
-import { listProposals, proposalReplyBytes, showProposal, submitProposal } from "../src/proposal-provider.ts";
+import { listProposals, previewProposalApply, proposalReplyBytes, showProposal, submitProposal } from "../src/proposal-provider.ts";
 import { addVault, loadRegistry, removeVault, setVaultPii } from "../src/registry.ts";
 import { logBinding } from "../src/vault-log.ts";
 import { applyProposalWrite, applyWrite } from "../src/writer.ts";
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -169,6 +169,8 @@ test("writer guard records intent under the mutation lock and refuses a stale de
     const preview = applyWrite(home, { ...request, dryRun: true }, { binding });
     expect(preview.ok).toBe(true);
     const recordDigest = proposalRecordDigest(record), fingerprint = proposalDecisionFingerprint(recordDigest, preview.fingerprint!, "apply");
+    expect(previewProposalApply(home, { vault: "test", id: record.id }, { channel: "mcp" }).fingerprint).toBe(fingerprint);
+    expect(existsSync(join(vaultPath, "mutation.lock"))).toBe(false);
     const decision = { id: record.id, bindingDigest, recordDigest, fingerprint };
     const missing = applyProposalWrite(home, request, { binding } as Parameters<typeof applyProposalWrite>[2]);
     expect(missing.applied).toBe(false);
@@ -177,6 +179,11 @@ test("writer guard records intent under the mutation lock and refuses a stale de
     expect(stale.ok).toBe(false);
     expect(existsSync(join(notes, "proposed.md"))).toBe(false);
     expect(readStoredProposal(home, bindingDigest, record.id).state).toBe("pending");
+    const researchFile = join(notes, "research.md"), original = readFileSync(researchFile, "utf8");
+    writeFileSync(researchFile, `${original}\nchanged\n`);
+    expect(applyProposalWrite(home, request, { binding, proposal: decision }).applied).toBe(false);
+    expect(readStoredProposal(home, bindingDigest, record.id).state).toBe("pending");
+    writeFileSync(researchFile, original);
     const applied = applyProposalWrite(home, request, { binding, proposal: decision });
     expect(applied.applied).toBe(true);
     expect(existsSync(join(notes, "proposed.md"))).toBe(true);
@@ -184,5 +191,6 @@ test("writer guard records intent under the mutation lock and refuses a stale de
     expect(after.state).toBe("apply_unknown");
     expect(after.intent).toMatchObject({ fingerprint, beforeSha: null, afterSha: applied.changes[0]!.sha256 });
     expect(applyProposalWrite(home, request, { binding, proposal: decision }).applied).toBe(false);
+    expect(() => previewProposalApply(home, { vault: "test", id: record.id }, { channel: "mcp" })).toThrow("outcome is unknown");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
