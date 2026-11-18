@@ -4,7 +4,7 @@ import { executeSpecCommand } from "./spec-commands.ts";
 import { validateSpecRepo } from "./spec-validate.ts";
 import { resolveHome } from "./home.ts";
 import { loadRegistry } from "./registry.ts";
-import { PLAIN, type TextOptions } from "./text-output.ts";
+import { PLAIN, UsageError, type TextOptions } from "./text-output.ts";
 import { renderSpec } from "./spec-output.ts";
 import type { SpecWriteResult } from "./spec-write.ts";
 
@@ -34,7 +34,7 @@ export function createSpecMcp(home: string, env: NodeJS.ProcessEnv = process.env
 /** Parse with the same bounded field schemas as MCP. --repo deliberately bypasses home resolution. */
 export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.env, text: TextOptions = PLAIN): { text: string; code: number } {
   const item = SPEC_COMMANDS.find(entry => entry.command === args[0]);
-  if (!item) throw new Error("spec: unknown command; use vmem spec --help");
+  if (!item) throw new UsageError("spec: unknown command; use vmem spec --help");
   const values: Record<string, unknown> = {}, positional: string[] = [];
   const properties = item.inputSchema.properties as Record<string, { type: string }>;
   const takesId = item.command === "get" || item.command === "graph" || item.command === "update" || item.command === "delete";
@@ -45,32 +45,32 @@ export function runSpecCommand(args: string[], env: NodeJS.ProcessEnv = process.
     const flag = args[i]!;
     if (positionalOnly || !flag.startsWith("-")) { positional.push(flag); continue; }
     if (flag === "--") { positionalOnly = true; continue; }
-    if (seen.has(flag)) throw new Error(`spec ${item.command}: repeated option ${flag}; supply it once (vmem spec ${item.command} --help)`);
+    if (seen.has(flag)) throw new UsageError(`spec ${item.command}: repeated option ${flag}; supply it once (vmem spec ${item.command} --help)`);
     seen.add(flag);
     if (flag === "--json") { json = true; continue; }
     const key = flags.get(flag);
-    if (!key && !(flag === "--repo" && item.command === "validate")) throw new Error(`spec ${item.command}: unknown option ${flag}; see vmem spec ${item.command} --help`);
+    if (!key && !(flag === "--repo" && item.command === "validate")) throw new UsageError(`spec ${item.command}: unknown option ${flag}; see vmem spec ${item.command} --help`);
     if (key && properties[key]!.type === "boolean") { values[key] = true; continue; }
     const value = args[++i];
-    if (value === undefined || value.startsWith("--")) throw new Error(`${flag}: value required; see vmem spec ${item.command} --help`);
+    if (value === undefined || value.startsWith("--")) throw new UsageError(`${flag}: value required; see vmem spec ${item.command} --help`);
     if (flag === "--repo") {
       const invalidPath = argumentError(value, { type: "string", minLength: 1, maxLength: 4096 }, "repo");
-      if (invalidPath) throw new Error(`${invalidPath}; supply a checkout path with vmem spec validate --repo PATH`);
+      if (invalidPath) throw new UsageError(`${invalidPath}; supply a checkout path with vmem spec validate --repo PATH`);
       repo = value; continue;
     }
     if (properties[key!]!.type === "integer") {
-      if (!/^[0-9]+$/.test(value)) throw new Error(`${flag}: expected integer; see vmem spec ${item.command} --help for its bounds`);
+      if (!/^[0-9]+$/.test(value)) throw new UsageError(`${flag}: expected integer; see vmem spec ${item.command} --help for its bounds`);
       values[key!] = Number(value);
     } else if (properties[key!]!.type === "object" || properties[key!]!.type === "array") {
       try { values[key!] = JSON.parse(value); }
-      catch { throw new Error(`${flag}: invalid JSON; supply a JSON ${properties[key!]!.type} as shown by vmem spec ${item.command} --help`); }
+      catch { throw new UsageError(`${flag}: invalid JSON; supply a JSON ${properties[key!]!.type} as shown by vmem spec ${item.command} --help`); }
     } else values[key!] = value;
   }
-  if (positional.length > (item.command === "validate" ? 0 : 1) || ((takesId || item.command === "create") && positional.length !== 1)) throw new Error(`spec ${item.command}: unexpected targets; use vmem ${item.usage}`);
+  if (positional.length > (item.command === "validate" ? 0 : 1) || ((takesId || item.command === "create") && positional.length !== 1)) throw new UsageError(`spec ${item.command}: unexpected targets; use vmem ${item.usage}`);
   if (positional[0] !== undefined && positionalKey !== undefined) values[positionalKey] = positional[0];
   const invalid = argumentError(values, item.inputSchema);
-  if (invalid) throw new Error(`${invalid}; see vmem spec ${item.command} --help to correct the arguments`);
-  if (repo !== undefined && (values.source !== undefined || values.worktree !== undefined)) throw new Error("--repo cannot be combined with --source or --worktree; choose registry-free or registered validation");
+  if (invalid) throw new UsageError(`${invalid}; see vmem spec ${item.command} --help to correct the arguments`);
+  if (repo !== undefined && (values.source !== undefined || values.worktree !== undefined)) throw new UsageError("--repo cannot be combined with --source or --worktree; choose registry-free or registered validation");
   const result = repo !== undefined
     ? validateSpecRepo(repo, { requireFresh: values.requireFresh as boolean | undefined, limit: values.limit as number | undefined, env }).report
     : executeSpecCommand(resolveHome(env).home, item.command, values, env);

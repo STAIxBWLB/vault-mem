@@ -29,6 +29,11 @@ export function marker(name: Marker, o: TextOptions): string {
 export function status(name: "ok" | "warn" | "fail" | "unknown" | "pending" | "absent" | "active", text: string, o: TextOptions): string {
   return `${marker(name, o)} ${paint(clean(text), MARKERS[name].role, o)}`;
 }
+/** Invocation errors use a marker only for a terminal, with color resolved for stderr. */
+export function errorLine(message: string, o: TextOptions, isTTY: boolean): string {
+  const text = `vmem: ${clean(message)}`;
+  return isTTY ? status("fail", text, o) : paint(text, "error", o);
+}
 export function summary(counts: { failed?: number; warnings?: number; ok?: number; unknown?: number }, o: TextOptions): string {
   const entries = [["fail", counts.failed, "failed"], ["warn", counts.warnings, "warnings"], ["ok", counts.ok, "ok"], ["unknown", counts.unknown, "unknown"]] as const;
   return entries.filter(([, count]) => count).map(([name, count, label]) => `${marker(name, o)} ${count} ${label}`).join("  ") || `${marker("ok", o)} 0 ok`;

@@ -32,22 +32,22 @@ export function runAnalysisCommand(command: string, args: string[], home: string
   }
   const action = positional.shift();
   if (action === "build") {
-    if (positional.length !== 1) throw new Error("graph build: requires one vault id");
+    if (positional.length !== 1) throw new UsageError("graph build: requires one vault id");
     const result = writeAnalysisReports(home,{vault:positional[0]!,kind:"graph",workspace:flags.has("--workspace"),dryRun:flags.has("--dry-run")},env);
     return {text:flags.has("--json") ? JSON.stringify(result) : analysisWriteText(result,text,{kind:"graph",dryRun:flags.has("--dry-run")}),code:result.ok ? 0 : 1};
   }
   if (action === "path") {
-    if (positional.length !== 3) throw new Error("graph path: requires <vault> <from> <to>");
+    if (positional.length !== 3) throw new UsageError("graph path: requires <vault> <from> <to>");
     const maxHops = Number(values["--max-hops"] ?? 6);
-    if (!Number.isInteger(maxHops) || maxHops < 1 || maxHops > 6) throw new Error("graph path: max hops 1..6");
+    if (!Number.isInteger(maxHops) || maxHops < 1 || maxHops > 6) throw new UsageError("graph path: max hops 1..6");
     const {snapshot} = analysisInput(home,positional[0]!);
     const viaHubs = flags.has("--via-hubs"), relation = values["--relation"];
     const result = graphPath(buildGraph(snapshot),positional[1]!,positional[2]!,{maxHops,viaHubs,...(relation === undefined ? {} : {relation})});
     return {text:flags.has("--json") ? JSON.stringify(result) : pathText(result,text,{vault:positional[0]!,maxHops,viaHubs,relation}),code:0};
   }
-  if (action !== "neighbors" || positional.length !== 2) throw new Error("graph: use build <vault>, neighbors <vault> <stem> or path <vault> <from> <to>");
+  if (action !== "neighbors" || positional.length !== 2) throw new UsageError("graph: use build <vault>, neighbors <vault> <stem> or path <vault> <from> <to>");
   const hops = Number(values["--hops"] ?? 1), limit = Number(values["--limit"] ?? 50);
-  if ((hops !== 1 && hops !== 2) || !Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error("graph neighbors: hops 1..2, limit 1..500");
+  if ((hops !== 1 && hops !== 2) || !Number.isInteger(limit) || limit < 1 || limit > 500) throw new UsageError("graph neighbors: hops 1..2, limit 1..500");
   const {snapshot} = analysisInput(home,positional[0]!);
   const result = graphNeighbors(buildGraph(snapshot),positional[1]!,hops,limit,values["--relation"]);
   return {text:flags.has("--json") ? JSON.stringify(result) : neighborsText(result,text,{vault:positional[0]!,limit,relation:values["--relation"]}),code:0};

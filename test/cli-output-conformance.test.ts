@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { paint, marker, resolveColor, stripTerminal, table, textOptions, width } from "../src/text-output.ts";
+import { errorLine, paint, marker, resolveColor, stripTerminal, table, textOptions, width } from "../src/text-output.ts";
 import { run } from "../src/cli.ts";
 
 const plain = { color: false, ascii: true };
@@ -40,11 +40,23 @@ test("LANG=C selects ASCII markers", () => {
   expect(marker("next", options)).toBe("->");
   expect(marker("ok", textOptions("never", { LANG: "C.UTF-8" }))).toBe("✓ ");
 });
+test("stderr decides color independently of stdout", () => {
+  const env = { LANG: "C.UTF-8", TERM: "xterm" };
+  const stdout = textOptions("auto", env, { isTTY: false });
+  const stderr = textOptions("auto", env, { isTTY: true });
+  expect(stdout.color).toBe(false);
+  expect(stderr.color).toBe(true);
+  expect(stripTerminal(errorLine("failed", stderr, true))).toBe("✗  vmem: failed");
+  expect(errorLine("failed", stdout, false)).toBe("vmem: failed");
+  const forced = textOptions("auto", { ...env, FORCE_COLOR: "1" }, { isTTY: false });
+  expect(errorLine("failed", forced, false)).not.toBe(errorLine("failed", stdout, false));
+  expect(stripTerminal(errorLine("failed", forced, false))).toBe("vmem: failed");
+});
 
 test("usage and operation failures have distinct process exits", () => {
   const bin = new URL("../bin/vmem.js", import.meta.url).pathname;
   const env = { ...process.env, LANG: "C", VMEM_HOME: "/nonexistent-vmem-test-home" };
-  for (const args of [["lint"], ["check"], ["not-a-command"], ["lint", "--bad"]]) {
+  for (const args of [["lint"], ["check"], ["not-a-command"], ["lint", "--bad"], ["status", "extra"], ["search"], ["log"], ["sync"], ["graph", "path"], ["spec", "unknown"], ["skills", "unknown"]]) {
     const result = Bun.spawnSync([process.execPath, bin, ...args], { env, stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode).toBe(2);
     expect(result.stderr.toString()).toContain("vmem: ");

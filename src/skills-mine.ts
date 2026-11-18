@@ -8,7 +8,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { codePointCompare as compare, labelCommunities } from "./vault-graph.ts";
 import { SECRET_PATTERNS } from "./write-validation.ts";
-import { PLAIN, stripTerminal, type TextOptions } from "./text-output.ts";
+import { PLAIN, UsageError, stripTerminal, type TextOptions } from "./text-output.ts";
 
 /**
  * `vmem skills mine`: read-only skill-candidate mining over amem memory and vault notes, a port of the skill-mine
@@ -461,23 +461,23 @@ const VALUES = ["--days", "--project", "--vocab", "--skills", "--min-size", "--m
 const BOOLEANS = ["--all-projects", "--json"];
 /** `vmem skills mine <vault> ...`. Prints the JSON result, or the markdown report without --json. */
 export async function runSkillsCommand(args: string[], home: string, env: NodeJS.ProcessEnv, text: TextOptions = PLAIN): Promise<{ text: string; code: number }> {
-  if (args[0] !== "mine") throw new Error("skills: use `vmem skills mine <vault>`");
+  if (args[0] !== "mine") throw new UsageError("skills: use `vmem skills mine <vault>`");
   const flags: Record<string, string | boolean> = {}, skills: string[] = [], positional: string[] = [];
   for (let i = 1; i < args.length; i++) {
     const arg = args[i]!;
     if (!arg.startsWith("--")) { positional.push(arg); continue; }
-    if (!VALUES.includes(arg) && !BOOLEANS.includes(arg)) throw new Error(`skills mine: unknown option ${arg}`);
-    if (arg !== "--skills" && Object.hasOwn(flags, arg)) throw new Error(`skills mine: repeated option ${arg}`);
+    if (!VALUES.includes(arg) && !BOOLEANS.includes(arg)) throw new UsageError(`skills mine: unknown option ${arg}`);
+    if (arg !== "--skills" && Object.hasOwn(flags, arg)) throw new UsageError(`skills mine: repeated option ${arg}`);
     if (BOOLEANS.includes(arg)) { flags[arg] = true; continue; }
     const value = args[++i];
-    if (value === undefined || value.startsWith("--")) throw new Error(`${arg}: value required`);
+    if (value === undefined || value.startsWith("--")) throw new UsageError(`${arg}: value required`);
     if (arg === "--skills") skills.push(value); else flags[arg] = value;
   }
-  if (positional.length !== 1) throw new Error("skills mine: requires one vault id");
+  if (positional.length !== 1) throw new UsageError("skills mine: requires one vault id");
   const number = (flag: string) => {
     const value = flags[flag];
     if (typeof value !== "string") return undefined;
-    if (!/^\d+(\.\d+)?$/.test(value)) throw new Error(`${flag}: expected a number`);
+    if (!/^\d+(\.\d+)?$/.test(value)) throw new UsageError(`${flag}: expected a number`);
     return Number(value);
   };
   const result = await mineSkills(home, {
