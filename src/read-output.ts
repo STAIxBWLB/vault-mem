@@ -68,7 +68,7 @@ const verdict = (r: { errors: number; warnings: number; summary: string }, o: Te
 export function lintText(d: { report: LintReport; notes: number; titles: Record<LintCode, string>; info: Partial<Record<LintCode, string>> }, o: TextOptions, c: { vault: string; note?: string }): string {
   const rows = (Object.keys(d.report.findings) as LintCode[]).flatMap(code => {
     const check = d.titles[code].replace(" — ", " "), found = d.report.findings[code];
-    return [...(found.length ? found.map(f => [`${marker(LEVELS[code] === "error" ? "fail" : "warn", { ...o, color: false })} ${LEVELS[code]}`, check, f]) : [[`${marker("ok", { ...o, color: false })} ok`, check, "위반 없음"]]),
+    return [...(found.length ? found.map(f => [tone(`${marker(LEVELS[code] === "error" ? "fail" : "warn", { ...o, color: false })} ${LEVELS[code]}`, LEVELS[code] === "error" ? "fail" : "warn"), check, f]) : [[tone(`${marker("ok", { ...o, color: false })} ok`, "ok"), check, "위반 없음"]]),
       ...(d.info[code] ? [[tone("info", "muted"), check, d.info[code]]] : [])];
   });
   const ok = (Object.keys(d.report.findings) as LintCode[]).filter(code => !d.report.findings[code].length).length;
@@ -119,6 +119,9 @@ export function evidenceText(r: EvidenceReport, o: TextOptions): string {
   const head = heading(`evidence ${r.vault} ${r.note.path}: ${plural(r.evidence.length, "entry", "entries")}`, o);
   if (!r.evidence.length) return blocks(head, paint("no evidence metadata", "muted", o));
   const t = (s: EvidenceReport["evidence"][number]["status"]) => s === "verified" ? "ok" : s === "unverified_external" ? "muted" : s === "unsupported" ? "fail" : "warn";
-  const rows = r.evidence.map(e => [String(e.index), tone(e.status, t(e.status)), e.reason ?? "", e.match ? `${e.match.start}..${e.match.end}` : "", e.source ?? ""]);
+  const rows = r.evidence.map(e => {
+    const name = t(e.status), glyph = name === "muted" ? "unknown" : name;
+    return [String(e.index), tone(`${marker(glyph, { ...o, color: false })} ${e.status}`, name), e.reason ?? "", e.match ? `${e.match.start}..${e.match.end}` : "", e.source ?? ""];
+  });
   return blocks(head, table(["#", "STATUS", "REASON", "BYTES", "SOURCE"], rows, o));
 }

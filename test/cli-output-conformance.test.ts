@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { errorLine, paint, marker, resolveColor, stripTerminal, table, textOptions, width } from "../src/text-output.ts";
 import { run } from "../src/cli.ts";
+import { evidenceText } from "../src/read-output.ts";
 import { renderStatus } from "../src/cli-output.ts";
 
 const plain = { color: false, ascii: true };
@@ -76,4 +77,24 @@ test("usage and operation failures have distinct process exits", () => {
   const failure = Bun.spawnSync([process.execPath, bin, "lint", "missing"], { env, stdout: "pipe", stderr: "pipe" });
   expect(failure.exitCode).toBe(1);
   expect(failure.stderr.toString()).toContain("vmem: ");
+  const multi = Bun.spawnSync([process.execPath, bin, "graph", "path"], { env, stdout: "pipe", stderr: "pipe" });
+  expect(multi.stderr.toString().split("\n").slice(-3)).toEqual([
+    "Usage: vmem graph path <vault> <from> <to> [--max-hops 1..6] [--relation REL] [--via-hubs] [--json]",
+    "Run 'vmem help graph path' for details.", "",
+  ]);
+  const unknown = Bun.spawnSync([process.execPath, bin, "not-a-command"], { env, stdout: "pipe", stderr: "pipe" });
+  expect(unknown.stderr.toString()).toEndWith("Usage: vmem <command> [args]\nRun 'vmem help' for details.\n");
+  const registry = Bun.spawnSync([process.execPath, bin, "vaults", "add"], { env, stdout: "pipe", stderr: "pipe" });
+  expect(registry.stderr.toString()).toContain("Usage: vmem vaults add <id> <absolute-path>");
+  expect(registry.stderr.toString()).toEndWith("Run 'vmem help vaults add' for details.\n");
+  const noCommand = Bun.spawnSync([process.execPath, bin, "--color=invalid"], { env, stdout: "pipe", stderr: "pipe" });
+  expect(noCommand.stderr.toString()).toEndWith("Usage: vmem <command> [args]\nRun 'vmem help' for details.\n");
+});
+
+test("evidence states use semantic markers and colors", () => {
+  const report = { schemaVersion: 1 as const, vault: "v", note: { path: "notes/a.md", sha256: "abc" }, truncated: false as const, evidence: [{ index: 0, source: "notes/b.md", kind: "path" as const, expectedSha256: "abc", status: "verified" as const }] };
+  expect(evidenceText(report, plain)).toContain("ok verified");
+  const colored = evidenceText(report, color);
+  expect(stripTerminal(colored)).toContain("ok verified");
+  expect([...colored.matchAll(/\[([0-9;]+)m/g)].map(match => match[1])).toContain("1;32");
 });

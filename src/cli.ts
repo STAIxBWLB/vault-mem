@@ -238,15 +238,17 @@ export function main(args: string[]): number {
   catch (error) { return reportError(error, args); }
 }
 
-function reportError(error: unknown, args: string[]): number {
+export function reportError(error: unknown, args: string[]): number {
   let color: string | undefined;
   try { color = takeColorFlag(args).color; } catch { color = "never"; }
   let options: TextOptions;
   try { options = textOptions(color, process.env, process.stderr); } catch { options = PLAIN; }
   console.error(errorLine(error instanceof Error ? error.message : "operation failed", options, process.stderr.isTTY === true));
   if (!(error instanceof UsageError)) return 1;
-  const command = args.find(arg => !arg.startsWith("-"));
-  console.error(`Usage: vmem ${command ?? "<command>"} [options]`);
-  console.error(`Run 'vmem help ${command ?? ""}'.`);
+  let words = args;
+  try { words = takeColorFlag(args).args; } catch { /* invalid color still receives a general usage */ }
+  const entry = [...COMMANDS].sort((a, b) => b.name.length - a.name.length).find(item => item.name.split(" ").every((word, i) => words[i] === word));
+  console.error(`Usage: vmem ${entry?.usage ?? "<command> [args]"}`);
+  console.error(`Run 'vmem help${entry ? ` ${entry.name}` : ""}' for details.`);
   return 2;
 }
