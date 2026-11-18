@@ -194,6 +194,7 @@ export function rejectProposalWrite(home: string, vaultId: string, channel: "cli
     if (channel !== "cli" && channel !== "mcp") throw new Error("invalid write channel; use CLI or MCP");
     const initial = loadRegistry(home), vault = initial.vaults.find(item => item.id === vaultId);
     if (!vault || !matchesBinding(initial, vaultId, binding)) throw new Error("vault binding or policy changed; request a new rejection preview");
+    if (isDenied(join(home, LOCK_FILE), initial.denyPaths ?? [])) throw new Error("registry lock path is denied; inspect the configured deny paths");
     const root = realpathSync(vault.path);
     if (root !== vault.path) throw new Error("vault root changed or is linked; inspect the registered vault");
     file = join(root, MUTATION_LOCK);
@@ -205,7 +206,7 @@ export function rejectProposalWrite(home: string, vaultId: string, channel: "cli
     writeFileSync(registryFd, JSON.stringify({ pid: process.pid, host: hostname(), created: new Date().toISOString() }) + "\n"); fsyncSync(registryFd);
     const plan = proposalRejectionPlan(home, vaultId, channel, binding), config = loadRegistry(home), currentVault = config.vaults.find(item => item.id === vaultId);
     if (!currentVault || !matchesBinding(config, vaultId, binding)) throw new Error("vault binding or policy changed; request a new rejection preview");
-    const record = readStoredProposal(home, decision.bindingDigest, decision.id), recordDigest = proposalRecordDigest(record);
+    const record = readStoredProposal(home, decision.bindingDigest, decision.id, config.denyPaths ?? []), recordDigest = proposalRecordDigest(record);
     if (record.state !== "pending" || record.vault !== vaultId || recordDigest !== decision.recordDigest || isDenied(join(root, record.operation.path), config.denyPaths ?? []))
       throw new Error("proposal, target or policy changed; request a new rejection preview");
     const issues = screenMetadata({ operation: record.operation, agentLabel: record.agentLabel, reason: decision.reason }, { vault: currentVault, config }, record.operation.path);
@@ -213,9 +214,9 @@ export function rejectProposalWrite(home: string, vaultId: string, channel: "cli
     if (proposalDecisionFingerprint(recordDigest, plan, "reject", decision.reason) !== decision.fingerprint) throw new Error("rejection fingerprint changed; request a new rejection preview");
     if (!matchesBinding(loadRegistry(home), vaultId, binding)) throw new Error("vault binding or policy changed; request a new rejection preview");
     const next = { ...record, state: "rejected" as const, decisionReason: decision.reason, updatedAt: now.toISOString() };
-    try { replaceStoredProposal(home, decision.bindingDigest, record.id, recordDigest, next); }
+    try { replaceStoredProposal(home, decision.bindingDigest, record.id, recordDigest, next, config.denyPaths ?? []); }
     catch (error) {
-      try { if (proposalRecordDigest(readStoredProposal(home, decision.bindingDigest, record.id)) === proposalRecordDigest(next)) { rejected = true; result.rejected = true; } } catch { /* A failed read cannot establish the decision state. */ }
+      try { if (proposalRecordDigest(readStoredProposal(home, decision.bindingDigest, record.id, config.denyPaths ?? [])) === proposalRecordDigest(next)) { rejected = true; result.rejected = true; } } catch { /* A failed read cannot establish the decision state. */ }
       throw error;
     }
     rejected = true; result.ok = true; result.rejected = true;
@@ -285,6 +286,7 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
       fsyncSync(lockFd);
     }
     if (options.proposal) {
+      if (isDenied(join(home, LOCK_FILE), config.denyPaths ?? [])) refuse("V06", "proposal registry lock path is denied; inspect the configured deny paths");
       try { proposalRegistryFd = openSync(join(home, LOCK_FILE), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
       catch { refuse("LOCKED", "registry lock unavailable; stop concurrent registry updates and inspect the lock"); }
       writeFileSync(proposalRegistryFd, JSON.stringify({ pid: process.pid, host: hostname(), created: new Date().toISOString() }) + "\n"); fsyncSync(proposalRegistryFd);
@@ -371,7 +373,7 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
       if (options.proposal) {
         const decision = options.proposal;
         if (!options.binding || !matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("VAULT_DRIFT", "vault binding or policy changed after preview; request a new proposal preview");
-        const record = readStoredProposal(home, decision.bindingDigest, decision.id);
+        const record = readStoredProposal(home, decision.bindingDigest, decision.id, config.denyPaths ?? []);
         const recordDigest = proposalRecordDigest(record);
         if (record.state !== "pending" || record.vault !== request.vault || recordDigest !== decision.recordDigest || canonical(record.operation) !== canonical(request.operation))
           refuse("V09", "proposal or operation changed since preview; request a new proposal preview");
@@ -380,7 +382,7 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
         const planned = receipts(changes);
         if (planned.length !== 1) refuse("V09", "proposal plan is not a single note change; request a new proposal preview");
         const change = planned[0]!;
-        replaceStoredProposal(home, decision.bindingDigest, decision.id, recordDigest, { ...record, state: "apply_unknown", updatedAt: (options.now ?? new Date()).toISOString(), intent: { fingerprint: expected, beforeSha: change.beforeSha, afterSha: change.sha256 } });
+        replaceStoredProposal(home, decision.bindingDigest, decision.id, recordDigest, { ...record, state: "apply_unknown", updatedAt: (options.now ?? new Date()).toISOString(), intent: { fingerprint: expected, beforeSha: change.beforeSha, afterSha: change.sha256 } }, config.denyPaths ?? []);
         if (!matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("VAULT_DRIFT", "proposal intent was recorded but the vault binding or policy changed; inspect the proposal before retrying");
       }
       for (const change of changes) {

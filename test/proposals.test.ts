@@ -3,6 +3,7 @@ import { checkProposalRpcSize, decodeProposalRecord, encodeProposalRecord, MAX_P
 import { checkStoredBinding, createStoredProposal, readStoredProposal, replaceStoredProposal } from "../src/proposal-storage.ts";
 import { applyProposal, listProposals, previewProposalApply, previewProposalReject, proposalReplyBytes, reconcileProposal, rejectProposal, showProposal, submitProposal } from "../src/proposal-provider.ts";
 import { addVault, loadRegistry, LOCK_FILE, removeVault, setVaultPii } from "../src/registry.ts";
+import { CONFIG_FILE } from "../src/config.ts";
 import { logBinding } from "../src/vault-log.ts";
 import { applyProposalWrite, applyWrite, sha256, snapshot } from "../src/writer.ts";
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -110,13 +111,16 @@ test("submission screens and validates before storing without changing the vault
     expect(existsSync(join(vault, "log"))).toBe(false);
     const store = join(home, "proposals"), bucket = readdirSync(store)[0]!;
     const stored = readdirSync(join(store, bucket));
+    const registryLock = join(home, LOCK_FILE); writeFileSync(registryLock, "synthetic lock", { mode: 0o600 });
+    expect(() => submitProposal(home, { vault: "test", operation }, { channel: "mcp" })).toThrow("registry lock is unavailable");
+    expect(readFileSync(registryLock, "utf8")).toBe("synthetic lock"); rmSync(registryLock);
     expect(() => submitProposal(home, { vault: "test", operation: { ...operation, body: "password: syntheticsecret" } }, { channel: "mcp" })).toThrow("screening refused");
     expect(readdirSync(join(store, bucket))).toEqual(stored);
     const listed = listProposals(home, { vault: "test" }, { channel: "mcp" });
     expect(listed.items).toHaveLength(1);
     expect(listed.items[0]).toMatchObject({ id: result.id, state: "pending" });
     expect(JSON.stringify(listed)).not.toContain("Synthetic body");
-    const longBody = operation.body.replace("Synthetic body.", `Contact synthetic@example.invalid. 한글 ${'"'.repeat(13000)}`);
+    const longBody = operation.body.replace("Synthetic body.", `Contact synthetic@example.invalid. 한글 ${'"'.repeat(14500)}`);
     const second = submitProposal(home, { vault: "test", operation: { ...operation, path: "proposed-two", body: longBody } }, { channel: "mcp" });
     const firstPage = listProposals(home, { vault: "test", limit: 1 }, { channel: "mcp" });
     expect(firstPage.items).toHaveLength(1);
@@ -136,6 +140,7 @@ test("submission screens and validates before storing without changing the vault
     }
     expect(pageCount).toBeGreaterThan(1);
     expect(JSON.parse(assembled).body).toBe(longBody);
+    expect(() => previewProposalReject(home, { vault: "test", id: second.id, reason: "x".repeat(4096) }, { channel: "mcp" })).toThrow("shorten the reason");
     setVaultPii(home, "test", "deny", true);
     expect(() => listProposals(home, { vault: "test" }, { channel: "mcp" })).toThrow("disclosure policy");
     expect(() => showProposal(home, { vault: "test", id: second.id }, { channel: "mcp" })).toThrow("disclosure policy");
@@ -305,6 +310,31 @@ test("changed evidence source or vault policy invalidates an apply preview", () 
     const fresh = previewProposalApply(home, { vault: "test", id: submitted.id }, { channel: "mcp" });
     setVaultPii(home, "test", "deny", true);
     expect(applyProposal(home, { vault: "test", id: submitted.id, fingerprint: fresh.fingerprint }, { channel: "mcp" }).applied).toBe(false);
+    expect(existsSync(join(notes, "proposed.md"))).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("newly denied store metadata is refused before the file is opened", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-proposal-deny-"))), home = join(root, "home"), vaultPath = join(root, "vault"), notes = join(vaultPath, "notes");
+  try {
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, "research.md"), "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n");
+    addVault(home, { id: "test", path: vaultPath, kind: "personal", write: "mcp" });
+    const operation = { op: "create", path: "proposed", frontmatter: { type: "insight", domain: "research", description: "Synthetic finding.", topics: ["[[research]]"] }, body: "# Proposed\n\nSynthetic body.\n\n## Topics\n\n- [[research]]\n" };
+    const submitted = submitProposal(home, { vault: "test", operation }, { channel: "mcp" });
+    const binding = readdirSync(join(home, "proposals")).find(name => /^[a-f0-9]{64}$/.test(name))!;
+    const config = loadRegistry(home); config.denyPaths = [join(home, "proposals", binding, "binding.json")];
+    writeFileSync(join(home, CONFIG_FILE), JSON.stringify(config));
+    const fixture = join(import.meta.dir, "fixtures", "proposal-denied.ts"), child = Bun.spawnSync([process.execPath, fixture, home], { stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    expect(JSON.parse(child.stdout.toString())).toEqual({ refused: true, opens: 0 });
+    expect(() => showProposal(home, { vault: "test", id: submitted.id }, { channel: "mcp" })).toThrow("storage path is denied");
+    config.denyPaths = [join(home, "proposals", binding, `${submitted.id}.json`)];
+    writeFileSync(join(home, CONFIG_FILE), JSON.stringify(config));
+    const recordChild = Bun.spawnSync([process.execPath, fixture, home, `${submitted.id}.json`], { stdout: "pipe", stderr: "pipe" });
+    expect(recordChild.exitCode).toBe(0);
+    expect(JSON.parse(recordChild.stdout.toString())).toEqual({ refused: true, opens: 0 });
+    expect(() => showProposal(home, { vault: "test", id: submitted.id }, { channel: "mcp" })).toThrow("storage path is denied");
     expect(existsSync(join(notes, "proposed.md"))).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

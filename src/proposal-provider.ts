@@ -1,22 +1,24 @@
 /** Internal submission entry point. CLI/MCP and decision operations are intentionally not exposed yet. */
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { realpathSync } from "node:fs";
+import { closeSync, constants, fsyncSync, openSync, realpathSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
-import { loadRegistry } from "./registry.ts";
+import { loadRegistry, LOCK_FILE } from "./registry.ts";
 import { logBinding, matchesBinding } from "./vault-log.ts";
 import { applyProposalWrite, applyWrite, proposalRejectionPlan, proposalTargetDigest, rejectProposalWrite, type ProposalRejectReceipt } from "./writer.ts";
 import { screenMetadata } from "./write-validation.ts";
 import { checkStoredBinding, createStoredProposal, listStoredProposalIds, readStoredProposal, replaceStoredProposal } from "./proposal-storage.ts";
-import { encodeProposalRecord, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, type ProposalRecord } from "./proposals.ts";
+import { encodeProposalRecord, MAX_PROPOSAL_RECORD_BYTES, parseProposalOperation, proposalDecisionFingerprint, proposalPayloadDigest, proposalRecordDigest, type ProposalRecord } from "./proposals.ts";
 import type { ChangeReceipt, WriteIssue } from "./write-types.ts";
 import type { LogBinding } from "./log-types.ts";
 import { unenforceablePii, type VaultSpec } from "./config.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
+import { cleanupOwnedFile } from "./write-files.ts";
 
 export interface ProposalSubmitRequest { vault: string; operation: unknown; agentLabel?: string }
 export interface ProposalContext { channel: "cli" | "mcp"; env?: NodeJS.ProcessEnv; now?: Date; expectedVault?: VaultSpec; expectedBinding?: LogBinding | null }
-export interface ProposalSubmitted { id: string; vault: string; path: string; state: "pending"; createdAt: string; payloadDigest: string }
+export interface ProposalSubmitted { ok: boolean; stored: true | null; id: string; vault: string; path: string; state: "pending" | null; createdAt: string; payloadDigest: string; issues: WriteIssue[] }
 export interface ProposalSummary { id: string; vault: string; path: string; state: ProposalRecord["state"]; createdAt: string }
 export interface ProposalListRequest { vault: string; state?: ProposalRecord["state"]; limit?: number; after?: string }
 export interface ProposalPage { items: ProposalSummary[]; nextCursor: string | null }
@@ -42,9 +44,12 @@ function currentBinding(home: string, id: string, options: ProposalContext) {
   if (options.expectedVault && !isDeepStrictEqual(vault, options.expectedVault)) throw new Error("proposal: vault registration changed since MCP startup; restart the MCP server");
   if (options.expectedBinding === null || (options.expectedBinding && !matchesBinding(config, id, options.expectedBinding))) throw new Error("proposal: vault identity or policy changed since MCP startup; restart the MCP server");
   if (vault.write === "none" || (channel === "mcp" && vault.write !== "mcp")) throw new Error("proposal: vault write policy refuses this channel; choose an authorized vault or channel");
-  if (realpathSync(vault.path) !== vault.path || isDenied(vault.path, config.denyPaths ?? [])) throw new Error("proposal: vault root is denied, changed or linked; inspect the registered vault");
+  let root: string;
+  try { root = realpathSync(vault.path); } catch { throw new Error("proposal: vault root is unavailable; inspect the registered vault"); }
+  if (root !== vault.path || isDenied(vault.path, config.denyPaths ?? [])) throw new Error("proposal: vault root is denied, changed or linked; inspect the registered vault");
   if (unenforceablePii(vault)) throw new Error("proposal: vault PII policy cannot be enforced; inspect the vault policy");
   const homePath = canonicalPath(home);
+  if (isDenied(homePath, config.denyPaths ?? []) || isDenied(join(homePath, "proposals"), config.denyPaths ?? [])) throw new Error("proposal: configured proposal storage is denied; inspect the configured deny paths");
   if (config.vaults.some(item => homePath === item.path || homePath.startsWith(`${item.path}/`))) throw new Error("proposal: configured home is inside a registered vault; move the home outside vaults");
   const binding = logBinding(vault, config);
   const bindingDigest = createHash("sha256").update(JSON.stringify([vault.id, vault.path, binding.dev, binding.ino]), "utf8").digest("hex");
@@ -77,10 +82,32 @@ export function submitProposal(home: string, request: ProposalSubmitRequest, opt
   encodeProposalRecord(record);
   const placeholder = "0".repeat(64);
   encodeProposalRecord({ ...record, state: "applied", intent: { fingerprint: placeholder, beforeSha: placeholder, afterSha: placeholder }, receipt: { applied: true, logged: false, beforeSha: placeholder, afterSha: placeholder } });
-  if (!matchesBinding(loadRegistry(home), vault.id, binding)) throw new Error("proposal: vault binding or policy changed during submit; request a new preview");
-  createStoredProposal(home, record);
-  if (!matchesBinding(loadRegistry(home), vault.id, binding)) throw new Error("proposal: record was stored but the vault binding or policy changed; inspect the proposal store and current vault policy");
-  return { id: record.id, vault: record.vault, path: operation.path, state: "pending", createdAt, payloadDigest: record.payloadDigest };
+  const lock = join(home, LOCK_FILE);
+  if (isDenied(lock, config.denyPaths ?? [])) throw new Error("proposal: registry lock path is denied; inspect the configured deny paths");
+  let fd: number;
+  try { fd = openSync(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+  catch { throw new Error("proposal: registry lock is unavailable; stop concurrent registry updates and inspect the lock"); }
+  let attempted = false, stored = false, primary: unknown;
+  const issues: WriteIssue[] = [];
+  try {
+    writeFileSync(fd, JSON.stringify({ pid: process.pid, host: hostname(), created: new Date().toISOString() }) + "\n"); fsyncSync(fd);
+    if (!matchesBinding(loadRegistry(home), vault.id, binding)) throw new Error("proposal: vault binding or policy changed during submit; request a new preview");
+    checkStoredBinding(home, vault.id, bindingDigest, config.denyPaths ?? []);
+    attempted = true;
+    try { createStoredProposal(home, record, config.denyPaths ?? []); stored = true; }
+    catch (error) {
+      try { stored = proposalRecordDigest(readStoredProposal(home, bindingDigest, record.id, config.denyPaths ?? [])) === proposalRecordDigest(record); } catch { /* An unreadable record cannot prove whether publication occurred. */ }
+      primary = error;
+    }
+    if (stored && !matchesBinding(loadRegistry(home), vault.id, binding)) issues.push({ code: "VAULT_DRIFT", severity: "error", message: "proposal was stored but the vault binding or policy changed; inspect the proposal store and current policy" });
+  } catch (error) { primary = error; }
+  finally {
+    try { cleanupOwnedFile(lock, fd); } catch { issues.push({ code: "CLEANUP", severity: "error", message: "proposal registry lock cleanup failed; inspect the lock before retrying" }); }
+    finally { try { closeSync(fd); } catch { issues.push({ code: "CLEANUP", severity: "error", message: "proposal registry lock descriptor close failed; inspect the lock before retrying" }); } }
+  }
+  if (!attempted && primary) throw primary;
+  if (primary) issues.push({ code: "PROPOSAL_STORE", severity: "error", message: stored ? "proposal was stored but store finalization failed; inspect it before retrying" : "proposal storage outcome is unknown; inspect the proposal store before retrying" });
+  return { ok: stored && issues.length === 0, stored: stored ? true : null, id: record.id, vault: record.vault, path: operation.path, state: stored ? "pending" : null, createdAt, payloadDigest: record.payloadDigest, issues };
 }
 
 /** Returns screened summaries, examining at most 512 records per call. The cursor is a record id, never a path. */
@@ -90,15 +117,15 @@ export function listProposals(home: string, request: ProposalListRequest, option
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !["pending", "applied", "rejected", "apply_unknown"].includes(state) || (request.after !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.after)))
     throw new Error("proposal: invalid list state, cursor or limit; use a returned cursor and limit 1..100");
   const context = currentBinding(home, request.vault, options);
-  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) {
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) {
     if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding)) throw new Error("proposal: vault binding or policy changed during listing; retry with the current policy");
     return { items: [], nextCursor: null };
   }
-  const ids = listStoredProposalIds(home, context.bindingDigest).filter(id => request.after === undefined || id > request.after);
+  const ids = listStoredProposalIds(home, context.bindingDigest, context.config.denyPaths ?? []).filter(id => request.after === undefined || id > request.after);
   const items: ProposalSummary[] = []; let scanned = 0, cursor: string | null = null;
   for (const id of ids) {
     if (scanned >= 512 || items.length >= limit) break;
-    const record = readStoredProposal(home, context.bindingDigest, id); scanned++; cursor = id;
+    const record = readStoredProposal(home, context.bindingDigest, id, context.config.denyPaths ?? []); scanned++; cursor = id;
     screenForRead(record, context);
     if (record.state !== state) continue;
     items.push({ id: record.id, vault: record.vault, path: record.operation.path, state: record.state, createdAt: record.createdAt });
@@ -115,8 +142,8 @@ export function showProposal(home: string, request: ProposalShowRequest, options
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_SHOW_BYTES)
     throw new Error("proposal: invalid show offset or page size; use a returned offset and maxBytes 1..16384");
   const context = currentBinding(home, request.vault, options);
-  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
-  const record = readStoredProposal(home, context.bindingDigest, request.id);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
+  const record = readStoredProposal(home, context.bindingDigest, request.id, context.config.denyPaths ?? []);
   screenForRead(record, context);
   const serialized = JSON.stringify(record.operation), bytes = Buffer.from(serialized, "utf8");
   if (offset > bytes.length || !Buffer.from(bytes.subarray(0, offset).toString("utf8"), "utf8").equals(bytes.subarray(0, offset)))
@@ -145,15 +172,15 @@ export function previewProposalApply(home: string, request: { vault: string; id:
   if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string")
     throw new Error("proposal: invalid apply preview request; provide a vault and proposal id");
   const context = currentBinding(home, request.vault, options);
-  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
-  const record = readStoredProposal(home, context.bindingDigest, request.id);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
+  const record = readStoredProposal(home, context.bindingDigest, request.id, context.config.denyPaths ?? []);
   screenForRead(record, context);
   if (record.state !== "pending") throw new Error(`proposal: ${record.state === "apply_unknown" ? "apply outcome is unknown; reconcile before another decision" : "proposal is no longer pending; inspect the proposal"}`);
   const recordDigest = proposalRecordDigest(record);
   const preview = applyWrite(home, { vault: record.vault, operation: record.operation, channel: options.channel, dryRun: true }, { binding: context.binding, env: options.env, now: options.now });
   if (!preview.ok || !preview.fingerprint) throw new Error(`proposal: apply preview refused (${[...new Set(preview.issues.filter(issue => issue.severity === "error").map(issue => issue.code))].join(", ") || "unknown"}); correct the vault or proposal and retry`);
   if (preview.changes.length !== 1) throw new Error("proposal: apply preview is not a single note change; inspect the proposal");
-  if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id)) !== recordDigest)
+  if (!matchesBinding(loadRegistry(home), context.vault.id, context.binding) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id, context.config.denyPaths ?? [])) !== recordDigest)
     throw new Error("proposal: record, vault binding or policy changed during preview; request a new preview");
   return { id: record.id, vault: record.vault, state: "pending", fingerprint: proposalDecisionFingerprint(recordDigest, preview.fingerprint, "apply"), changes: preview.changes, issues: preview.issues };
 }
@@ -163,14 +190,17 @@ export function previewProposalReject(home: string, request: { vault: string; id
   if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id", "reason"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string" || typeof request.reason !== "string" || !request.reason.trim() || Buffer.byteLength(request.reason, "utf8") > 4096)
     throw new Error("proposal: rejection requires a nonempty reason of at most 4096 bytes; provide a reason and preview again");
   const context = currentBinding(home, request.vault, options);
-  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
-  const record = readStoredProposal(home, context.bindingDigest, request.id);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
+  const record = readStoredProposal(home, context.bindingDigest, request.id, context.config.denyPaths ?? []);
   screenForRead(record, context);
   if (record.state !== "pending") throw new Error(`proposal: ${record.state === "apply_unknown" ? "apply outcome is unknown; reconcile before another decision" : "proposal is no longer pending; inspect the proposal"}`);
   if (screenMetadata({ reason: request.reason }, { vault: context.vault, config: context.config }, record.operation.path).some(issue => issue.severity === "error"))
     throw new Error("proposal: current policy refuses the rejection reason; remove prohibited content or inspect the vault policy");
+  const rejected: ProposalRecord = { ...record, state: "rejected", decisionReason: request.reason, updatedAt: (options.now ?? new Date()).toISOString() };
+  if (Buffer.byteLength(JSON.stringify(rejected), "utf8") > MAX_PROPOSAL_RECORD_BYTES) throw new Error("proposal: rejection would exceed the 32 KiB record bound; shorten the reason and preview again");
+  encodeProposalRecord(rejected);
   const recordDigest = proposalRecordDigest(record), plan = proposalRejectionPlan(home, record.vault, options.channel, context.binding);
-  if (!bindingStillCurrent(home, context) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id)) !== recordDigest)
+  if (!bindingStillCurrent(home, context) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id, context.config.denyPaths ?? [])) !== recordDigest)
     throw new Error("proposal: record, vault binding or policy changed during preview; request a new preview");
   return { id: record.id, vault: record.vault, state: "pending", reason: request.reason, fingerprint: proposalDecisionFingerprint(recordDigest, plan, "reject", request.reason) };
 }
@@ -180,8 +210,8 @@ export function rejectProposal(home: string, request: { vault: string; id: strin
   if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id", "reason", "fingerprint"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string" || typeof request.reason !== "string" || !request.reason.trim() || Buffer.byteLength(request.reason, "utf8") > 4096 || typeof request.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(request.fingerprint))
     throw new Error("proposal: invalid rejection confirmation; use the reason and fingerprint from a fresh preview");
   const context = currentBinding(home, request.vault, options);
-  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
-  const record = readStoredProposal(home, context.bindingDigest, request.id);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
+  const record = readStoredProposal(home, context.bindingDigest, request.id, context.config.denyPaths ?? []);
   screenForRead(record, context);
   if (record.state !== "pending") throw new Error(`proposal: ${record.state === "apply_unknown" ? "apply outcome is unknown; reconcile before another decision" : "proposal is no longer pending; inspect the proposal"}`);
   const result = rejectProposalWrite(home, record.vault, options.channel, context.binding, { id: record.id, bindingDigest: context.bindingDigest, recordDigest: proposalRecordDigest(record), fingerprint: request.fingerprint, reason: request.reason }, options.now);
@@ -194,8 +224,8 @@ export function applyProposal(home: string, request: { vault: string; id: string
   if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id", "fingerprint"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string" || typeof request.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(request.fingerprint))
     throw new Error("proposal: invalid apply confirmation; use the fingerprint returned by a fresh preview");
   const context = currentBinding(home, request.vault, options);
-  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
-  const record = readStoredProposal(home, context.bindingDigest, request.id);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
+  const record = readStoredProposal(home, context.bindingDigest, request.id, context.config.denyPaths ?? []);
   screenForRead(record, context);
   if (record.state !== "pending") throw new Error(`proposal: ${record.state === "apply_unknown" ? "apply outcome is unknown; reconcile before another decision" : "proposal is no longer pending; inspect the proposal"}`);
   const receipt = applyProposalWrite(home, { vault: record.vault, operation: record.operation, channel: options.channel }, {
@@ -205,14 +235,14 @@ export function applyProposal(home: string, request: { vault: string; id: string
   const logged = receipt.logged === true ? true : receipt.logged === false ? false : null;
   if (receipt.applied) {
     try {
-      const current = readStoredProposal(home, context.bindingDigest, record.id), change = receipt.changes.find(item => item.path === record.operation.path);
+      const current = readStoredProposal(home, context.bindingDigest, record.id, context.config.denyPaths ?? []), change = receipt.changes.find(item => item.path === record.operation.path);
       if (current.state !== "apply_unknown" || current.intent?.fingerprint !== request.fingerprint || !change || current.intent.beforeSha !== change.beforeSha || current.intent.afterSha !== change.sha256)
         throw new Error("intent or receipt does not match");
-      replaceStoredProposal(home, context.bindingDigest, record.id, proposalRecordDigest(current), { ...current, state: "applied", updatedAt: (options.now ?? new Date()).toISOString(), receipt: { applied: true, logged, beforeSha: change.beforeSha, afterSha: change.sha256 } });
+      replaceStoredProposal(home, context.bindingDigest, record.id, proposalRecordDigest(current), { ...current, state: "applied", updatedAt: (options.now ?? new Date()).toISOString(), receipt: { applied: true, logged, beforeSha: change.beforeSha, afterSha: change.sha256 } }, context.config.denyPaths ?? []);
     } catch {
       let recorded = false;
       try {
-        const current = readStoredProposal(home, context.bindingDigest, record.id), change = receipt.changes.find(item => item.path === record.operation.path);
+        const current = readStoredProposal(home, context.bindingDigest, record.id, context.config.denyPaths ?? []), change = receipt.changes.find(item => item.path === record.operation.path);
         recorded = current.state === "applied" && current.intent?.fingerprint === request.fingerprint && current.receipt?.applied === true && !!change && current.receipt.beforeSha === change.beforeSha && current.receipt.afterSha === change.sha256;
       } catch { /* An unreadable record cannot establish that the receipt was saved. */ }
       return { ok: false, applied: true, state: recorded ? "applied" : "apply_unknown", logged, issues: [{ code: "PROPOSAL_RECEIPT", severity: "error", message: recorded ? "note and proposal receipt were recorded but finalization failed; inspect the proposal store before retrying" : "note was applied but proposal receipt could not be recorded; inspect and reconcile the proposal before retrying" }] };
@@ -222,7 +252,7 @@ export function applyProposal(home: string, request: { vault: string; id: string
   }
   let state: "pending" | "apply_unknown" = "apply_unknown";
   try {
-    const current = readStoredProposal(home, context.bindingDigest, record.id);
+    const current = readStoredProposal(home, context.bindingDigest, record.id, context.config.denyPaths ?? []);
     if (current.state === "pending") state = "pending";
   } catch { /* Failure to read the state cannot prove that publication did not start. */ }
   if (!bindingStillCurrent(home, context)) return { ok: false, applied: false, state: "apply_unknown", logged, issues: [{ code: "VAULT_DRIFT", severity: "error", message: "vault binding or policy changed; inspect the proposal before retrying" }] };
@@ -234,12 +264,12 @@ export function reconcileProposal(home: string, request: { vault: string; id: st
   if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "id"].includes(key)) || typeof request.vault !== "string" || typeof request.id !== "string")
     throw new Error("proposal: invalid reconciliation request; provide a vault and proposal id");
   const context = currentBinding(home, request.vault, options);
-  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest)) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
-  const record = readStoredProposal(home, context.bindingDigest, request.id);
+  if (!checkStoredBinding(home, context.vault.id, context.bindingDigest, context.config.denyPaths ?? [])) throw new Error("proposal: no proposal store for this vault; use proposal list to find an id");
+  const record = readStoredProposal(home, context.bindingDigest, request.id, context.config.denyPaths ?? []);
   screenForRead(record, context);
   if (record.state !== "apply_unknown" || !record.intent) throw new Error("proposal: reconciliation needs an uncertain apply; inspect the proposal state");
   const recordDigest = proposalRecordDigest(record), observedSha = proposalTargetDigest(home, record.vault, record.operation.path, context.binding);
-  if (!bindingStillCurrent(home, context) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id)) !== recordDigest)
+  if (!bindingStillCurrent(home, context) || proposalRecordDigest(readStoredProposal(home, context.bindingDigest, record.id, context.config.denyPaths ?? [])) !== recordDigest)
     throw new Error("proposal: record, vault binding or policy changed during reconciliation; retry with the current policy");
   return { id: record.id, vault: record.vault, state: "apply_unknown", beforeSha: record.intent.beforeSha, afterSha: record.intent.afterSha, observedSha,
     matchesBefore: observedSha === record.intent.beforeSha, matchesAfter: observedSha === record.intent.afterSha, receiptEvidence: "unavailable",

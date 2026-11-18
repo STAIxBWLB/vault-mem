@@ -4,20 +4,25 @@ import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { syncDirectory } from "./registry.ts";
 import { capturePublicationPath, cleanupOwnedFile, publishFile } from "./write-files.ts";
+import { isDenied } from "./platform.ts";
 import { decodeProposalRecord, encodeProposalRecord, MAX_PROPOSAL_RECORD_BYTES, proposalRecordDigest, type ProposalRecord } from "./proposals.ts";
 
 const DIGEST = /^[a-f0-9]{64}$/;
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_BINDINGS = 256, MAX_BINDING_BYTES = 4096;
+function requireAllowed(denyPaths: string[], ...paths: string[]): void {
+  if (paths.some(path => isDenied(path, denyPaths))) throw new Error("proposal: storage path is denied by current policy; inspect the configured deny paths");
+}
 function validateDirectory(path: string): void {
   const info = lstatSync(path);
   if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o077) !== 0 || (typeof process.getuid === "function" && info.uid !== process.getuid()))
     throw new Error("proposal: store directory is linked or not private; inspect the configured home");
 }
 /** The binding is derived internally by the caller, never accepted from a CLI or MCP request. */
-function directory(home: string, binding: string, create: boolean): string {
+function directory(home: string, binding: string, create: boolean, denyPaths: string[] = []): string {
   if (!DIGEST.test(binding)) throw new Error("proposal: invalid internal vault binding; inspect the registered vault");
   const root = resolve(home);
+  requireAllowed(denyPaths, root, join(root, "proposals"), join(root, "proposals", binding));
   if (realpathSync(root) !== root || !lstatSync(root).isDirectory()) throw new Error("proposal: configured home is linked or unavailable; inspect the configured home");
   let current = root;
   for (const part of ["proposals", binding]) {
@@ -32,10 +37,12 @@ function directory(home: string, binding: string, create: boolean): string {
   }
   return current;
 }
-function recordFile(home: string, binding: string, id: string, create: boolean): { root: string; file: string } {
+function recordFile(home: string, binding: string, id: string, create: boolean, denyPaths: string[] = []): { root: string; file: string } {
   if (!ID.test(id)) throw new Error("proposal: invalid proposal id; use an id from proposal list");
-  const root = resolve(home), dir = directory(root, binding, create);
-  return { root, file: join(dir, `${id}.json`) };
+  const root = resolve(home), file = join(root, "proposals", binding, `${id}.json`);
+  requireAllowed(denyPaths, file);
+  directory(root, binding, create, denyPaths);
+  return { root, file };
 }
 function validRecordFile(info: Stats): void {
   if (!info.isFile() || info.nlink !== 1 || (info.mode & 0o077) !== 0 || (typeof process.getuid === "function" && info.uid !== process.getuid()))
@@ -43,8 +50,11 @@ function validRecordFile(info: Stats): void {
   if (info.size > MAX_PROPOSAL_RECORD_BYTES) throw new Error("proposal: stored record exceeds 32 KiB; inspect the proposal store");
 }
 /** Binding metadata contains no note or proposal body. Each read is bounded before allocation. */
-function readBinding(home: string, binding: string): { vault: string; bindingDigest: string } {
-  const root = resolve(home), dir = directory(root, binding, false), file = join(dir, "binding.json"), captured = capturePublicationPath(root, file);
+function readBinding(home: string, binding: string, denyPaths: string[] = []): { vault: string; bindingDigest: string } {
+  const root = resolve(home), file = join(root, "proposals", binding, "binding.json");
+  requireAllowed(denyPaths, file);
+  directory(root, binding, false, denyPaths);
+  const captured = capturePublicationPath(root, file);
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const before = fstatSync(fd); validRecordFile(before);
@@ -68,19 +78,20 @@ function readBinding(home: string, binding: string): { vault: string; bindingDig
 }
 
 /** Bounded lookup prevents a re-registered vault id from silently choosing another store. */
-export function checkStoredBinding(home: string, vault: string, expected: string): boolean {
+export function checkStoredBinding(home: string, vault: string, expected: string, denyPaths: string[] = []): boolean {
   if (!DIGEST.test(expected) || !/^[a-z][a-z0-9-]{0,63}$/.test(vault)) throw new Error("proposal: invalid internal vault binding; inspect the registered vault");
   const root = resolve(home), base = join(root, "proposals");
+  requireAllowed(denyPaths, root, base);
   if (realpathSync(root) !== root) throw new Error("proposal: configured home is linked; inspect the configured home");
   try { validateDirectory(base); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
   const parent = capturePublicationPath(root, join(base, ".scan")), dir = opendirSync(base); let count = 0, found = false;
   try {
     let entry;
     while ((entry = dir.readSync()) !== null) {
-      if (entry.name === ".binding.lock") { validRecordFile(lstatSync(join(base, entry.name))); continue; }
+      if (entry.name === ".binding.lock") { requireAllowed(denyPaths, join(base, entry.name)); validRecordFile(lstatSync(join(base, entry.name))); continue; }
       if (++count > MAX_BINDINGS) throw new Error("proposal: too many vault bindings to inspect; inspect the proposal store");
       if (!DIGEST.test(entry.name)) throw new Error("proposal: unexpected entry in proposal store; inspect the proposal store");
-      const binding = readBinding(root, entry.name);
+      const binding = readBinding(root, entry.name, denyPaths);
       if (binding.vault === vault && binding.bindingDigest !== expected) throw new Error("proposal: vault id was registered with a different root; inspect the registered vault and existing proposals");
       if (binding.vault === vault && binding.bindingDigest === expected) found = true;
     }
@@ -89,8 +100,9 @@ export function checkStoredBinding(home: string, vault: string, expected: string
   return found;
 }
 
-function publishNew(root: string, dir: string, file: string, bytes: Uint8Array): void {
+function publishNew(root: string, dir: string, file: string, bytes: Uint8Array, denyPaths: string[] = []): void {
   const captured = capturePublicationPath(root, file), temporary = join(dir, `.proposal-${randomUUID()}.tmp`);
+  requireAllowed(denyPaths, file, temporary);
   const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try {
     writeFileSync(fd, bytes); fsyncSync(fd);
@@ -99,9 +111,14 @@ function publishNew(root: string, dir: string, file: string, bytes: Uint8Array):
   } finally { try { cleanupOwnedFile(temporary, fd); } finally { closeSync(fd); } }
 }
 /** Reads at most 32 KiB and rejects a rebound filename or changed descriptor. */
-export function readStoredProposal(home: string, binding: string, id: string): ProposalRecord {
-  const { root, file } = recordFile(home, binding, id, false), captured = capturePublicationPath(root, file);
-  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+export function readStoredProposal(home: string, binding: string, id: string, denyPaths: string[] = []): ProposalRecord {
+  const { root, file } = recordFile(home, binding, id, false, denyPaths), captured = capturePublicationPath(root, file);
+  let fd: number;
+  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("proposal: id not found; use proposal list to find an existing id");
+    throw new Error("proposal: record is linked or unreadable; inspect the proposal store before retrying", { cause: error });
+  }
   try {
     const before = fstatSync(fd); validRecordFile(before);
     const bytes = Buffer.alloc(MAX_PROPOSAL_RECORD_BYTES + 1);
@@ -119,8 +136,8 @@ export function readStoredProposal(home: string, binding: string, id: string): P
   } finally { closeSync(fd); }
 }
 /** Enumerate only generated record names, with bounded directory traversal and parent identity checks. */
-export function listStoredProposalIds(home: string, binding: string): string[] {
-  const root = resolve(home), dir = directory(root, binding, false), target = join(dir, ".scan"), captured = capturePublicationPath(root, target);
+export function listStoredProposalIds(home: string, binding: string, denyPaths: string[] = []): string[] {
+  const root = resolve(home), dir = directory(root, binding, false, denyPaths), target = join(dir, ".scan"), captured = capturePublicationPath(root, target);
   const fd = openSync(dir, constants.O_RDONLY | constants.O_NOFOLLOW), before = fstatSync(fd);
   let entries;
   try { entries = opendirSync(dir); } catch (error) { closeSync(fd); throw error; }
@@ -132,6 +149,7 @@ export function listStoredProposalIds(home: string, binding: string): string[] {
       if (item.name === "binding.json") continue;
       const id = item.name.endsWith(".json") ? item.name.slice(0, -5) : "";
       if (!ID.test(id)) throw new Error("proposal: unexpected entry in proposal store; inspect the proposal store");
+      requireAllowed(denyPaths, join(dir, item.name));
       ids.push(id);
     }
     const after = fstatSync(fd), named = lstatSync(dir), parents = capturePublicationPath(root, target);
@@ -142,8 +160,9 @@ export function listStoredProposalIds(home: string, binding: string): string[] {
   return ids.sort();
 }
 /** Serializes store updates and keeps the descriptor for the lock throughout cleanup. */
-function withStoreLock<T>(home: string, create: boolean, work: (root: string) => T): T {
+function withStoreLock<T>(home: string, create: boolean, work: (root: string) => T, denyPaths: string[] = []): T {
   const root = resolve(home), base = join(root, "proposals");
+  requireAllowed(denyPaths, root, base, join(base, ".binding.lock"));
   if (realpathSync(root) !== root) throw new Error("proposal: configured home is linked; inspect the configured home");
   if (create) {
     let made = false;
@@ -166,32 +185,33 @@ function withStoreLock<T>(home: string, create: boolean, work: (root: string) =>
   }
 }
 /** Publishes a new record atomically without overwriting any existing proposal. */
-export function createStoredProposal(home: string, record: ProposalRecord): void {
+export function createStoredProposal(home: string, record: ProposalRecord, denyPaths: string[] = []): void {
   const bytes = encodeProposalRecord(record);
   withStoreLock(home, true, root => {
-    const found = checkStoredBinding(root, record.vault, record.bindingDigest);
-    const { file } = recordFile(root, record.bindingDigest, record.id, true), dir = directory(root, record.bindingDigest, false);
-    if (!found) publishNew(root, dir, join(dir, "binding.json"), Buffer.from(JSON.stringify({ schemaVersion: 1, vault: record.vault, bindingDigest: record.bindingDigest }), "utf8"));
-    publishNew(root, dir, file, bytes);
-  });
+    const found = checkStoredBinding(root, record.vault, record.bindingDigest, denyPaths);
+    const { file } = recordFile(root, record.bindingDigest, record.id, true, denyPaths), dir = directory(root, record.bindingDigest, false, denyPaths);
+    if (!found) publishNew(root, dir, join(dir, "binding.json"), Buffer.from(JSON.stringify({ schemaVersion: 1, vault: record.vault, bindingDigest: record.bindingDigest }), "utf8"), denyPaths);
+    publishNew(root, dir, file, bytes, denyPaths);
+  }, denyPaths);
 }
 
 /** Compare-and-replace a record while retaining the proposal payload and vault identity. */
-export function replaceStoredProposal(home: string, binding: string, id: string, expectedDigest: string, next: ProposalRecord): void {
+export function replaceStoredProposal(home: string, binding: string, id: string, expectedDigest: string, next: ProposalRecord, denyPaths: string[] = []): void {
   if (!DIGEST.test(expectedDigest)) throw new Error("proposal: invalid record fingerprint; request a new preview");
   const bytes = encodeProposalRecord(next);
   let published = false;
   try { withStoreLock(home, false, root => {
-    const { file } = recordFile(root, binding, id, false), dir = directory(root, binding, false);
+    const { file } = recordFile(root, binding, id, false, denyPaths), dir = directory(root, binding, false, denyPaths);
     const sourceFd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const before = fstatSync(sourceFd); validRecordFile(before);
-      const current = readStoredProposal(root, binding, id);
+      const current = readStoredProposal(root, binding, id, denyPaths);
       if (proposalRecordDigest(current) !== expectedDigest) throw new Error("proposal: record changed since preview; request a new preview");
       if (current.id !== next.id || current.vault !== next.vault || current.bindingDigest !== next.bindingDigest || current.createdAt !== next.createdAt || current.payloadDigest !== next.payloadDigest || current.agentLabel !== next.agentLabel)
         throw new Error("proposal: decision cannot change immutable record fields; request a new preview");
-      if (!checkStoredBinding(root, current.vault, binding)) throw new Error("proposal: vault binding is missing; inspect the proposal store");
+      if (!checkStoredBinding(root, current.vault, binding, denyPaths)) throw new Error("proposal: vault binding is missing; inspect the proposal store");
       const path = capturePublicationPath(root, file), temporary = join(dir, `.proposal-${randomUUID()}.tmp`);
+      requireAllowed(denyPaths, temporary);
       const tempFd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
       try {
         writeFileSync(tempFd, bytes); fsyncSync(tempFd);
@@ -207,7 +227,7 @@ export function replaceStoredProposal(home: string, binding: string, id: string,
         try { if (!published) cleanupOwnedFile(temporary, tempFd); } finally { closeSync(tempFd); }
       }
     } finally { closeSync(sourceFd); }
-  }); } catch (error) {
+  }, denyPaths); } catch (error) {
     if (published) throw new Error("proposal: record update was published but finalization failed; inspect the proposal store before retrying", { cause: error });
     throw error;
   }
