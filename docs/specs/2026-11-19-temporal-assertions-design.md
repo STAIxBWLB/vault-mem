@@ -435,7 +435,9 @@ A purged line keeps every hashed field, drops `payload` and adds `"purged": {"at
 
 - No operation edits or deletes an entry in place.
 - `retract` hides an assertion from answers at and after its time; its bytes remain.
-- `purge` is a two-step operation (preview, fingerprint, confirm, as for `merge`). It rewrites the affected segment files by temporary file and rename under the lock, removes `payload` from the named assertion's entries, keeps `payload_sha256` and adds `purged`. The chain still verifies. A purged assertion is left out of answers, shown as `unavailable` in history and counted in `coverage.purged`.
+- `purge` is a two-step operation (preview, fingerprint, confirm, as for `merge`). It rewrites the affected segment files by temporary file and rename under `assertions.lock`, held for the whole rewrite and for the index refresh below, removes `payload` from the named assertion's entries, keeps `payload_sha256` and adds `purged`. The chain still verifies. A purged assertion is left out of answers, shown as `unavailable` in history and counted in `coverage.purged`. An interrupted rewrite leaves the original segment intact; its preview fingerprint still matches that segment, so a retry completes the purge.
+- A purged entry keeps no copy of the subject or relation. Its assertion id stays derivable as `a:<seg>:<seq>` for an assert, and a purged revision resolves its id through `parents`, so identity and chain survive without the payload. The subject and relation strings still appear where other entries hold them: the `declare` entry of that subject, and any other assertion about the same subject or relation.
+- The derived read index at `<VMEM_HOME>/indexes/assertions-<digest>-v1.sqlite` stores canonical entries, payloads included. The purge deletes it and rebuilds it from the purged journal while the lock is held, so the disposable cache keeps no purged payload; a failed rebuild is a warning naming the file, and the next read rebuilds it. A read that started before the purge and renamed its own pre-purge cache afterwards is the residual window: the next read rebuilds from the purged journal, and deleting `VMEM_HOME/indexes/assertions-*.sqlite` clears it.
 - Purge does not remove bytes from Git history, other clones or remotes. Complete erasure needs a Git history rewrite outside vmem.
 - Deleting a note never deletes assertions. A deleted subject note reports `missing`.
 - When PII policy becomes stricter, existing entries stay, reads withhold failing values, and purge can remove them.
@@ -469,7 +471,7 @@ Proposed `test/assertions.test.ts` with synthetic fixtures under `test/fixtures/
 - T9 rebuild: deleting the SQLite index and rebuilding yields byte-identical JSON for every T1 query.
 - T10 policy: denied evidence returns `withheld` with no path, quote or hash; deleted or purged evidence returns `unavailable`; a denied `assertions/` path refuses reads (V06); secrets and PII are refused at append and withheld at read after a policy change.
 - T11 identity: vmem move and merge of a subject note leave answers unchanged and report `missing` or `superseded` links.
-- T12 purge: preview, fingerprint and confirm; the chain still verifies; purged entries show `unavailable`; a stale fingerprint is refused.
+- T12 purge: preview, fingerprint and confirm; the chain still verifies; purged entries show `unavailable` and count in `coverage.purged`; a stale fingerprint is refused; an interrupted rewrite leaves the segment intact and a retry completes it; the derived index holds no purged payload after confirm.
 - T13 compatibility: note writes, reads, lint and the note index behave the same with and without `assertions/`; `vmem sync` stages `assertions/` only after the P2 change.
 - T14 bounds and transport: each bound refuses with guidance; escape-heavy Unicode responses stay within 48 KiB with continuation.
 - T15 read-only: reads create no note, journal line, log line or lock.
