@@ -9,7 +9,7 @@ import { readAssertions } from "../src/assertion-read.ts";
 import { run } from "../src/cli.ts";
 import { CONFIG_FILE } from "../src/config.ts";
 import { serveMcp } from "../src/mcp.ts";
-import { createVaultMcp } from "../src/mcp-vault.ts";
+import { createVaultMcp, purgeReply } from "../src/mcp-vault.ts";
 import { addVault, loadRegistry } from "../src/registry.ts";
 
 const roots: string[] = [];
@@ -236,4 +236,74 @@ test("MCP: vmem_assertions_purge previews and confirms inside the frame bound, w
   expect(applied).toMatchObject({ ok: true, applied: true, assertion: id, at: applied.at });
   expect(assertFrameBytes(applied, "result")).toBeLessThanOrEqual(48 * 1024);
   expect(readFileSync(join(f.vault, "assertions", `${planned.entries[0]!.segment}.jsonl`), "utf8")).not.toContain(CANARY);
+});
+
+test("a purge reason is length-checked by the verifier's rule and screened like any write", () => {
+  const f = fixture();
+  const { id, segment } = seed(f);
+  // 150 emoji are 300 UTF-16 units, the unit `purgeShape` counts: refused, so no marker verification rejects is written.
+  const long = purge(f, { id, reason: "😀".repeat(150) });
+  expect(long.ok).toBe(false);
+  expect(coldes(long)).toEqual(["V01"]);
+  expect(long.issues[0]!.message).toContain("1..200 characters");
+  expect(readFileSync(segment, "utf8")).toContain(CANARY);
+  // 100 emoji are exactly the 200-unit limit, and the rewritten segment still verifies.
+  const planned = purge(f, { id, reason: "😀".repeat(100) });
+  expect(planned.ok).toBe(true);
+  const applied = purge(f, { id, reason: "😀".repeat(100), confirm: true, fingerprint: planned.fingerprint });
+  expect(applied).toMatchObject({ ok: true, applied: true });
+  const journal = readJournal(f.vault);
+  expect(journal.segments.flatMap(segment => segment.untrusted ?? [])).toEqual([]);
+  expect(journal.segments.flatMap(segment => segment.entries).find(entry => entry.hash === applied.entries[0]!.hash)!.purged!.reason).toBe("😀".repeat(100));
+
+  const secret = fixture();
+  const hidden = seed(secret);
+  const refused = purge(secret, { id: hidden.id, reason: "token: abcdefghijklmnop" });
+  expect(refused.ok).toBe(false);
+  expect(coldes(refused)).toEqual(["V06"]);
+  expect(refused.issues[0]!.message).toContain("reason is refused by current policy");
+  expect(refused.issues[0]!.message).toContain("give a reason without secrets or personal data");
+  expect(readFileSync(hidden.segment, "utf8")).toContain(CANARY);
+
+  const personal = fixture();
+  const tagged = seed(personal);
+  const config = loadRegistry(personal.home);
+  config.vaults[0]!.pii = "deny";
+  writeFileSync(join(personal.home, CONFIG_FILE), JSON.stringify(config));
+  const pii = purge(personal, { id: tagged.id, reason: "asked by person@example.test" });
+  expect(pii.ok).toBe(false);
+  expect(coldes(pii)).toEqual(["V07"]);
+  expect(readFileSync(tagged.segment, "utf8")).toContain(CANARY);
+});
+
+test("MCP: an oversized purge request is refused on the frame, and an oversized reply drops its rows", async () => {
+  const f = fixture({ write: "mcp" });
+  const { appendAssertions: append } = await import("../src/assertions.ts");
+  const receipt = append(f.home, { vault: "test", channel: "mcp", ops: [{ op: "declare", subject: "s:test", note: "notes/subject.md" },
+    { op: "assert", subject: "s:test", relation: "role", value: CANARY, kind: "state", from: "2025-01-01", to: "open", source: ["mem:fixture"] }] }, { env: f.env, now: new Date("2026-01-01T12:00:00Z") });
+  const id = receipt.entries[1]!.id!;
+  const server = createVaultMcp(f.home, f.env), input = new PassThrough(), output = new PassThrough();
+  let text = ""; output.on("data", chunk => { text += chunk.toString(); });
+  const done = serveMcp({ tools: server.tools, handlers: server.handlers, input, output });
+  const call = (args: Record<string, unknown>) => ({ jsonrpc: "2.0", id: "purge", method: "tools/call", params: { name: "vmem_assertions_purge", arguments: { vault: "test", id, reason: "evidence_withdrawn", ...args } } });
+  for (const frame of [{ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } } },
+    { jsonrpc: "2.0", method: "notifications/initialized" },
+    call({ pad: "x".repeat(60 * 1024) }),
+    call({ pad: "x" })]) input.write(JSON.stringify(frame) + "\n");
+  input.end(); await done;
+  const [wide, narrow] = text.trim().split("\n").slice(1).map(line => JSON.parse(line) as { error?: { code: number; message: string } });
+  expect(wide!.error?.code).toBe(-32600);
+  expect(wide!.error?.message).toContain("exceeds 48 KiB");
+  expect(narrow!.error?.code).toBe(-32602);
+
+  const rows = Array.from({ length: 100 }, (_, index) => ({ segment: "0123456789abcdef", seq: index + 1, op: "assert" as const, hash: "a".repeat(64) }));
+  const segments = Array.from({ length: 100 }, (_, index) => ({ segment: `${index}`.padStart(16, "0"), entries: 1, bytes: 4096, after: 2048 }));
+  const reply = purgeReply({ ok: true, applied: true, preview: false, vault: "test", assertion: id, reason: "evidence_withdrawn", at: "2026-01-02T00:00:00Z", fingerprint: "b".repeat(64),
+    entries: rows, segments, alreadyPurged: 0, omitted: 0, recovery: segments.map(segment => `dropped 2048 unverified bytes after seq 1 of segment ${segment.segment} ${"x".repeat(560)}`), issues: [] });
+  expect(assertFrameBytes(reply, "result")).toBeLessThanOrEqual(48 * 1024);
+  const trimmed = reply as PurgeReceipt & { issues: { code: string; message: string }[] };
+  expect(trimmed).toMatchObject({ ok: true, applied: true, assertion: id });
+  expect(trimmed.issues.map(issue => issue.code)).toContain("LIMIT");
+  expect(trimmed.issues.find(issue => issue.code === "LIMIT")!.message).toContain("were rewritten by this confirm");
+  expect(readFileSync(join(f.vault, "assertions", `${receipt.segment!}.jsonl`), "utf8")).toContain(CANARY);
 });
