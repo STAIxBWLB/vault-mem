@@ -6,7 +6,15 @@ status: active
 paths:
   - src/assertions.ts
   - src/assert-command.ts
+  - src/assertion-index.ts
+  - src/assertion-policy.ts
+  - src/assertion-read.ts
+  - src/assertions-command.ts
   - test/assertions.test.ts
+  - test/assertion-index.test.ts
+  - test/assertion-policy.test.ts
+  - test/assertion-read.test.ts
+  - test/assertion-evidence-budget.test.ts
   - test/fixtures/temporal-design
 ---
 
@@ -124,7 +132,7 @@ Scenario 3, precision and unknown bounds, `as_of` omitted:
 
 Scenario 4, coexisting values:
 
-- Q9 `at=2026-05-20`, relation `team`: A8 platform (yes) and A9 research (yes) are both returned with one overlap group `{subject: s:person-a, relation: team, ids: [A8, A9]}`. No winner is chosen.
+- Q9 `at=2026-05-20`, relation `team`: A8 platform (yes) and A9 research (yes) are both returned with one overlap group `{subject: s:person-a, relation: team, ids: [A8, A9], size: 2}` when they fit on one page. No winner is chosen.
 - Q10 `at=2026-05-10`: A8 yes, A9 no, no overlap.
 
 Scenario 5, coverage under the recommendation (A and B are in the coverage matrix):
@@ -396,7 +404,7 @@ A purged line keeps every hashed field, drops `payload` and adds `"purged": {"at
 - `unsynced` counts journal files with uncommitted changes when the vault is a Git repository, and is `null` otherwise. No other paths are read or reported.
 - Items are ordered by subject, relation, id and revision.
 - `--history` returns every revision and retraction with `recordedAt` and `replacedAt` (the `recorded_at` of the next revision or retraction, or null), plus `answer` when `at` is given.
-- `overlaps` is present only with `at`: groups of two or more assertion ids with the same subject and relation, different values, and an answer of `yes` or `unknown`. A group with any `unknown` member is marked `possible: true`.
+- `overlaps` is present only with `at`: groups of two or more assertion ids with the same subject and relation, different values, and an answer of `yes` or `unknown`. Each page includes only groups touching its items, with the ids on that page and `size` giving the total number of group members. Page the subject and relation query to collect the full membership. A group with any `unknown` member is marked `possible: true`.
 - Evidence and values pass current policy at read time: denied sources become `withheld`; a value that fails current secret or PII screening is replaced by `{withheld: "secret"}` or `{withheld: "pii_policy"}`.
 - Reads write no note, journal line, log line or append lock. Like other reads, they may refresh the derived index.
 - No journal: `coverage.journal: "absent"` and no items.

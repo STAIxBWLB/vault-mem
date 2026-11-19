@@ -51,6 +51,8 @@ function heads(f: Fixture, id: string): string[] {
 /** Append the corpus batches E1..E5 through the write contract; returns label -> assertion id. */
 function loadCorpus(f: Fixture): Record<string, string> {
   const ids: Record<string, string> = {};
+  writeFileSync(join(f.notes, "person-a.md"), "---\nstatus: active\n---\nPerson A\n");
+  writeFileSync(join(f.notes, "onboarding-2025-09.md"), "joins as member\n");
   for (const batch of CORPUS.batches) {
     const ops = batch.ops.map(raw => {
       const { label: _label, ...op } = raw;
@@ -456,7 +458,7 @@ function denyPath(f: Fixture, path: string): void {
   writeFileSync(join(f.home, CONFIG_FILE), JSON.stringify(config));
 }
 
-test("T7: a payload under a purged marker, a malformed marker and a foreign parent are untrusted", () => {
+test("T7: a payload under a purged marker, a malformed marker and a foreign parent are untrusted", async () => {
   const three = (f: Fixture) => {
     ok(f.append([{ op: "declare", subject: "s:p" }, { op: "assert", subject: "s:p", relation: "r", value: "a", kind: "state", from: "2026", to: "open", source: ["mem:p"] }], "2026-01-01T00:00:00Z"));
     ok(f.append([{ op: "assert", subject: "s:p", relation: "r", value: "b", kind: "state", from: "2026", to: "open", source: ["mem:p"] }], "2026-01-03T00:00:00Z"));
@@ -478,6 +480,8 @@ test("T7: a payload under a purged marker, a malformed marker and a foreign pare
   expect(purgedAnswer.coverage.untrusted).toEqual([]); expect(purgedAnswer.coverage.purged).toBe(1);
   expect(purgedAnswer.items.filter(item => item.purged).map(item => item.value)).toEqual([undefined]);
   expect(purgedAnswer.items.filter(item => item.value !== undefined).map(item => item.value)).toEqual(["a"]);
+  const { readAssertions } = await import("../src/assertion-read.ts");
+  expect(readAssertions(purged.home, { vault: purged.id, history: true }, { env: purged.env }).items.find(item => item.purged)).toMatchObject({ availability: "unavailable", evidence: [{ status: "unavailable" }] });
   // 3. The marker is exactly {at, reason}: a bad instant or an extra key is not a purge.
   for (const [marker, name] of [[{ at: "2026-02-30T00:00:00Z", reason: "other" }, "instant"], [{ ...purge, extra: 1 }, "key"]] as const) {
     const malformed = fixture(), segment = three(malformed), row = JSON.parse(segment.lines[2]!) as Record<string, any>;
@@ -538,4 +542,73 @@ test("n1: as_of on the last representable day keeps its own last second", () => 
   expect(asOfCutoff("9999-12-31")).toEqual({ requested: "9999-12-31", cutoff: "9999-12-31T23:59:59Z", cutoffInclusive: true });
   expect(asOfCutoff("9999-12-30")).toEqual({ requested: "9999-12-30", cutoff: "9999-12-31T00:00:00Z", cutoffInclusive: false });
   expect(asOfCutoff("2026-04-10")).toEqual({ requested: "2026-04-10", cutoff: "2026-04-11T00:00:00Z", cutoffInclusive: false });
+});
+
+test("T9 assertion reads match the corpus evaluation after index removal and rebuild", async () => {
+  const { readAssertions } = await import("../src/assertion-read.ts");
+  const f = fixture(); loadCorpus(f);
+  const requests = [
+    { at: "2026-04-05", asOf: "2026-04-06", subject: "s:person-a", relation: "role" },
+    { at: "2026-04-05", asOf: "2026-04-11", subject: "s:person-a", relation: "role" },
+    { at: "2026-04-01", asOf: "2026-04-11", subject: "s:person-a", relation: "role" },
+    { at: "2026-04-05", asOf: "2026-04-10", subject: "s:person-a", relation: "role" },
+    { at: "2026-04-05", asOf: "2026-04-10T08:59:59Z", subject: "s:person-a", relation: "role" },
+    { at: "2026-04-05", asOf: "2026-04-10T09:00:00Z", subject: "s:person-a", relation: "role" },
+    { at: "2026-04-05", asOf: "2025-09-01", subject: "s:person-a", relation: "role" },
+    { at: "2026-03-30", asOf: "2026-04-11", subject: "s:person-a", relation: "role" },
+    { at: "2026-03-30", asOf: "2026-05-03", subject: "s:person-a", relation: "role" },
+    { at: "2026-05-20", subject: "s:person-a", relation: "team" },
+    { at: "2026-05-10", subject: "s:person-a", relation: "team" },
+    { history: true },
+    {},
+    ...Object.keys(CORPUS.scenario3.rows).map(at => ({ at })),
+  ];
+  for (const request of requests) {
+    const pure = evaluateAssertions(f.journal(), request), query = { vault: f.id, ...request, limit: 100 };
+    const first = readAssertions(f.home, query, { env: f.env });
+    expect(first.pin).toEqual(pure.pin); expect(first.items.map(item => [item.id, item.rev, item.answer, item.value])).toEqual(pure.items.map(item => [item.id, item.rev, item.answer, item.value]));
+    const indexes = join(f.home, "indexes"); rmSync(indexes, { recursive: true, force: true });
+    expect(readAssertions(f.home, query, { env: f.env })).toEqual(first);
+  }
+});
+
+test("Q1 read uses the full corpus and the example's evidence and subject fixtures", async () => {
+  const { readAssertions } = await import("../src/assertion-read.ts");
+  const f = fixture(), ids = loadCorpus(f);
+  const answer = readAssertions(f.home, { vault: f.id, subject: "s:person-a", relation: "role", at: "2026-04-05", asOf: "2026-04-06" }, { env: f.env });
+  expect(answer.pin).toHaveLength(1); expect(answer.pin[0]?.seq).toBe(15);
+  expect(answer).toMatchObject({ schemaVersion: 1, basis: "assertion_journal", at: "2026-04-05", asOf: { requested: "2026-04-06", cutoff: "2026-04-07T00:00:00Z", cutoffInclusive: false },
+    coverage: { journal: "present", untrusted: [], unsupported: [], tornTail: [], purged: 0 }, overlaps: [], truncated: false,
+    items: [{ id: ids.A0, rev: 1, subject: "s:person-a", relation: "role", value: "member", kind: "state", from: "2025-09-01", to: "open", answer: "yes", recordedAt: "2025-09-02T09:00:00Z",
+      evidence: [{ source: "vault/notes/onboarding-2025-09.md", status: "verified", quote: "joins as member" }], subjectNote: { path: "notes/person-a.md", status: "present" } }] });
+  const source = "vault/notes/onboarding-2025-09.md", query = { vault: f.id, subject: "s:person-a", relation: "role", at: "2026-04-05", asOf: "2026-04-06" };
+  denyPath(f, join(f.notes, "onboarding-2025-09.md"));
+  const withheld = readAssertions(f.home, query, { env: f.env });
+  expect(withheld.items[0]?.evidence).toEqual([{ status: "withheld", reason: "denied_by_current_policy" }]);
+  expect(JSON.stringify(withheld)).not.toContain(source); expect(JSON.stringify(withheld)).not.toContain("joins as member");
+  const config = loadRegistry(f.home); delete config.denyPaths; writeFileSync(join(f.home, CONFIG_FILE), JSON.stringify(config));
+  rmSync(join(f.notes, "onboarding-2025-09.md"));
+  expect(readAssertions(f.home, query, { env: f.env }).items[0]?.evidence).toEqual([{ source, status: "unavailable" }]);
+});
+
+test("purged assert and revision remain identifiable through their verified parents", async () => {
+  const { readAssertions } = await import("../src/assertion-read.ts"), f = fixture();
+  const created = ok(f.append([{ op: "declare", subject: "s:private" }, { op: "assert", subject: "s:private", relation: "role", value: "member", kind: "state", from: "2025", to: "open", source: ["mem:fixture"] }], "2026-01-01T00:00:00Z"));
+  const id = created.entries[1]!.id;
+  ok(f.append([{ op: "revise", id, expected_heads: heads(f, id), value: "lead", kind: "state", from: "2025", to: "open", source: ["mem:fixture"] }], "2026-01-02T00:00:00Z"));
+  const segment = segmentOf(f), rows = segment.lines.map(line => JSON.parse(line) as Record<string, any>);
+  delete rows[2]!.payload; rows[2]!.purged = { at: "2026-02-01T00:00:00Z", reason: "evidence_withdrawn" };
+  writeFileSync(segment.file, rows.map(canonical).join("\n") + "\n");
+  const earlier = readAssertions(f.home, { vault: f.id, at: "2026-01-01", asOf: "2026-01-01" }, { env: f.env });
+  expect(earlier.items).toEqual([]); expect(earlier.coverage.purged).toBe(1);
+  for (const row of rows.slice(1)) { delete row.payload; row.purged = { at: "2026-02-01T00:00:00Z", reason: "evidence_withdrawn" }; }
+  writeFileSync(segment.file, rows.map(canonical).join("\n") + "\n");
+  const all = readAssertions(f.home, { vault: f.id, history: true }, { env: f.env });
+  expect(all.coverage.untrusted).toEqual([]); expect(all.coverage.purged).toBe(1);
+  expect(all.items.map(row => ({ id: row.id, segment: row.segment, seq: row.seq, hash: row.hash, rev: row.rev, availability: row.availability }))).toEqual(rows.slice(1).map((row, index) => ({ id, segment: row.seg, seq: row.seq, hash: row.hash, rev: index + 1, availability: "unavailable" })));
+  for (const query of [{ subject: "s:private" }, { relation: "role" }]) {
+    const result = readAssertions(f.home, { vault: f.id, history: true, ...query }, { env: f.env });
+    expect(result.items).toEqual([]); expect(result.coverage.purged).toBe(1);
+  }
+  expect(readAssertions(f.home, { vault: f.id, at: "2026-03-01" }, { env: f.env }).items).toEqual([]);
 });

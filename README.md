@@ -73,6 +73,7 @@ Output: every command prints text for people by default, following agent-hub's C
 The only runtime dependency is the exact first-party pin <!-- facts:amem-pin -->`@staix/agent-mem@0.28.0`<!-- /facts:amem-pin -->; it is not loaded by registry commands. Public library exports (`@staix/vault-mem`, from `src/index.ts`) cover configuration and home resolution, registry operations, frontmatter, link resolution and the derived index, validated writes, the append-only log, the MCP server and its vault tools, host setup, the CLI command table and completion, promotion from agent-mem and to org vaults, lint and graph analysis, sync, source references, migration tidy, the temporal assertion journal and its evaluation, and the spec source registry, graph, validation and freshness. `@staix/vault-mem/ui-plugin` is the console plugin entry (see [Console plugin](docs/reference/mcp-and-setup.md#console-plugin)). No console bin is shipped. Exported functions and constants by module:
 <!-- facts:exports -->
 
+- `src/assertion-read.ts`: `readAssertions`, `ASSERTIONS_PAGE_LIMIT`
 - `src/home.ts`: `resolveHome`
 - `src/config.ts`: `parseConfig`, `parseVault`, `parseSpec`, `readConfig`, `CONFIG_FILE`, `MAX_CONFIG_BYTES`
 - `src/registry.ts`: `addVault`, `removeVault`, `addSpec`, `removeSpec`, `specStatus`, `loadRegistry`, `registryStatus`, `recoverRegistry`, `effectivePii`, `syncDirectory`, `LOCK_FILE`
