@@ -1,4 +1,5 @@
 import { runBriefCommand } from "./vault-brief.ts";
+import { runProposalCommand } from "./proposal-commands.ts";
 import { runSpecCommand, specTools } from "./mcp-spec.ts";
 import { tidyVault, TIDY_RULES } from "./tidy.ts";
 import { originCheck } from "./sync.ts";
@@ -81,6 +82,7 @@ function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLA
     return { text: completionScript(args[1]!).trimEnd(), code: 0 };
   }
   if (args[0] === "spec") return runSpecCommand(args.slice(1), env, text);
+  if (args[0] === "proposal") return runProposalCommand(args.slice(1), resolveHome(env).home, env, text);
   if (args[0] === "lint" || args[0] === "graph") return runAnalysisCommand(args[0],args.slice(1),resolveHome(env).home,env,text);
   if (args[0] === "promote" || args[0] === "sync") return runOrgCommand(args[0], args.slice(1), resolveHome(env).home, env, text);
   if (args[0] === "log") return runLogCommand(args.slice(1), resolveHome(env).home, env, text);

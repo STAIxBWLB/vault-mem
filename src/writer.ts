@@ -8,16 +8,18 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { hostname } from "node:os";
 import { Database } from "bun:sqlite";
-import { loadRegistry, syncDirectory } from "./registry.ts";
+import { loadRegistry, LOCK_FILE, syncDirectory } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES, GRAMS_COLUMNS, gramPhrase, grams, splitTerms } from "./vault-index.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { moveSourcePath, notePath, planOperation, planMerge, stampContentChanges, refuse, WriteRefusal } from "./write-operations.ts";
-import { MAX_REPORT_BYTES, createWriteValidator } from "./write-validation.ts";
+import { MAX_REPORT_BYTES, createWriteValidator, screenMetadata } from "./write-validation.ts";
 import type { PiiSurface } from "./config.ts";
 import { unenforceablePii, mutationVault } from "./config.ts";
 import type { LogBinding } from "./log-types.ts";
 import type { MergePreview, ChangeReceipt, PlannedChange, WriteIssue, WriteReceipt, WriteRequest } from "./write-types.ts";
+import { createStoredEvidence, createStoredReason, readStoredEvidence, readStoredProposal, replaceStoredProposal } from "./proposal-storage.ts";
+import { prepareRejectedProposal, proposalDecisionFingerprint, proposalEvidenceDigest, proposalReconcileFingerprint, proposalRecordDigest, type ProposalRecord } from "./proposals.ts";
 export const MUTATION_LOCK = "mutation.lock";
 export { MAX_WRITE_BYTES } from "./write-types.ts";
 const MAX_MERGE_ACK_BYTES = 224 * 1024;
@@ -67,6 +69,27 @@ function readPlain(root: string, path: string, maximum = MAX_NOTE_BYTES): string
     return text;
   } finally { closeSync(fd); }
 }
+/** Read one approved note for proposal reconciliation without opening the index or taking a write lock. */
+function readProposalTarget(home: string, vaultId: string, target: string, binding: LogBinding): string | null {
+  const config = loadRegistry(home), vault = config.vaults.find(item => item.id === vaultId);
+  if (!vault || !matchesBinding(config, vaultId, binding)) throw new Error("proposal: vault binding or policy changed; inspect the registered vault before reconciliation");
+  const path = notePath(target), root = realpathSync(vault.path);
+  if (root !== vault.path || isDenied(root, config.denyPaths ?? []) || isDenied(join(root, path), config.denyPaths ?? []))
+    throw new Error("proposal: reconciliation target is denied or changed; inspect the vault policy and path");
+  const text = readPlain(root, path);
+  if (!matchesBinding(loadRegistry(home), vaultId, binding)) throw new Error("proposal: vault binding or policy changed during reconciliation; retry with the current policy");
+  return text;
+}
+export function proposalTargetDigest(home: string, vaultId: string, target: string, binding: LogBinding): string | null {
+  const text = readProposalTarget(home, vaultId, target, binding);
+  return text === null ? null : sha256(text);
+}
+/** Read only a bound target's frontmatter for evidence validation; no index is opened. */
+export function proposalTargetFrontmatter(home: string, vaultId: string, target: string, binding: LogBinding): Record<string, unknown> {
+  const text = readProposalTarget(home, vaultId, target, binding);
+  if (text === null) throw new Error("proposal: patch target is missing; inspect the note and submit a new proposal");
+  try { return parseFrontmatter(text).data; } catch { throw new Error("proposal: patch target frontmatter is invalid; repair the note before retrying"); }
+}
 /** Flat `notes/*.md` snapshot used by every mutation (other directories such as templates/ and self/ are never read). */
 export function snapshot(root: string, denyPaths: string[] = []): Map<string, string> {
   const dir = join(root, "notes");
@@ -82,6 +105,20 @@ export function snapshot(root: string, denyPaths: string[] = []): Map<string, st
     notes.set(path, source);
   }
   return notes;
+}
+/** Bind rejection to the current vault identity, policy and target without reading denied paths. */
+export function proposalRejectionPlan(home: string, vaultId: string, channel: "cli" | "mcp", binding: LogBinding, target: string): string {
+  const config = loadRegistry(home), vault = config.vaults.find(item => item.id === vaultId);
+  if (!vault || !matchesBinding(config, vaultId, binding)) throw new Error("proposal: vault binding or policy changed; request a new rejection preview");
+  if (vault.write === "none" || (channel === "mcp" && vault.write !== "mcp")) throw new Error("proposal: vault write policy refuses this channel; choose an authorized vault or channel");
+  if (unenforceablePii(vault)) throw new Error("proposal: vault PII policy cannot be enforced; inspect the vault policy");
+  const root = realpathSync(vault.path), homePath = canonicalPath(home);
+  if (root !== vault.path || isDenied(root, config.denyPaths ?? []) || config.vaults.some(item => homePath === item.path || homePath.startsWith(`${item.path}/`)))
+    throw new Error("proposal: vault root or configured home is denied or unsafe; inspect the vault registration and home");
+  const path = notePath(target), denied = isDenied(join(root, path), config.denyPaths ?? []);
+  const text = denied ? null : readPlain(root, path);
+  if (!matchesBinding(loadRegistry(home), vaultId, binding)) throw new Error("proposal: vault binding or policy changed during review; request a new rejection preview");
+  return sha256(canonical({ action: "reject", vault: mutationVault(vault), policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [] }, root, identity: [binding.dev, binding.ino], target: path, targetState: denied ? "denied" : text === null ? "missing" : sha256(text) }));
 }
 function receipts(changes: PlannedChange[]): ChangeReceipt[] {
   return changes.map(change => ({ path: change.path, beforeSha: change.before === null ? null : sha256(change.before), sha256: change.after === null ? null : sha256(change.after), bytes: Buffer.byteLength(change.after ?? "") }));
@@ -143,10 +180,135 @@ function duplicateWarnings(request: WriteRequest, notes: Map<string, string>, ch
     return hits.filter(hit => hit.score <= -0.000001).map(hit => ({ code: "V08", severity: "warning", path: hit.path, message: "possible duplicate: FTS title terms match an existing note" }));
   } finally { db.close(); }
 }
+interface WriteOptions { env?: NodeJS.ProcessEnv; piiSurface?: PiiSurface; binding?: LogBinding; now?: Date }
+/** Internal approval binding; public CLI/MCP callers never supply store paths. */
+export interface ProposalWriteDecision { id: string; bindingDigest: string; recordDigest: string; fingerprint: string }
+export interface ProposalRejectDecision extends ProposalWriteDecision { reason: string }
+export interface ProposalRejectReceipt { ok: boolean; rejected: boolean; issues: WriteIssue[] }
+export interface ProposalWriteReceipt extends WriteReceipt { proposalState: "pending" | "apply_unknown" | "applied"; proposalPublicationStarted: boolean }
+export interface ProposalReconcileReceipt { ok: boolean; resolved: boolean; state: "pending" | "applied" | "apply_unknown"; issues: WriteIssue[] }
 /** Single mutation entry point. Preview/dry-run perform no writes, including locks and caches. */
-/** `options.binding` (internal callers composing several writes) refuses with VAULT_DRIFT unless the registry still matches it. */
-export function applyWrite(home: string, request: WriteRequest, options: { env?: NodeJS.ProcessEnv; piiSurface?: PiiSurface; binding?: LogBinding; now?: Date } = {}): WriteReceipt {
+export function applyWrite(home: string, request: WriteRequest, options: WriteOptions = {}): WriteReceipt {
+  return runWrite(home, request, options);
+}
+/** Proposal-only seam: the normal writer owns the lock, validation, publication and receipt. */
+export function applyProposalWrite(home: string, request: WriteRequest, options: WriteOptions & { binding: LogBinding; proposal: ProposalWriteDecision }): ProposalWriteReceipt {
+  if (!options || !options.binding || !options.proposal) return { ok: false, applied: false, proposalState: "pending", proposalPublicationStarted: false, issues: [{ code: "V01", severity: "error", message: "proposal decision and vault binding are required; request a new proposal preview" }], changes: [], indexUpdated: false };
+  return runWrite(home, request, options) as ProposalWriteReceipt;
+}
+/** Reject under the same vault mutation lock, without publishing a note or opening the index. */
+export function rejectProposalWrite(home: string, vaultId: string, channel: "cli" | "mcp", binding: LogBinding, decision: ProposalRejectDecision, now = new Date()): ProposalRejectReceipt {
+  let fd: number | undefined, file: string | undefined, registryFd: number | undefined, rejected = false;
+  const result: ProposalRejectReceipt = { ok: false, rejected: false, issues: [] };
+  try {
+    if (channel !== "cli" && channel !== "mcp") throw new Error("invalid write channel; use CLI or MCP");
+    const initial = loadRegistry(home), vault = initial.vaults.find(item => item.id === vaultId);
+    if (!vault || !matchesBinding(initial, vaultId, binding)) throw new Error("vault binding or policy changed; request a new rejection preview");
+    if (isDenied(join(home, LOCK_FILE), initial.denyPaths ?? [])) throw new Error("registry lock path is denied; inspect the configured deny paths");
+    const root = realpathSync(vault.path);
+    if (root !== vault.path) throw new Error("vault root changed or is linked; inspect the registered vault");
+    file = join(root, MUTATION_LOCK);
+    try { fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+    catch { file = undefined; throw new Error("vault mutation lock is unavailable; stop concurrent writers and inspect the lock"); }
+    writeFileSync(fd, JSON.stringify({ pid: process.pid, host: hostname(), token: randomUUID(), created: new Date().toISOString() }) + "\n"); fsyncSync(fd);
+    try { registryFd = openSync(join(home, LOCK_FILE), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+    catch { throw new Error("registry lock is unavailable; stop concurrent registry updates and inspect the lock"); }
+    writeFileSync(registryFd, JSON.stringify({ pid: process.pid, host: hostname(), created: new Date().toISOString() }) + "\n"); fsyncSync(registryFd);
+    const config = loadRegistry(home), currentVault = config.vaults.find(item => item.id === vaultId);
+    if (!currentVault || !matchesBinding(config, vaultId, binding)) throw new Error("vault binding or policy changed; request a new rejection preview");
+    const record = readStoredProposal(home, decision.bindingDigest, decision.id, config.denyPaths ?? []), recordDigest = proposalRecordDigest(record);
+    if (record.state !== "pending" || record.vault !== vaultId || recordDigest !== decision.recordDigest)
+      throw new Error("proposal, target or policy changed; request a new rejection preview");
+    const issues = screenMetadata({ reason: decision.reason }, { vault: currentVault, config }, record.operation.path);
+    if (issues.some(issue => issue.severity === "error")) throw new Error("current disclosure policy refuses the reason; inspect the vault policy");
+    const plan = proposalRejectionPlan(home, vaultId, channel, binding, record.operation.path);
+    if (proposalDecisionFingerprint(recordDigest, plan, "reject", decision.reason) !== decision.fingerprint) throw new Error("rejection fingerprint changed; request a new rejection preview");
+    if (!matchesBinding(loadRegistry(home), vaultId, binding)) throw new Error("vault binding or policy changed; request a new rejection preview");
+    const prepared = prepareRejectedProposal(record, decision.reason, now.toISOString()), next = prepared.record;
+    if (prepared.reasonRecord) createStoredReason(home, prepared.reasonRecord, recordDigest, config.denyPaths ?? [], registryFd);
+    try { replaceStoredProposal(home, decision.bindingDigest, record.id, recordDigest, next, config.denyPaths ?? [], registryFd); }
+    catch (error) {
+      try { if (proposalRecordDigest(readStoredProposal(home, decision.bindingDigest, record.id, config.denyPaths ?? [])) === proposalRecordDigest(next)) { rejected = true; result.rejected = true; } } catch { /* A failed read cannot establish the decision state. */ }
+      throw error;
+    }
+    rejected = true; result.ok = true; result.rejected = true;
+    result.issues.push(...issues.filter(issue => issue.severity === "warning"));
+  } catch (error) {
+    result.issues.push({ code: "PROPOSAL_REJECT", severity: "error", message: `proposal rejection ${rejected ? "was recorded but finalization failed" : "failed"}: ${error instanceof Error ? error.message : "unknown failure"}; inspect the proposal before retrying` });
+  } finally {
+    if (registryFd !== undefined) {
+      try { cleanupOwnedFile(join(home, LOCK_FILE), registryFd); }
+      catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `proposal rejection ${rejected ? "was recorded but " : ""}registry lock cleanup failed; inspect the lock before retrying` }); }
+      finally { try { closeSync(registryFd); } catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "registry lock descriptor close failed; inspect the lock before retrying" }); } }
+    }
+    if (fd !== undefined) {
+      try { cleanupOwnedFile(file!, fd); }
+      catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: `proposal rejection ${rejected ? "was recorded but " : ""}mutation lock cleanup failed; inspect the lock before retrying` }); }
+      finally { try { closeSync(fd); } catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "mutation lock descriptor close failed; inspect the lock before retrying" }); } }
+    }
+  }
+  return result;
+}
+/** Confirm receipt-backed reconciliation under the same vault and registry locks as an apply. */
+export function reconcileProposalWrite(home: string, vaultId: string, channel: "cli" | "mcp", binding: LogBinding, decision: ProposalWriteDecision, now = new Date()): ProposalReconcileReceipt {
+  let fd: number | undefined, file: string | undefined, registryFd: number | undefined;
+  const result: ProposalReconcileReceipt = { ok: false, resolved: false, state: "apply_unknown", issues: [] };
+  try {
+    if (channel !== "cli" && channel !== "mcp") throw new Error("invalid write channel; use CLI or MCP");
+    const initial = loadRegistry(home), vault = initial.vaults.find(item => item.id === vaultId);
+    if (!vault || !matchesBinding(initial, vaultId, binding)) throw new Error("vault binding or policy changed; request a new reconciliation preview");
+    if (isDenied(join(home, LOCK_FILE), initial.denyPaths ?? [])) throw new Error("registry lock path is denied; inspect the configured deny paths");
+    const root = realpathSync(vault.path);
+    if (root !== vault.path) throw new Error("vault root changed or is linked; inspect the registered vault");
+    file = join(root, MUTATION_LOCK);
+    try { fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+    catch { file = undefined; throw new Error("vault mutation lock is unavailable; stop concurrent writers and inspect the lock"); }
+    writeFileSync(fd, JSON.stringify({ pid: process.pid, host: hostname(), token: randomUUID(), created: new Date().toISOString() }) + "\n"); fsyncSync(fd);
+    try { registryFd = openSync(join(home, LOCK_FILE), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+    catch { throw new Error("registry lock is unavailable; stop concurrent registry updates and inspect the lock"); }
+    writeFileSync(registryFd, JSON.stringify({ pid: process.pid, host: hostname(), created: new Date().toISOString() }) + "\n"); fsyncSync(registryFd);
+    const config = loadRegistry(home), currentVault = config.vaults.find(item => item.id === vaultId);
+    if (!currentVault || !matchesBinding(config, vaultId, binding)) throw new Error("vault binding or policy changed; request a new reconciliation preview");
+    const record = readStoredProposal(home, decision.bindingDigest, decision.id, config.denyPaths ?? []), recordDigest = proposalRecordDigest(record);
+    if (record.state !== "apply_unknown" || !record.intent || record.vault !== vaultId || recordDigest !== decision.recordDigest || isDenied(join(root, record.operation.path), config.denyPaths ?? [])) throw new Error("proposal or target changed; request a new reconciliation preview");
+    const screened = screenMetadata({ operation: record.operation, agentLabel: record.agentLabel, reason: record.decisionReason }, { vault: currentVault, config }, record.operation.path);
+    if (screened.some(issue => issue.severity === "error")) throw new Error("current disclosure policy refuses the proposal; inspect the vault policy");
+    const evidence = readStoredEvidence(home, decision.bindingDigest, record.id, record.intent.fingerprint, config.denyPaths ?? []);
+    if (!evidence || evidence.beforeSha !== record.intent.beforeSha || evidence.afterSha !== record.intent.afterSha) throw new Error("matching writer receipt evidence is unavailable; inspect the proposal before retrying");
+    const plan = proposalRejectionPlan(home, vaultId, channel, binding, record.operation.path), observed = proposalTargetDigest(home, vaultId, record.operation.path, binding);
+    const state = evidence.applied && evidence.publicationStarted && observed === evidence.afterSha ? "applied" : !evidence.applied && !evidence.publicationStarted && observed === evidence.beforeSha ? "pending" : undefined;
+    if (!state || proposalReconcileFingerprint(recordDigest, proposalEvidenceDigest(evidence), plan, state) !== decision.fingerprint || proposalRejectionPlan(home, vaultId, channel, binding, record.operation.path) !== plan)
+      throw new Error("reconciliation evidence or target changed; request a new preview");
+    const { intent: _intent, receipt: _receipt, ...base } = record;
+    const next: ProposalRecord = state === "applied" ? { ...record, state, updatedAt: now.toISOString(), receipt: { applied: true as const, logged: evidence.logged, beforeSha: evidence.beforeSha, afterSha: evidence.afterSha } }
+      : { ...base, state, updatedAt: now.toISOString() };
+    try { replaceStoredProposal(home, decision.bindingDigest, record.id, recordDigest, next, config.denyPaths ?? [], registryFd); result.resolved = true; result.state = state; result.ok = true; }
+    catch (error) {
+      try { if (proposalRecordDigest(readStoredProposal(home, decision.bindingDigest, record.id, config.denyPaths ?? [])) === proposalRecordDigest(next)) { result.resolved = true; result.state = state; } } catch { /* A failed read cannot establish the decision state. */ }
+      throw error;
+    }
+    result.issues.push(...screened.filter(issue => issue.severity === "warning"));
+  } catch (error) {
+    result.issues.push({ code: "PROPOSAL_RECONCILE", severity: "error", message: `proposal reconciliation ${result.resolved ? "was recorded but finalization failed" : "failed"}: ${error instanceof Error ? error.message : "unknown failure"}; inspect the proposal before retrying` });
+  } finally {
+    if (registryFd !== undefined) {
+      try { cleanupOwnedFile(join(home, LOCK_FILE), registryFd); } catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "registry lock cleanup failed; inspect the lock before retrying" }); }
+      finally { try { closeSync(registryFd); } catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "registry lock descriptor close failed; inspect the lock before retrying" }); } }
+    }
+    if (fd !== undefined) {
+      try { cleanupOwnedFile(file!, fd); } catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "mutation lock cleanup failed; inspect the lock before retrying" }); }
+      finally { try { closeSync(fd); } catch { result.ok = false; result.issues.push({ code: "CLEANUP", severity: "error", message: "mutation lock descriptor close failed; inspect the lock before retrying" }); } }
+    }
+  }
+  return result;
+}
+function runWrite(home: string, request: WriteRequest, options: WriteOptions & { proposal?: ProposalWriteDecision }): WriteReceipt {
   let lockFd: number | undefined, lockFile: string | undefined;
+  let proposalRegistryFd: number | undefined;
+  let proposalState: ProposalWriteReceipt["proposalState"] = "pending";
+  let proposalPublicationStarted = false;
+  const currentProposalState = (): ProposalWriteReceipt["proposalState"] => proposalState;
+  let proposalDenyPaths: string[] = [];
   let index: VaultIndex | undefined;
   const temps = new Map<string, { fd: number; remove: boolean }>(), publicationPaths = new Map<string, PublicationPath>(), createdDirs: string[] = [], committed: PlannedChange[] = [];
   let changes: PlannedChange[] = [], issues: WriteIssue[] = [], fingerprint: string | undefined, root = "", applied = false, indexUpdated = false;
@@ -170,6 +332,7 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     if (request.expectedShas !== undefined && (!request.expectedShas || typeof request.expectedShas !== "object" || Array.isArray(request.expectedShas))) refuse("V09", "expectedShas must be a mapping");
     if (request.channel !== undefined && !["cli", "mcp"].includes(request.channel)) refuse("POLICY", "unknown write channel");
     const config = loadRegistry(home), vault = config.vaults.find(value => value.id === request.vault);
+    if (options.proposal) proposalDenyPaths = config.denyPaths ?? [];
     if (options.binding && !matchesBinding(config, request.vault, options.binding)) refuse("VAULT_DRIFT", "vault identity or policy changed since the run started; nothing written");
     if (!vault) refuse("V04", "unknown vault id");
     const unenforceable = unenforceablePii(vault);
@@ -185,12 +348,20 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     }
     const twoStep = ["move", "delete", "tidy", "merge"].includes(request.operation.op);
     const preview = request.operation.op === "check" || request.dryRun === true || (twoStep && request.confirm !== true);
+    if (options.proposal && (preview || !options.binding || !["create", "patch"].includes(request.operation.op))) refuse("V01", "proposal confirmation requires one create or patch and a bound vault; request a new preview");
     if (!preview) {
       lockFile = join(root, MUTATION_LOCK);
       try { lockFd = openSync(lockFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
       catch { lockFile = undefined; refuse("LOCKED", "vault mutation lock unavailable; existing lock is preserved"); }
       writeFileSync(lockFd, JSON.stringify({ pid: process.pid, host: hostname(), token: randomUUID(), created: new Date().toISOString() }) + "\n");
       fsyncSync(lockFd);
+    }
+    if (options.proposal) {
+      if (isDenied(join(home, LOCK_FILE), config.denyPaths ?? [])) refuse("V06", "proposal registry lock path is denied; inspect the configured deny paths");
+      try { proposalRegistryFd = openSync(join(home, LOCK_FILE), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+      catch { refuse("LOCKED", "registry lock unavailable; stop concurrent registry updates and inspect the lock"); }
+      writeFileSync(proposalRegistryFd, JSON.stringify({ pid: process.pid, host: hostname(), created: new Date().toISOString() }) + "\n"); fsyncSync(proposalRegistryFd);
+      if (!options.binding || !matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("VAULT_DRIFT", "vault binding or policy changed after preview; request a new proposal preview");
     }
     const notes = snapshot(root, config.denyPaths);
     checkExpected(request, notes);
@@ -270,10 +441,32 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
       // Full content recheck: shared mmap writes can change bytes without moving any stat field.
       const current = snapshot(root, config.denyPaths);
       if (current.size !== notes.size || [...current].some(([path, text]) => notes.get(path) !== text)) refuse("V09", "vault changed while staging");
+      if (options.proposal) {
+        const decision = options.proposal;
+        if (!options.binding || !matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("VAULT_DRIFT", "vault binding or policy changed after preview; request a new proposal preview");
+        const record = readStoredProposal(home, decision.bindingDigest, decision.id, config.denyPaths ?? []);
+        const recordDigest = proposalRecordDigest(record);
+        if (record.state !== "pending" || record.vault !== request.vault || recordDigest !== decision.recordDigest || canonical(record.operation) !== canonical(request.operation))
+          refuse("V09", "proposal or operation changed since preview; request a new proposal preview");
+        const expected = proposalDecisionFingerprint(recordDigest, fingerprint!, "apply");
+        if (decision.fingerprint !== expected) refuse("V09", "proposal decision fingerprint changed; request a new proposal preview");
+        const planned = receipts(changes);
+        if (planned.length !== 1) refuse("V09", "proposal plan is not a single note change; request a new proposal preview");
+        const change = planned[0]!;
+        const intent = { ...record, state: "apply_unknown" as const, updatedAt: (options.now ?? new Date()).toISOString(), intent: { fingerprint: expected, beforeSha: change.beforeSha, afterSha: change.sha256 } };
+        proposalState = "apply_unknown";
+        try { replaceStoredProposal(home, decision.bindingDigest, decision.id, recordDigest, intent, config.denyPaths ?? [], proposalRegistryFd!); proposalState = "apply_unknown"; }
+        catch (error) {
+          try { if (proposalRecordDigest(readStoredProposal(home, decision.bindingDigest, decision.id, config.denyPaths ?? [])) === recordDigest) proposalState = "pending"; } catch { /* An unreadable record cannot prove whether intent was published. */ }
+          throw error;
+        }
+        if (!matchesBinding(loadRegistry(home), request.vault, options.binding)) refuse("VAULT_DRIFT", "proposal intent was recorded but the vault binding or policy changed; inspect the proposal before retrying");
+      }
       for (const change of changes) {
         const file = safePath(root, change.path);
         if (readPlain(root, change.path, request.operation.op === "report" ? MAX_REPORT_BYTES : MAX_NOTE_BYTES) !== change.before) refuse("V09", "file changed while staging", change.path);
         const temp = staged.get(change.path);
+        if (options.proposal) proposalPublicationStarted = true;
         publishFile(publicationPaths.get(change.path)!, change.after === null ? { kind: "unlink" } : { kind: "rename", temp: temp! }, () => {
           committed.push(change);
           if (temp) temps.get(temp)!.remove = false;
@@ -350,6 +543,25 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     }
     result = { ok: false, applied, issues, changes: reportedChanges(), ...(fingerprint ? { fingerprint } : {}), indexUpdated };
   } finally {
+    if (options.proposal && result && proposalState === "apply_unknown" && proposalRegistryFd !== undefined) {
+      const decision = options.proposal, logged = result.logged === true ? true : result.logged === false ? false : null;
+      try {
+        if (!options.binding || !matchesBinding(loadRegistry(home), request.vault, options.binding)) throw new Error("vault policy changed");
+        const current = readStoredProposal(home, decision.bindingDigest, decision.id, proposalDenyPaths), change = result.changes.find(item => item.path === (request.operation as { path: string }).path);
+        if (current.state !== "apply_unknown" || current.intent?.fingerprint !== decision.fingerprint || !change || current.intent.beforeSha !== change.beforeSha || current.intent.afterSha !== change.sha256) throw new Error("intent or receipt does not match");
+        createStoredEvidence(home, { schemaVersion: 1, id: current.id, bindingDigest: decision.bindingDigest, fingerprint: decision.fingerprint, beforeSha: change.beforeSha, afterSha: change.sha256, applied: result.applied, publicationStarted: proposalPublicationStarted, logged }, proposalDenyPaths, proposalRegistryFd);
+        if (result.applied) {
+          const next = { ...current, state: "applied" as const, updatedAt: (options.now ?? new Date()).toISOString(), receipt: { applied: true as const, logged, beforeSha: change.beforeSha, afterSha: change.sha256 } };
+          try { replaceStoredProposal(home, decision.bindingDigest, decision.id, proposalRecordDigest(current), next, proposalDenyPaths, proposalRegistryFd); proposalState = "applied"; }
+          catch (error) {
+            try { if (proposalRecordDigest(readStoredProposal(home, decision.bindingDigest, decision.id, proposalDenyPaths)) === proposalRecordDigest(next)) proposalState = "applied"; } catch { /* An unreadable record cannot prove the receipt was published. */ }
+            throw error;
+          }
+        }
+      } catch {
+        recordError("PROPOSAL_RECEIPT", currentProposalState() === "applied" ? "note and proposal receipt were recorded but finalization failed; inspect the proposal store before retrying" : result.applied ? "note was applied but proposal receipt could not be recorded; inspect and reconcile the proposal before retrying" : "writer stopped after intent but execution evidence could not be recorded; inspect and reconcile the proposal before retrying");
+      }
+    }
     try { index?.close(); } catch { recordError("INDEX", "derived index close failed"); }
     for (const [temp, owned] of temps) {
       try { if (owned.remove) cleanupOwnedFile(temp, owned.fd); }
@@ -365,12 +577,18 @@ export function applyWrite(home: string, request: WriteRequest, options: { env?:
     }
     // Only empty directories created by this invocation are eligible for removal on failure.
     if (!applied) for (const dir of createdDirs.reverse()) { try { rmdirSync(dir); } catch { recordError("CLEANUP", "owned empty directory cleanup failed"); } }
+    if (proposalRegistryFd !== undefined) {
+      try { cleanupOwnedFile(join(home, LOCK_FILE), proposalRegistryFd); }
+      catch (error) { recordError("CLEANUP", `proposal registry lock retained; inspect ownership before manual recovery: ${error instanceof Error ? error.message : String(error)}`); }
+      finally { try { closeSync(proposalRegistryFd); } catch { recordError("CLEANUP", "proposal registry lock descriptor close failed; inspect retained locks"); } }
+    }
     if (lockFd !== undefined) {
       try { cleanupOwnedFile(lockFile!, lockFd); }
       catch (error) { recordError("CLEANUP", `mutation lock retained; inspect ownership before manual recovery: ${error instanceof Error ? error.message : String(error)}`); }
       finally { try { closeSync(lockFd); } catch { recordError("CLEANUP", "mutation lock descriptor close failed"); } }
     }
     if (result) {
+      if (options.proposal) { (result as ProposalWriteReceipt).proposalState = proposalState; (result as ProposalWriteReceipt).proposalPublicationStarted = proposalPublicationStarted; }
       if (retainedBackups.size) result.retainedBackups = [...retainedBackups];
       const possibleDuplicates = issues.filter(issue => issue.code === "V08" && issue.severity === "warning" && issue.path).map(issue => issue.path!);
       if (possibleDuplicates.length) result.possibleDuplicates = possibleDuplicates;

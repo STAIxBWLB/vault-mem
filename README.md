@@ -27,10 +27,11 @@ vmem tidy personal --all        # once after upgrading an existing vault: previe
 
 ## Concepts
 
-- **Home**: the registry and policies live in `vmem.config.json` under the vmem home: `VMEM_HOME`, else the `home` pointer in the default home's config, else the default home (`$AGENTHUB_HOME/vmem`, or `~/.agenthub/vmem`). Derived index caches live under the home, never inside a vault.
+- **Home**: the registry and policies live in `vmem.config.json` under the vmem home: `VMEM_HOME`, else the `home` pointer in the default home's config, else the default home (`$AGENTHUB_HOME/vmem`, or `~/.agenthub/vmem`). Derived index caches live under the home, never inside a vault. Proposal records are durable home data, not a rebuildable cache: include the configured home in backups.
 - **Vault**: a directory with a flat `notes/` folder, an append-only `log` and optional `reports/` and `ops/`. Each vault has a `kind` (`personal` or `org`), a `write` policy (`mcp` allows CLI and MCP writes, `cli` CLI only, `none` no writes) and a PII policy (default `allow` for personal, `deny` for org).
 - **Notes**: frontmatter `type` is one of <!-- facts:note-types -->`insight`, `decision`, `observation`, `person`, `project`, `method`, `moc`, `reference`<!-- /facts:note-types -->; links are `[[wiki links]]` resolved by filename stem inside the same vault.
-- **Two-step changes**: move, delete, merge, tidy, promotion and sync first return a preview with a fingerprint and change nothing; `--confirm --fingerprint <sha>` (MCP `confirm`, `fingerprint`) applies exactly that preview.
+- **Two-step changes**: move, delete, merge, tidy, promotion, sync and proposal decisions first return a preview with a fingerprint and change nothing; `--confirm --fingerprint <sha>` (MCP `confirm`, `fingerprint`) applies exactly that preview.
+- **Proposals**: opt-in create or exact-patch requests remain outside the vault and index until confirmed. Review and rejection do not authenticate a human; existing direct writes retain their policy. An interrupted apply remains `apply_unknown` until inspected, and is never replayed automatically.
 - **Receipts**: an applied write can still report a later failure (log append, cleanup, sync). Read `applied`, `logged` and `issues` before retrying, and never repeat an applied write blindly.
 - **Git**: each vault is its own repository. Only `vmem sync` commits or pushes, and nothing runs on a schedule.
 
@@ -45,6 +46,7 @@ Output: every command prints text for people by default, following agent-hub's C
 | Registry and policy | `status`, `doctor`, `recover`, `vaults add\|list\|remove\|pii`, `specs add\|list\|remove` | [configuration](docs/reference/configuration.md) |
 | Reads | `rebuild`, `search`, `show`, `links`, `brief`, `stats`, `evidence` | [reads](docs/reference/reads.md) |
 | Writes and log | `new`, `patch`, `append`, `frontmatter`, `link`, `supersede`, `merge`, `move`, `delete`, `check`, `report`, `tidy`, `log append\|tail\|grep` | [writes](docs/reference/writes.md) |
+| Proposals | `proposal submit\|list\|show\|apply\|reject\|reconcile` | [writes](docs/reference/writes.md#proposals) |
 | MCP and hosts | `mcp`, `setup`, `completion`, `manifest` | [mcp-and-setup](docs/reference/mcp-and-setup.md) |
 | Promotion and sync | `promote-from-amem`, `promote`, `sync` | [promotion-and-sync](docs/reference/promotion-and-sync.md) |
 | Analysis | `lint`, `graph build\|neighbors\|path\|explain`, `skills mine` | [analysis](docs/reference/analysis.md) |
@@ -76,6 +78,7 @@ The only runtime dependency is the exact first-party pin <!-- facts:amem-pin -->
 - `src/vault-index.ts`: `VaultIndex`, `MAX_NOTE_BYTES`, `MAX_RESULTS`, `MAX_READ_BYTES`
 - `src/vault-history.ts`: `readHistory`, `readRevision`, `readChanges`, `historyText`, `revisionText`, `changesText`, `HISTORY_PAGE_LIMIT`, `HISTORY_SCAN_LIMIT`, `CHANGES_PAGE_LIMIT`, `SNAPSHOT_TRANSPORT_BYTES`
 - `src/writer.ts`: `applyWrite`, `sha256`, `MUTATION_LOCK`, `MAX_WRITE_BYTES`
+- `src/proposal-provider.ts`: `submitProposal`, `listProposals`, `showProposal`, `previewProposalApply`, `applyProposal`, `previewProposalReject`, `rejectProposal`, `reconcileProposal`, `confirmProposalReconciliation`
 - `src/write-validation.ts`: `validateWrite`, `screenContent`
 - `src/vault-log.ts`: `appendLog`, `readLog`, `LOG_LOCK`, `MAX_LOG_READ_BYTES`, `MAX_LOG_RESULT_BYTES`, `LARGE_LOG_LINES`
 - `src/log-format.ts`: `formatLogEvent`, `LOG_TYPES`, `AGENT_MARKERS`
