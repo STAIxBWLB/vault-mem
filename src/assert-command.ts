@@ -8,10 +8,13 @@ import { blocks, clean, issueTable, paint, plural, status, table, PLAIN, UsageEr
 
 export function assertText(r: AssertReceipt, o: TextOptions, c: { vault: string }): string {
   const ops = plural(r.entries.length, "operation");
-  const head = !r.ok ? status("fail", `assert: refused, nothing appended to ${clean(c.vault)}`, o)
-    : r.dryRun ? status("ok", `dry run: ${ops} valid for ${clean(c.vault)}; nothing appended`, o)
-    : status("ok", `appended ${ops} to ${clean(c.vault)} segment ${r.segment} at ${r.recordedAt}`, o);
-  const rows = r.ok ? table(["SEQ", "OP", "ID", "REV", "HASH"], r.entries.map(e => [e.seq ?? "-", e.op, e.id, e.rev ?? "-", e.hash ? e.hash.slice(0, 12) : "-"]), o) : undefined;
+  const head = r.dryRun
+    ? (r.ok ? status("ok", `dry run: ${ops} valid for ${clean(c.vault)}; nothing appended`, o) : status("fail", `assert: dry run refused, nothing appended to ${clean(c.vault)}`, o))
+    : r.applied
+      ? (r.ok ? status("ok", `appended ${ops} to ${clean(c.vault)} segment ${r.segment} at ${r.recordedAt}`, o)
+        : status("fail", `${ops} appended to ${clean(c.vault)} segment ${r.segment}, but a later step failed; inspect the segment and the writer record before appending again`, o))
+      : status("fail", `assert: refused, nothing appended to ${clean(c.vault)}`, o);
+  const rows = r.entries.length ? table(["SEQ", "OP", "ID", "REV", "HASH"], r.entries.map(e => [e.seq ?? "-", e.op, e.id, e.rev ?? "-", e.hash ? e.hash.slice(0, 12) : "-"]), o) : undefined;
   const recovery = r.recovery.length ? ["recovery:", ...r.recovery.map(note => `  - ${clean(note)}`)].join("\n") : undefined;
   const log = r.log ? (r.log.ok ? status("ok", "log: appended", o) : blocks(status("fail", "log: not appended", o), issueTable(r.log.issues, o))) : undefined;
   return blocks(head, rows, recovery && paint(recovery, "hint", o), issueTable(r.issues, o), log);

@@ -3,6 +3,9 @@ import type { Readable, Writable } from "node:stream";
 
 /** Newline-delimited JSON-RPC stdio transport (MCP basic + tools). Sequential, bounded, no timers. */
 export const FRAME_BYTES = 65_536, RESULT_BYTES = 262_144;
+/** Tools whose complete request is bounded to 48 KiB as the raw frame the client sent, escapes included. */
+export const TOOL_FRAME_BYTES = 48 * 1024;
+const narrowedFrame = (name: string) => name.startsWith("vmem_proposal_") || name === "vmem_assert";
 export interface McpTool { name: string; description: string; inputSchema: Record<string, unknown>; annotations: Record<string, boolean> }
 export type McpHandler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
 export interface McpServerOptions { tools: readonly McpTool[]; handlers: Record<string, McpHandler>; input?: Readable; output?: Writable; name?: string; version?: string; instructions?: string }
@@ -93,7 +96,7 @@ export async function serveMcp(options: McpServerOptions): Promise<void> {
     if (msg.method !== "tools/call") { await error(id, -32601, "Method not found"); return; }
     const params = msg.params;
     if (!plain(params) || Object.keys(params).some(k => !["name", "arguments", "_meta"].includes(k)) || typeof params.name !== "string") { await error(id, -32602, "Invalid tool call"); return; }
-    if (params.name.startsWith("vmem_proposal_") && Buffer.byteLength(line, "utf8") + 1 > 48 * 1024) { await error(id, -32600, "Proposal request exceeds 48 KiB; shorten the request"); return; }
+    if (narrowedFrame(params.name) && Buffer.byteLength(line, "utf8") + 1 > TOOL_FRAME_BYTES) { await error(id, -32600, `${params.name} request exceeds 48 KiB as the frame it was sent in; shorten the request or split the batch`); return; }
     const definition = options.tools.find(t => t.name === params.name), args = params.arguments ?? {};
     const handler = definition && options.handlers[definition.name];
     if (!definition || !handler) { await error(id, -32602, `unknown tool: ${params.name.slice(0, 200)}`); return; }

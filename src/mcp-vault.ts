@@ -1,7 +1,7 @@
 import { vaultBrief } from "./vault-brief.ts";
 import { applyProposal, confirmProposalReconciliation, listProposals, previewProposalApply, previewProposalReject, reconcileProposal, rejectProposal, showProposal, submitProposal, type ProposalContext } from "./proposal-provider.ts";
 import { evidenceReport } from "./evidence.ts";
-import { appendAssertions, assertFrameBytes, ASSERT_FRAME_BYTES } from "./assertions.ts";
+import { appendAssertions, assertFrameBytes, ASSERT_FRAME_BYTES, type AssertReceipt } from "./assertions.ts";
 import { explainGraphPath } from "./graph-evidence.ts";
 import { createSpecMcp } from "./mcp-spec.ts";
 import { SPEC_COMMANDS } from "./spec-command-table.ts";
@@ -111,6 +111,15 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
 }
 type Issue = { code: string; severity: "error"; message: string };
 const refusal = (code: string, message: string) => ({ refused: true as const, issues: [{ code, severity: "error", message } as Issue] });
+/** Keep a `vmem_assert` reply inside the 48 KiB frame bound without hiding a batch that was already applied. */
+export function assertReply(reply: AssertReceipt & { refused?: true }): unknown {
+  if (assertFrameBytes(reply, "result") <= ASSERT_FRAME_BYTES) return reply;
+  const count = reply.entries.length;
+  const note: Issue = { code: "LIMIT", severity: "error", message: `the reply exceeds ${ASSERT_FRAME_BYTES} bytes as an encoded JSON-RPC frame; ${count} ${count === 1 ? "row was" : "rows were"} ${reply.applied ? `appended to segment ${reply.segment} and the rows are omitted` : "not appended and the rows are omitted"}. Read the journal for their ids, and send smaller batches` };
+  const trimmed = [{ ...reply, entries: [], issues: [...reply.issues.slice(0, 4), note] }, { ...reply, entries: [], issues: [note] },
+    { ok: reply.ok, applied: reply.applied, dryRun: reply.dryRun, segment: reply.segment, ...(reply.recordedAt ? { recordedAt: reply.recordedAt } : {}), ...(reply.refused ? { refused: reply.refused } : {}), entries: [], recovery: [], indexUpdated: false as const, issues: [note] }];
+  return trimmed.find(candidate => assertFrameBytes(candidate, "result") <= ASSERT_FRAME_BYTES) ?? trimmed[trimmed.length - 1];
+}
 const str = (value: unknown): string | undefined => typeof value === "string" ? value : undefined;
 
 /**
@@ -195,9 +204,8 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     // Registry is reloaded per call so the source root is rebound on every verification.
     vmem_evidence: args => { const registry = loadRegistry(home), spec = registry.vaults.find(v => v.id === pick(args).id); if (!spec) throw Object.assign(new Error("unknown vault id; list registered vaults with vmem status"), { code: "V04" }); return evidenceReport(spec, str(args.path)!, registry.denyPaths ?? []); },
     vmem_assert: args => {
-      if (assertFrameBytes(args) > ASSERT_FRAME_BYTES) return refusal("V09", `request exceeds ${ASSERT_FRAME_BYTES} bytes as an encoded JSON-RPC frame; split the batch into smaller vmem_assert calls`);
       const receipt = appendAssertions(home, { vault: pick(args).id, ops: args.ops, channel: "mcp", dryRun: args.dryRun === true, ...(args.log ? { log: args.log as LogEvent } : {}) }, { env });
-      return receipt.ok || receipt.applied ? receipt : { ...receipt, refused: true };
+      return assertReply(receipt.ok || receipt.applied ? receipt : { ...receipt, refused: true });
     },
     vmem_stats: args => vaultStats(home, pick(args).id, { expectedVault: pick(args), ...(typeof args.days === "number" ? { days: args.days } : {}) }),
     vmem_links: args => read(args, index => {

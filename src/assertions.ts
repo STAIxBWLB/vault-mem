@@ -9,14 +9,14 @@
 import { randomBytes } from "node:crypto";
 import { closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { unenforceablePii, type VaultSpec, type VmemConfig } from "./config.ts";
 import { parseEvidence, verifyEvidenceEntry, type EvidenceEntry, type EvidenceReads } from "./evidence.ts";
 import { AGENT_MARKERS } from "./log-format.ts";
 import type { LogEvent, LogReceipt } from "./log-types.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry, syncDirectory } from "./registry.ts";
-import { sourceReferences } from "./source.ts";
+import { sourceReferences, sourceWorkspaceRoot } from "./source.ts";
 import { appendLog, checkLogEvent } from "./vault-log.ts";
 import { screenContent, screenMetadata } from "./write-validation.ts";
 import type { WriteIssue } from "./write-types.ts";
@@ -156,6 +156,15 @@ export function answerOn(payload: Record<string, unknown>, t: number): Answer {
 // ---------------------------------------------------------------- verification
 
 const ENTRY_KEYS = new Set(["v", "seg", "seq", "prev", "hash", "payload_sha256", "recorded_at", "channel", "actor", "op", "batch", "parents", "payload", "purged"]);
+/** A purge marker is exactly `{at, reason}` and never travels with a payload, because neither is inside the hash. */
+function purgeShape(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "invalid purged";
+  const marker = value as Record<string, unknown>;
+  if (Object.keys(marker).some(key => key !== "at" && key !== "reason")) return "invalid purged";
+  if (typeof marker.at !== "string" || !validInstant(marker.at)) return "invalid purged";
+  if (typeof marker.reason !== "string" || !marker.reason || marker.reason.length > 200 || /\p{Cc}/u.test(marker.reason)) return "invalid purged";
+  return undefined;
+}
 function shapeProblem(entry: Record<string, unknown>): string | undefined {
   for (const key of Object.keys(entry)) if (!ENTRY_KEYS.has(key)) return `unknown key ${key.slice(0, 32)}`;
   if (!["cli", "mcp"].includes(entry.channel as string) || !["person", "agent"].includes(entry.actor as string)) return "invalid channel or actor";
@@ -165,12 +174,25 @@ function shapeProblem(entry: Record<string, unknown>): string | undefined {
   if (!HEX64.test(String(entry.payload_sha256)) || !HEX64.test(String(entry.prev)) || !HEX64.test(String(entry.hash))) return "invalid hash field";
   const revision = entry.op === "revise" || entry.op === "retract";
   if (revision !== Array.isArray(entry.parents) || (revision && (!(entry.parents as unknown[]).length || (entry.parents as unknown[]).some(p => typeof p !== "string" || !HEX64.test(p))))) return "invalid parents";
-  if (entry.purged === undefined && (!entry.payload || typeof entry.payload !== "object" || Array.isArray(entry.payload))) return "missing payload";
+  if (entry.purged !== undefined) {
+    if (entry.payload !== undefined) return "a purged entry still carries a payload";
+    return purgeShape(entry.purged);
+  }
+  if (!entry.payload || typeof entry.payload !== "object" || Array.isArray(entry.payload)) return "missing payload";
+  if (revision && typeof (entry.payload as Record<string, unknown>).id !== "string") return "missing payload id";
   return undefined;
 }
+/** The assertion an entry belongs to: its own `a:seg:seq` for an assert, the named id for a revision. */
+const assertionOf = (entry: JournalEntry) => entry.op === "assert" ? `a:${entry.seg}:${entry.seq}` : typeof entry.payload?.id === "string" ? entry.payload.id : undefined;
 /** Both caps are checked against the size from `fstat` before any byte is read, so a refusal never reads a budget over. */
 function readBounded(file: string, limit: number, remaining = Infinity): Buffer | "too_large" | "over_total" | "not_a_file" {
-  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  let fd: number;
+  try { fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+  catch (caught) {
+    // A link is never read or replaced: the segment is reported as ignored, and an append names it.
+    if (["ELOOP", "EMLINK"].includes((caught as NodeJS.ErrnoException).code ?? "")) return "not_a_file";
+    throw caught;
+  }
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile()) return "not_a_file";
@@ -239,6 +261,8 @@ export function readJournal(vaultPath: string, denyPaths: readonly string[] = []
     if ((caught as NodeJS.ErrnoException).code === "ENOENT") return { present: false, segments: [], ignored: [], bytes: 0, entries: 0 };
     throw caught;
   }
+  // Every listed file holds at least one entry, so more names than the entry bound is already a journal over its bound.
+  if (names.length > MAX_JOURNAL_ENTRIES) throw coded("V09", `${ASSERTIONS_DIR} lists ${names.length} entries, more than the ${MAX_JOURNAL_ENTRIES}-entry journal bound; reads and appends refuse rather than list partial history. Archive old segments with Git outside vmem`);
   const journal: VerifiedJournal = { present: true, segments: [], ignored: [], bytes: 0, entries: 0 };
   for (const name of names) {
     const id = name.endsWith(".jsonl") ? name.slice(0, -6) : "";
@@ -260,33 +284,38 @@ export function readJournal(vaultPath: string, denyPaths: readonly string[] = []
 /** `depth` is the longest parent chain below the entry, so a parent always sorts before its child. */
 interface Kept { entry: JournalEntry; effective: string; inverted: boolean; depth: number }
 interface Resolved { kept: Map<string, Kept>; untrusted: { segment: string; seq: number; reason: string }[] }
-/** Steps 2: effective record times across segments; an entry whose parent is missing or untrusted is untrusted. */
+/** Steps 2: effective record times across segments; an entry whose parent is missing, untrusted or foreign is untrusted. */
 function resolveEntries(journal: VerifiedJournal): Resolved {
   const byHash = new Map<string, JournalEntry>();
   for (const segment of journal.segments) for (const entry of segment.entries) byHash.set(entry.hash, entry);
-  const done = new Map<string, Kept | null>(), visiting = new Set<string>();
-  const resolve = (entry: JournalEntry): Kept | null => {
+  const done = new Map<string, Kept | string>(), visiting = new Set<string>();
+  const resolve = (entry: JournalEntry): Kept | string => {
     const known = done.get(entry.hash);
     if (known !== undefined) return known;
-    if (visiting.has(entry.hash)) return null;
+    if (visiting.has(entry.hash)) return "parent cycle in the journal";
     visiting.add(entry.hash);
-    let effective = entry.recorded_at, depth = 0, ok = true;
+    const own = assertionOf(entry);
+    let effective = entry.recorded_at, depth = 0, failure = "";
     for (const parent of entry.parents ?? []) {
-      const found = byHash.get(parent), kept = found ? resolve(found) : null;
-      if (!kept) { ok = false; break; }
+      const found = byHash.get(parent);
+      if (!found) { failure = "parent missing from every verified segment"; break; }
+      const kept = resolve(found);
+      if (typeof kept === "string") { failure = kept; break; }
+      // A revision names its own assertion's heads only; a cross-assertion parent would displace another head set.
+      if (own !== undefined && assertionOf(found) !== own) { failure = "a parent belongs to another assertion"; break; }
       if (kept.effective > effective) effective = kept.effective;
       if (kept.depth >= depth) depth = kept.depth + 1;
     }
     visiting.delete(entry.hash);
-    const result = ok ? { entry, effective, inverted: effective !== entry.recorded_at, depth } : null;
+    const result = failure ? failure : { entry, effective, inverted: effective !== entry.recorded_at, depth };
     done.set(entry.hash, result);
     return result;
   };
   const kept = new Map<string, Kept>(), untrusted: Resolved["untrusted"] = [];
   for (const segment of journal.segments) for (const entry of segment.entries) {
     const result = resolve(entry);
-    if (result) kept.set(entry.hash, result);
-    else untrusted.push({ segment: entry.seg, seq: entry.seq, reason: "parent missing from every verified segment" });
+    if (typeof result === "string") untrusted.push({ segment: entry.seg, seq: entry.seq, reason: result });
+    else kept.set(entry.hash, result);
   }
   return { kept, untrusted };
 }
@@ -295,6 +324,8 @@ export function asOfCutoff(value: string): { requested: string; cutoff: string; 
   if (validInstant(value)) return { requested: value, cutoff: value, cutoffInclusive: true };
   const start = day(value);
   if (start === undefined || dateRange(value)?.[0] !== start) throw coded("V01", "as_of must be a UTC instant YYYY-MM-DDTHH:MM:SSZ or a date YYYY-MM-DD; pass one of those forms");
+  // The day after 9999-12-31 has no four-digit instant, so the last representable day keeps its own last second.
+  if (start >= days(9999, 12, 31)) return { requested: value, cutoff: "9999-12-31T23:59:59Z", cutoffInclusive: true };
   const next = new Date(Date.UTC(2000, 0, 1) + (start + 1 - days(2000, 1, 1)) * 86400000);
   return { requested: value, cutoff: instant(next), cutoffInclusive: false };
 }
@@ -469,7 +500,10 @@ function support(op: Record<string, unknown>, at: string, vault: VaultSpec, conf
     if (!Array.isArray(op.source)) refuse("V01", `${at}: source must be a list of 1..32 source references; send an array of workspace paths, URLs or mem: ids`);
     let refs: ReturnType<typeof sourceReferences>;
     try { refs = sourceReferences(op.source); } catch (caught) { refuse("V01", `${at}: ${(caught as Error).message}`); }
-    for (const ref of refs) if (ref.kind === "path" && isDenied(ref.value, config.denyPaths ?? [])) refuse("V06", `${at}: source ${ref.value} is denied by current policy; cite another source`);
+    // A path reference is denied by its own value or by the workspace path it resolves to, as `src/analysis-input.ts` reads it.
+    const root = sourceWorkspaceRoot(vault), denyPaths = config.denyPaths ?? [];
+    const denied = (ref: (typeof refs)[number]) => ref.kind === "path" && (isDenied(ref.value, denyPaths) || (root !== undefined && isDenied(canonicalPath(resolve(root, ref.value)), denyPaths)));
+    for (const ref of refs) if (denied(ref)) refuse("V06", `${at}: source ${ref.value} is denied by current policy; cite another source`);
     out.source = refs.map(ref => ref.value);
   }
   if (op.evidence !== undefined) {
@@ -612,17 +646,29 @@ function chooseSegment(home: string, vaultId: string, journal: VerifiedJournal, 
 function actorOf(channel: "cli" | "mcp", env: NodeJS.ProcessEnv): "person" | "agent" {
   return channel === "mcp" || AGENT_MARKERS.some(marker => typeof env[marker] === "string" && env[marker]!.length > 0) ? "agent" : "person";
 }
+/** Take `assertions.lock`. Only EEXIST means another writer; any other open failure names its own cause. */
 function acquire(root: string): { fd: number; file: string; ino: number; dev: number } {
   const file = join(root, ASSERTIONS_LOCK), deadline = Date.now() + 2000, sleeper = new Int32Array(new SharedArrayBuffer(4));
   for (;;) {
-    try {
-      const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600), stat = fstatSync(fd);
-      writeFileSync(fd, JSON.stringify({ pid: process.pid, host: hostname(), created: new Date().toISOString() }) + "\n");
-      return { fd, file, ino: Number(stat.ino), dev: Number(stat.dev) };
-    } catch (caught) {
-      if ((caught as NodeJS.ErrnoException).code !== "EEXIST" || Date.now() >= deadline) refuse("LOCKED", `${ASSERTIONS_LOCK} is held by another writer; retry shortly, or remove the lock file only after confirming no vmem process is appending`);
-      Atomics.wait(sleeper, 0, 0, 5);
+    let fd: number;
+    try { fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+    catch (caught) {
+      const code = (caught as NodeJS.ErrnoException).code ?? "unknown error";
+      if (code !== "EEXIST") refuse("LOCK", `${ASSERTIONS_LOCK} cannot be created in the vault root (${code}); fix the vault directory's permission, ownership or read-only mount, then retry`);
+      if (Date.now() < deadline) { Atomics.wait(sleeper, 0, 0, 5); continue; }
+      refuse("LOCKED", `${ASSERTIONS_LOCK} is held by another writer; retry shortly, or remove the lock file only after confirming no vmem process is appending`);
     }
+    let stat;
+    try { stat = fstatSync(fd); writeFileSync(fd, JSON.stringify({ pid: process.pid, host: hostname(), created: new Date().toISOString() }) + "\n"); }
+    catch (caught) {
+      // A half-created lock is removed by identity so later appends do not read it as another writer.
+      const code = (caught as NodeJS.ErrnoException).code ?? "unknown error";
+      try { closeSync(fd); } catch { /* the refusal below is the signal */ }
+      try { const owned = lstatSync(file); if (Number(owned.ino) === Number(stat?.ino ?? -1) && Number(owned.dev) === Number(stat?.dev ?? -1)) unlinkSync(file); }
+      catch { /* the refusal below is the signal */ }
+      refuse("LOCK", `the ${ASSERTIONS_LOCK} record could not be written (${code}); check free space and permissions in the vault root, then retry`);
+    }
+    return { fd, file, ino: Number(stat.ino), dev: Number(stat.dev) };
   }
 }
 function release(lock: { fd: number; file: string; ino: number; dev: number }, issues: WriteIssue[]): void {
@@ -661,7 +707,8 @@ export function appendAssertions(home: string, request: AssertRequest, options: 
     const journal = readJournal(ctx.root, ctx.config.denyPaths ?? []);
     const planned = plan(ctx, request.ops, journal);
     if (journal.entries + planned.length > MAX_JOURNAL_ENTRIES) refuse("V09", `the journal would exceed ${MAX_JOURNAL_ENTRIES} entries; appends refuse rather than rotate history`);
-    const estimate = planned.reduce((sum, entry) => sum + bytes(canonical(entry.payload)) + 1024, 0);
+    // An over-estimate only, so a segment chosen on it has room for the real lines; `parents` cost their own bytes.
+    const estimate = planned.reduce((sum, entry) => sum + bytes(canonical(entry.payload)) + 1024 + (entry.parents ?? []).reduce((cost, parent) => cost + parent.length + 4, 0), 0);
     if (journal.bytes + estimate > MAX_JOURNAL_BYTES) refuse("V09", `the journal would exceed ${MAX_JOURNAL_BYTES} bytes; appends refuse rather than rotate history`);
     const chosen = chooseSegment(home, ctx.vault.id, journal, estimate);
     if (chosen.note) receipt.recovery.push(chosen.note);
@@ -682,12 +729,19 @@ export function appendAssertions(home: string, request: AssertRequest, options: 
       receipt.entries.push({ seq, id: entry.id, op: entry.op, hash, ...(entry.op !== "subject" ? { rev: Number(entry.payload.rev) } : {}) });
     }
     const buffer = Buffer.from(lines.join(""));
+    // The journal bound is checked on the bytes that will be written, before the file is opened.
+    if (journal.bytes + buffer.length > MAX_JOURNAL_BYTES) refuse("V09", `the journal would exceed ${MAX_JOURNAL_BYTES} bytes once this batch is written; appends refuse rather than rotate history`);
     const dir = join(ctx.root, ASSERTIONS_DIR);
     let createdDir = false;
     try { const stat = lstatSync(dir); if (stat.isSymbolicLink() || !stat.isDirectory()) refuse("V04", "assertions/ must be a plain directory; move the file or link aside"); }
     catch (caught) { if ((caught as NodeJS.ErrnoException).code !== "ENOENT") throw caught; mkdirSync(dir, { mode: 0o755 }); createdDir = true; }
     const file = join(dir, `${chosen.segment}.jsonl`);
-    const fd = openSync(file, constants.O_RDWR | constants.O_APPEND | constants.O_CREAT | (chosen.fresh ? constants.O_EXCL : 0) | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o644);
+    let fd: number;
+    try { fd = openSync(file, constants.O_RDWR | constants.O_APPEND | constants.O_CREAT | (chosen.fresh ? constants.O_EXCL : 0) | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o644); }
+    catch (caught) {
+      if ((caught as NodeJS.ErrnoException).code === "ELOOP") refuse("V04", `${ASSERTIONS_DIR}/${chosen.segment}.jsonl is a symbolic link; restore the segment from Git or move the link aside, then retry`);
+      throw caught;
+    }
     try {
       const before = fstatSync(fd);
       if (!before.isFile() || before.nlink !== 1) refuse("V04", "the segment must be a plain nonlinked file; restore it from Git");
@@ -699,19 +753,35 @@ export function appendAssertions(home: string, request: AssertRequest, options: 
         receipt.recovery.push(`truncated ${dropped} bytes after seq ${chosen.report.tail?.seq ?? 0} of segment ${chosen.segment} (${chosen.report.partialBatch ? "partial batch" : "torn tail"})`);
       }
       const start = chosen.report?.verifiedBytes ?? 0;
+      /** Undo the batch bytes after a failed write or fsync; true when the segment is back at its verified prefix. */
+      const rollback = () => { try { ftruncateSync(fd, start); fsyncSync(fd); return true; } catch { return false; } };
+      const unpublished = (code: string, message: string): never => {
+        receipt.applied = false; receipt.segment = null; delete receipt.recordedAt; receipt.entries = [];
+        refuse(code, message);
+      };
       let written = 0;
       try { written = writeSync(fd, buffer, 0, buffer.length, null); }
       catch {
         const after = fstatSync(fd);
-        if (after.size > start) { ftruncateSync(fd, start); fsyncSync(fd); }
-        refuse("WRITE", "the batch write failed and was truncated back; nothing was appended. Check disk space and retry");
+        if (after.size > start && !rollback()) refuse("DURABILITY", "the batch write failed and the segment could not be truncated back; inspect the segment before retrying");
+        unpublished("WRITE", "the batch write failed and was truncated back; nothing was appended. Check disk space and retry");
       }
-      if (written !== buffer.length) { ftruncateSync(fd, start); fsyncSync(fd); refuse("WRITE", "short batch write truncated back; nothing was appended. Check disk space and retry"); }
-      fsyncSync(fd);
+      if (written !== buffer.length) {
+        if (!rollback()) refuse("DURABILITY", `short batch write (${written} of ${buffer.length} bytes) left in the segment and it could not be truncated back; inspect it before retrying`);
+        unpublished("WRITE", "short batch write truncated back; nothing was appended. Check disk space and retry");
+      }
+      // The batch bytes are in the segment from here on: report them, so a later failure never invites a replay that
+      // would duplicate the assertions.
+      receipt.applied = true; receipt.segment = chosen.segment; receipt.recordedAt = recordedAt;
+      try { fsyncSync(fd); }
+      catch {
+        if (rollback()) unpublished("WRITE", "the batch fsync failed and the batch was truncated back; nothing was appended. Check disk space and retry");
+        refuse("DURABILITY", `fsync of segment ${chosen.segment} failed after the batch was written; its ${receipt.entries.length} entries may not survive a crash. Inspect the segment and the writer record before appending again`);
+      }
     } finally { closeSync(fd); }
     if (chosen.fresh) syncDirectory(dir);
     if (createdDir) syncDirectory(ctx.root);
-    receipt.applied = true; receipt.segment = chosen.segment; receipt.recordedAt = recordedAt;
+    receipt.segment = chosen.segment; receipt.recordedAt = recordedAt;
     const last = receipt.entries.at(-1)!;
     try { saveWriter(home, ctx.vault.id, { segment: chosen.segment, seq: last.seq!, hash: last.hash! }); }
     catch { receipt.issues.push({ code: "WRITER_RECORD", severity: "warning", message: "the batch is appended but the writer record was not updated; the next append starts a new segment" }); }
@@ -719,6 +789,8 @@ export function appendAssertions(home: string, request: AssertRequest, options: 
   } catch (caught) {
     if (caught instanceof Refused) receipt.issues.push(...caught.issues);
     else if (caught instanceof Coded) receipt.issues.push(err(caught.code, caught.message));
+    // Once the batch bytes are in the segment, a later failure keeps `applied` and never advises a replay.
+    else if (receipt.applied) receipt.issues.push(err("DURABILITY", `the batch is in segment ${receipt.segment} but a later step failed (${(caught as NodeJS.ErrnoException).code ?? (caught as Error).message}); inspect the segment and the writer record before appending again`));
     else receipt.issues.push(err("IO", "assertion append failed on file I/O; check permissions and disk space, then retry"));
     receipt.ok = false;
   } finally {
