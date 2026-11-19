@@ -149,4 +149,31 @@ test("Q1 cutoff and verified source produce the documented assertion fields", as
   const response = readAssertions(f.home, { vault: "test", subject: "s:person-a", relation: "role", at: "2026-04-05", asOf: "2026-04-06" }, { env: f.env });
   expect(response).toMatchObject({ schemaVersion: 1, basis: "assertion_journal", vault: "test", at: "2026-04-05", asOf: { requested: "2026-04-06", cutoff: "2026-04-07T00:00:00Z", cutoffInclusive: false }, truncated: false, overlaps: [],
     items: [{ id: receipt.entries[1]!.id, rev: 1, subject: "s:person-a", relation: "role", value: "member", kind: "state", from: "2025-09-01", to: "open", answer: "yes", recordedAt: "2025-09-02T09:00:00Z", evidence: [{ source, status: "verified", quote: "joins as member" }], subjectNote: { path: "notes/person-a.md", status: "present" } }] });
+  const configPath = join(f.home, "vmem.config.json"), config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.denyPaths = [join(f.notes, "onboarding-2025-09.md")]; writeFileSync(configPath, JSON.stringify(config));
+  const withheld = readAssertions(f.home, { vault: "test" }, { env: f.env });
+  expect(withheld.items[0]?.evidence).toEqual([{ status: "withheld" }]);
+  expect(JSON.stringify(withheld)).not.toContain(source); expect(JSON.stringify(withheld)).not.toContain("joins as member");
+  delete config.denyPaths; writeFileSync(configPath, JSON.stringify(config)); rmSync(join(f.notes, "onboarding-2025-09.md"));
+  expect(readAssertions(f.home, { vault: "test" }, { env: f.env }).items[0]?.evidence).toEqual([{ source, status: "unavailable" }]);
+});
+
+test("T11 real vmem move and merge preserve answers while reporting their subject links", async () => {
+  const { applyWrite } = await import("../src/writer.ts");
+  const note = (title: string) => `---\ntitle: ${title}\ndescription: Synthetic fixture.\ntype: insight\ndomain: research\ntopics: ["[[research]]"]\n---\n# ${title}\n\nSynthetic body.\n\n## Topics\n\n- [[research]]\n`;
+  for (const kind of ["move", "merge"] as const) {
+    const f = fixture();
+    writeFileSync(join(f.notes, "research.md"), "---\ntype: moc\ndescription: Synthetic directory.\n---\n# Research\n");
+    writeFileSync(join(f.notes, "subject.md"), note("Subject")); writeFileSync(join(f.notes, "next.md"), note("Next"));
+    expect(f.append([{ op: "declare", subject: "s:test", note: "notes/subject.md" }, { op: "assert", subject: "s:test", relation: "role", value: "member", kind: "state", from: "2025", to: "open", source: ["mem:fixture"] }], "2026-01-01T00:00:00Z").ok).toBe(true);
+    const before = readAssertions(f.home, { vault: "test", at: "2026-01-01" }, { env: f.env });
+    const operation = kind === "move" ? { op: "move" as const, from: "subject", to: "renamed" } : { op: "merge" as const, keep: "next", absorb: "subject" };
+    const preview = applyWrite(f.home, { vault: "test", operation, channel: "cli" });
+    expect(preview.ok).toBe(true);
+    const applied = applyWrite(f.home, { vault: "test", operation, channel: "cli", confirm: true, fingerprint: preview.fingerprint });
+    expect(applied.applied).toBe(true);
+    const after = readAssertions(f.home, { vault: "test", at: "2026-01-01" }, { env: f.env });
+    expect(after.items[0]?.value).toBe(before.items[0]?.value); expect(after.items[0]?.answer).toBe(before.items[0]?.answer);
+    expect(after.items[0]?.subjectNote?.status).toBe(kind === "move" ? "missing" : "superseded");
+  }
 });
