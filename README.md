@@ -32,6 +32,7 @@ vmem tidy personal --all        # once after upgrading an existing vault: previe
 - **Notes**: frontmatter `type` is one of <!-- facts:note-types -->`insight`, `decision`, `observation`, `person`, `project`, `method`, `moc`, `reference`<!-- /facts:note-types -->; links are `[[wiki links]]` resolved by filename stem inside the same vault.
 - **Two-step changes**: move, delete, merge, tidy, promotion, sync and proposal decisions first return a preview with a fingerprint and change nothing; `--confirm --fingerprint <sha>` (MCP `confirm`, `fingerprint`) applies exactly that preview.
 - **Proposals**: opt-in create or exact-patch requests remain outside the vault and index until confirmed. Review and rejection do not authenticate a human; existing direct writes retain their policy. An interrupted apply remains `apply_unknown` until inspected, and is never replayed automatically.
+- **Assertions**: an optional `assertions/` directory holds an append-only, hash-chained journal of manually authored subject/relation/value assertions, each with its evidence and its record time. `vmem assert` appends a validated batch there and writes no note, so a note edit never rewrites history; `vmem sync` commits the segments like the log.
 - **Receipts**: an applied write can still report a later failure (log append, cleanup, sync). Read `applied`, `logged` and `issues` before retrying, and never repeat an applied write blindly.
 - **Git**: each vault is its own repository. Only `vmem sync` commits or pushes, and nothing runs on a schedule.
 
@@ -46,6 +47,7 @@ Output: every command prints text for people by default, following agent-hub's C
 | Registry and policy | `status`, `doctor`, `recover`, `vaults add\|list\|remove\|pii`, `specs add\|list\|remove` | [configuration](docs/reference/configuration.md) |
 | Reads | `rebuild`, `search`, `show`, `links`, `brief`, `stats`, `evidence` | [reads](docs/reference/reads.md) |
 | Writes and log | `new`, `patch`, `append`, `frontmatter`, `link`, `supersede`, `merge`, `move`, `delete`, `check`, `report`, `tidy`, `log append\|tail\|grep` | [writes](docs/reference/writes.md) |
+| Assertions | `assert` (append a validated batch of temporal assertions) | [writes](docs/reference/writes.md#assertions) |
 | Proposals | `proposal submit\|list\|show\|apply\|reject\|reconcile` | [writes](docs/reference/writes.md#proposals) |
 | MCP and hosts | `mcp`, `setup`, `completion`, `manifest` | [mcp-and-setup](docs/reference/mcp-and-setup.md) |
 | Promotion and sync | `promote-from-amem`, `promote`, `sync` | [promotion-and-sync](docs/reference/promotion-and-sync.md) |
@@ -61,13 +63,14 @@ Output: every command prints text for people by default, following agent-hub's C
 - Cross-vault links: `[[x]]` always resolves inside its own vault.
 - Evidence verification of sources outside the same vault's `notes/` (other files, other vaults, URLs, memory ids): those entries are stored and reported `unverified_external` or `unsupported`, never fetched.
 - Scheduled or automatic sync and push.
+- Reading the assertion journal: `vmem assertions` and `vmem_assertions` with the derived index and read-time policy are issue 251; this release appends, verifies and evaluates assertions through the CLI, the MCP write tool and the exported `evaluateAssertions` function only. Purging a payload is issue 252.
 - A resolution setting for graph communities.
 - An event-filtered capture read for skill mining.
 - A console bin: vault-mem ships only the plugin module for the `acon` console of [agent-console](https://github.com/STAIxBWLB/agent-console).
 
 ## Library
 
-The only runtime dependency is the exact first-party pin <!-- facts:amem-pin -->`@staix/agent-mem@0.28.0`<!-- /facts:amem-pin -->; it is not loaded by registry commands. Public library exports (`@staix/vault-mem`, from `src/index.ts`) cover configuration and home resolution, registry operations, frontmatter, link resolution and the derived index, validated writes, the append-only log, the MCP server and its vault tools, host setup, the CLI command table and completion, promotion from agent-mem and to org vaults, lint and graph analysis, sync, source references, migration tidy, and the spec source registry, graph, validation and freshness. `@staix/vault-mem/ui-plugin` is the console plugin entry (see [Console plugin](docs/reference/mcp-and-setup.md#console-plugin)). No console bin is shipped. Exported functions and constants by module:
+The only runtime dependency is the exact first-party pin <!-- facts:amem-pin -->`@staix/agent-mem@0.28.0`<!-- /facts:amem-pin -->; it is not loaded by registry commands. Public library exports (`@staix/vault-mem`, from `src/index.ts`) cover configuration and home resolution, registry operations, frontmatter, link resolution and the derived index, validated writes, the append-only log, the MCP server and its vault tools, host setup, the CLI command table and completion, promotion from agent-mem and to org vaults, lint and graph analysis, sync, source references, migration tidy, the temporal assertion journal and its evaluation, and the spec source registry, graph, validation and freshness. `@staix/vault-mem/ui-plugin` is the console plugin entry (see [Console plugin](docs/reference/mcp-and-setup.md#console-plugin)). No console bin is shipped. Exported functions and constants by module:
 <!-- facts:exports -->
 
 - `src/home.ts`: `resolveHome`
@@ -77,6 +80,7 @@ The only runtime dependency is the exact first-party pin <!-- facts:amem-pin -->
 - `src/links.ts`: `extractLinks`, `resolveLinks`, `normalizeTarget`
 - `src/vault-index.ts`: `VaultIndex`, `MAX_NOTE_BYTES`, `MAX_RESULTS`, `MAX_READ_BYTES`
 - `src/vault-history.ts`: `readHistory`, `readRevision`, `readChanges`, `historyText`, `revisionText`, `changesText`, `HISTORY_PAGE_LIMIT`, `HISTORY_SCAN_LIMIT`, `CHANGES_PAGE_LIMIT`, `SNAPSHOT_TRANSPORT_BYTES`
+- `src/assertions.ts`: `readJournal`, `verifySegment`, `evaluateAssertions`, `asOfCutoff`, `appendAssertions`, `assertFrameBytes`, `ASSERTIONS_DIR`, `ASSERTIONS_LOCK`, `ASSERTION_SCHEMA_VERSION`, `ASSERT_FRAME_BYTES`, `MAX_BATCH_OPS`
 - `src/writer.ts`: `applyWrite`, `sha256`, `MUTATION_LOCK`, `MAX_WRITE_BYTES`
 - `src/proposal-provider.ts`: `submitProposal`, `listProposals`, `showProposal`, `previewProposalApply`, `applyProposal`, `previewProposalReject`, `rejectProposal`, `reconcileProposal`, `confirmProposalReconciliation`
 - `src/write-validation.ts`: `validateWrite`, `screenContent`

@@ -20,7 +20,8 @@ function object(text: string, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new UsageError(`${label}: expected object`);
   return value as Record<string, unknown>;
 }
-function input(file: string, home: string): string {
+/** Read a `FILE|-` argument as UTF-8 within the write bound, refusing denied paths; also `vmem assert --batch`. */
+export function input(file: string, home: string): string {
   if (file !== "-" && isDenied(canonicalPath(file), loadRegistry(home).denyPaths)) throw new Error("V06: input path denied");
   const fd = file === "-" ? 0 : openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
