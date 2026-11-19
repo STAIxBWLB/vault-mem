@@ -97,7 +97,7 @@ function declaredNotes(journal: VerifiedJournal, cutoff: ReturnType<typeof evalu
   for (const entry of entries) {
     if (cutoff && (cutoff.cutoffInclusive ? entry.recorded_at > cutoff.cutoff : entry.recorded_at >= cutoff.cutoff)) continue;
     const subject = entry.payload?.subject;
-    if (typeof subject === "string" && !result.has(subject)) result.set(subject, typeof entry.payload?.note === "string" ? entry.payload.note : null);
+    if (typeof subject === "string") result.set(subject, typeof entry.payload?.note === "string" ? entry.payload.note : null);
   }
   return result;
 }

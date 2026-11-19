@@ -84,7 +84,7 @@ export function renderWriteReceipt(r: WriteReceipt, o: TextOptions, ctx: WriteCo
     list("merged source", r.merge.source), list("merged topics", r.merge.topics),
     r.merge.inboundLinks.length ? heading("INBOUND LINKS", o) + "\n" + table(["PATH", "FIELD", "TARGET", "REPLACEMENT", "LINE"], r.merge.inboundLinks.map(link => [link.path, link.field, link.target + (link.block ? `#^${link.block}` : link.heading ? `#${link.heading}` : ""), link.replacement + (link.block ? `#^${link.block}` : link.heading ? `#${link.heading}` : ""), link.line ?? "-"]), o) : line("inbound links: none", o, "muted"),
   ) : undefined;
-  return blocks([line(head, o, t), one].filter(Boolean).join("\n"), changes, merge, issues, list("possible duplicates", r.possibleDuplicates), list("retained backups", r.retainedBackups), log, confirm);
+  return blocks([line(head, o, t), one].filter(Boolean).join("\n"), changes, merge, list(r.preview ? "subjects to relink" : "subjects relinked", r.assertions?.relinked), r.assertions?.issue ? issueTable([r.assertions.issue], o) : undefined, issues, list("possible duplicates", r.possibleDuplicates), list("retained backups", r.retainedBackups), log, confirm);
 }
 
 /** `tidy`: counts per rule and the notes touched, then the confirm command. */

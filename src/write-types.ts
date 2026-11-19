@@ -54,6 +54,7 @@ export interface WriteReceipt {
   preview?: boolean;
   possibleDuplicates?: string[];
   merge?: MergePreview;
+  assertions?: { relinked: string[]; issue?: WriteIssue };
   indexUpdated: boolean;
   /** Original relative names of backups retained for recovery after drift/failed rollback. */
   retainedBackups?: string[];
