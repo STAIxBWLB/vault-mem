@@ -24,6 +24,17 @@ import { readJournal, relinkSubjects, subjectsAtNote } from "./assertions.ts";
 export const MUTATION_LOCK = "mutation.lock";
 export { MAX_WRITE_BYTES } from "./write-types.ts";
 const MAX_MERGE_ACK_BYTES = 224 * 1024;
+/** Preserve publication state when a post-publication relink list outgrows the MCP result budget. */
+export function boundMcpWriteReceipt(receipt: WriteReceipt): WriteReceipt {
+  if (!receipt.applied || !receipt.assertions || Buffer.byteLength(JSON.stringify(receipt)) <= MAX_MERGE_ACK_BYTES) return receipt;
+  const count = receipt.assertions.relinked.length;
+  const reduced: WriteReceipt = { ...receipt, assertions: { ...receipt.assertions, relinked: [], relinkedCount: count, omitted: count } };
+  if (Buffer.byteLength(JSON.stringify(reduced)) <= MAX_MERGE_ACK_BYTES) return reduced;
+  return { ok: receipt.ok, applied: true, indexUpdated: receipt.indexUpdated, changes: [],
+    issues: [{ code: "LIMIT", severity: "warning", message: "the applied receipt was too large; change details and diagnostics were omitted. Inspect the vault and assertion journal before retrying" }],
+    ...(receipt.logged !== undefined ? { logged: receipt.logged } : {}),
+    assertions: { relinked: [], relinkedCount: count, omitted: count, ...(receipt.assertions.issue ? { issue: { code: "ASSERTIONS", severity: "warning", message: receipt.assertions.issue.message.slice(0, 16384) } } : {}) } };
+}
 export function sha256(text: string): string { return createHash("sha256").update(text).digest("hex"); }
 /** Canonical JSON: sorted keys, undefined members dropped. The assertion journal hashes and stores this form. */
 export function canonical(value: unknown): string {
@@ -417,10 +428,10 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
     if (options.binding && (Number(identity.dev) !== options.binding.dev || Number(identity.ino) !== options.binding.ino)) refuse("VAULT_DRIFT", "vault root changed since the run started; nothing written");
     fingerprint = sha256(canonical({ input, vault: mutationVault(vault), policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], piiSurface: options.piiSurface ?? "notes" }, root, identity: [identity.dev, identity.ino], files: [...notes].map(([path, text]) => [path, sha256(text)]), changes: receipts(changes), ...(relinkPlan ? { assertions: relinkPlan } : {}) }));
     if (twoStep && request.confirm === true && (typeof request.fingerprint !== "string" || request.fingerprint !== fingerprint)) refuse("V09", request.operation.op === "merge" ? "stale or missing merge fingerprint; request a fresh merge preview and confirm with that fingerprint" : "stale or missing preview fingerprint");
-    if (mergePreview && request.channel === "mcp" && !issues.some(issue => issue.severity === "error") && Buffer.byteLength(JSON.stringify({ merge: mergePreview, issues, changes: receipts(changes), fingerprint })) > MAX_MERGE_ACK_BYTES) {
-      // The complete plan must be reviewable before a merge can publish. Keep the refusal compact too.
+    if (twoStep && (request.operation.op === "move" || request.operation.op === "merge") && request.channel === "mcp" && !issues.some(issue => issue.severity === "error") && Buffer.byteLength(JSON.stringify({ merge: mergePreview, issues, changes: receipts(changes), fingerprint, ...(relinkPlan ? { assertions: { relinked: relinkPlan.subjects, ...(relinkPlan.issue ? { issue: relinkPlan.issue } : {}) } } : {}) })) > MAX_MERGE_ACK_BYTES) {
+      // The complete plan must be reviewable before a move or merge can publish.
       changes = []; mergePreview = undefined; issues = [];
-      refuse("V09", "merge preview exceeds the bounded MCP acknowledgement size; use CLI --json for both preview and confirm, or reduce the notes and inbound links before requesting a fresh preview");
+      refuse("V09", `${request.operation.op} preview exceeds the bounded MCP acknowledgement size; use CLI --json for both preview and confirm, or reduce the notes, inbound links or subject relinks before requesting a fresh preview`);
     }
     if (issues.some(issue => issue.severity === "error")) return result = { ok: false, applied: false, issues, changes: receipts(changes), fingerprint, indexUpdated: false };
     if (preview) return result = { ok: true, applied: false, preview: true, ...(request.operation.op === "link" && !changes.length ? {unchanged:true} : {}), issues, changes: receipts(changes), fingerprint, indexUpdated: false, ...(relinkPlan ? { assertions: { relinked: relinkPlan.subjects, ...(relinkPlan.issue ? { issue: relinkPlan.issue } : {}) } } : {}) };
@@ -614,5 +625,5 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
       if (result.ok && mergePreview) result.merge = mergePreview;
     }
   }
-  return result!;
+  return request?.channel === "mcp" ? boundMcpWriteReceipt(result!) : result!;
 }

@@ -127,3 +127,44 @@ test("CLI accepts a relink batch and returns the stored subject entry", async ()
   const output = run(["assert", "test", "--batch", batch, "--json"], f.env);
   expect(output.code).toBe(0); expect(JSON.parse(output.text).entries[0]).toMatchObject({ id: "s:test", op: "subject" });
 });
+
+test("oversized relink acknowledgements refuse MCP move and merge before publication", async () => {
+  const { entryHash, payloadHash } = await import("../src/assertions.ts"), { canonical } = await import("../src/writer.ts"), { serveMcp } = await import("../src/mcp.ts"), { PassThrough } = await import("node:stream"), f = fixture();
+  const note = (title: string) => `---\ntitle: ${title}\ndescription: Synthetic fixture.\ntype: insight\ndomain: research\ntopics: ["[[research]]"]\n---\n# ${title}\n\nBody.\n`;
+  writeFileSync(join(f.notes, "old.md"), note("Old")); writeFileSync(join(f.notes, "new.md"), note("New"));
+  writeFileSync(join(f.notes, "research.md"), "---\ntype: moc\ndescription: Synthetic directory.\n---\n# Research\n");
+  const segment = "1234567890abcdef", lines: string[] = []; let prev = "0".repeat(64);
+  for (let seq = 1; seq <= 4000; seq++) {
+    const subject = `s:${String(seq).padStart(4, "0")}-${"x".repeat(55)}`, payload = { subject, note: "notes/old.md" };
+    const entry = { v: 1, seg: segment, seq, prev, payload_sha256: payloadHash(payload), recorded_at: "2026-01-01T00:00:00Z", channel: "cli" as const, actor: "person" as const, op: "subject" as const, batch: { id: `${segment}:${seq}`, size: 1, index: 0 }, payload };
+    const hash = entryHash(entry); lines.push(canonical({ ...entry, hash })); prev = hash;
+  }
+  mkdirSync(join(f.vault, "assertions")); writeFileSync(join(f.vault, "assertions", `${segment}.jsonl`), lines.join("\n") + "\n");
+  const server = createVaultMcp(f.home, f.env), input = new PassThrough(), output = new PassThrough(); let result = "";
+  output.on("data", chunk => { result += chunk.toString(); });
+  const done = serveMcp({ tools: server.tools, handlers: server.handlers, input, output });
+  for (const frame of [
+    { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } } },
+    { jsonrpc: "2.0", method: "notifications/initialized" },
+    { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "vmem_move", arguments: { vault: "test", from: "old", to: "moved" } } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "vmem_merge", arguments: { vault: "test", keep: "new", absorb: "old" } } },
+  ]) input.write(JSON.stringify(frame) + "\n");
+  input.end(); await done;
+  for (const line of result.trimEnd().split("\n").slice(1)) {
+    const frame = JSON.parse(line), receipt = JSON.parse(frame.result.content[0].text);
+    expect(receipt).toMatchObject({ ok: false, applied: false, issues: [{ code: "V09" }] });
+    expect(receipt.issues[0].message).toContain("CLI --json"); expect(Buffer.byteLength(line) + 1).toBeLessThan(48 * 1024);
+  }
+  expect(readJournal(f.vault).entries).toBe(4000);
+});
+
+test("oversized post-publication MCP receipt keeps applied and records omitted ids", async () => {
+  const { boundMcpWriteReceipt } = await import("../src/writer.ts");
+  const relinked = Array.from({ length: 5000 }, (_, i) => `s:${String(i).padStart(4, "0")}-${"x".repeat(55)}`);
+  const receipt = boundMcpWriteReceipt({ ok: true, applied: true, indexUpdated: true, changes: [], issues: [], assertions: { relinked } });
+  expect(receipt).toMatchObject({ ok: true, applied: true, assertions: { relinked: [], relinkedCount: 5000, omitted: 5000 } });
+  expect(Buffer.byteLength(JSON.stringify(receipt))).toBeLessThan(48 * 1024);
+  const oversizedDiagnostics = boundMcpWriteReceipt({ ok: false, applied: true, indexUpdated: false, logged: false, changes: [], issues: [{ code: "IO", severity: "error", message: "x".repeat(300000) }], assertions: { relinked: [], issue: { code: "ASSERTIONS", severity: "warning", message: "relink failed; run vmem assert test --batch -" } } });
+  expect(oversizedDiagnostics).toMatchObject({ applied: true, logged: false, issues: [{ code: "LIMIT" }], assertions: { issue: { code: "ASSERTIONS" } } });
+  expect(Buffer.byteLength(JSON.stringify(oversizedDiagnostics))).toBeLessThan(48 * 1024);
+});
