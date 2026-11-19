@@ -1,0 +1,39 @@
+{
+  "description": "Synthetic corpus of docs/specs/2026-11-19-temporal-assertions-design.md (Synthetic corpus and answer key). Subjects and organizations are invented. $A<n> names the id assigned to assertion A<n>; heads are resolved by the test from the journal. Sources are invented external references.",
+  "batches": [
+    { "entry": "E1", "now": "2025-09-02T09:00:00Z", "ops": [
+      { "op": "declare", "subject": "s:person-a", "label": "Person A", "note": "notes/person-a.md" },
+      { "label": "A0", "op": "assert", "subject": "s:person-a", "relation": "role", "value": "member", "kind": "state", "from": "2025-09-01", "to": "open", "source": ["https://example.invalid/onboarding-2025-09"] }
+    ] },
+    { "entry": "E2", "now": "2026-04-10T09:00:00Z", "ops": [
+      { "op": "revise", "id": "$A0", "value": "member", "kind": "state", "from": "2025-09-01", "to": "2026-04-01", "source": ["https://example.invalid/meeting-2026-04-09"] },
+      { "label": "A1", "op": "assert", "subject": "s:person-a", "relation": "role", "value": "lead", "kind": "state", "from": "2026-04-01", "to": "open", "source": ["https://example.invalid/meeting-2026-04-09"] }
+    ] },
+    { "entry": "E3", "now": "2026-05-02T09:00:00Z", "ops": [
+      { "op": "revise", "id": "$A1", "value": "lead", "kind": "state", "from": "2026-03-28", "to": "open", "source": ["https://example.invalid/correction-2026-05"] },
+      { "op": "revise", "id": "$A0", "value": "member", "kind": "state", "from": "2025-09-01", "to": "2026-03-28", "source": ["https://example.invalid/correction-2026-05"] }
+    ] },
+    { "entry": "E4", "now": "2026-05-10T09:00:00Z", "ops": [
+      { "op": "declare", "subject": "s:person-b" },
+      { "op": "declare", "subject": "s:person-c" },
+      { "label": "A3", "op": "assert", "subject": "s:person-b", "relation": "member-of", "value": "org-x", "kind": "state", "from": "unknown", "to": "2026-06-01", "source": ["mem:synthetic-a3"] },
+      { "label": "A4", "op": "assert", "subject": "s:person-b", "relation": "role", "value": "editor", "kind": "state", "from": "2026-01-15", "to": "unknown", "source": ["mem:synthetic-a4"] },
+      { "label": "A5", "op": "assert", "subject": "s:person-b", "relation": "location", "value": "city-y", "kind": "state", "from": "2026-02-01", "to": "open", "source": ["mem:synthetic-a5"] },
+      { "label": "A6", "op": "assert", "subject": "s:person-c", "relation": "joined", "value": "org-z", "kind": "event", "on": "2026-03", "source": ["mem:synthetic-a6"] },
+      { "label": "A7", "op": "assert", "subject": "s:person-c", "relation": "member-of", "value": "org-z", "kind": "state", "from": "2026-03-01", "to": "2026-04-01", "source": ["mem:synthetic-a7"] }
+    ] },
+    { "entry": "E5", "now": "2026-06-01T09:00:00Z", "ops": [
+      { "label": "A8", "op": "assert", "subject": "s:person-a", "relation": "team", "value": "platform", "kind": "state", "from": "2026-05-01", "to": "open", "source": ["https://example.invalid/team-a"] },
+      { "label": "A9", "op": "assert", "subject": "s:person-a", "relation": "team", "value": "research", "kind": "state", "from": "2026-05-15", "to": "open", "source": ["https://example.invalid/team-b"] }
+    ] }
+  ],
+  "scenario3": {
+    "columns": ["A3", "A4", "A5", "A6", "A7"],
+    "rows": {
+      "2026-01-15": ["unknown", "yes", "no", "no", "no"],
+      "2026-03-15": ["unknown", "unknown", "yes", "unknown", "yes"],
+      "2026-04-15": ["unknown", "unknown", "yes", "yes", "no"],
+      "2026-06-15": ["no", "unknown", "yes", "yes", "no"]
+    }
+  }
+}
