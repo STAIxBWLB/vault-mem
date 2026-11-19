@@ -20,9 +20,21 @@ import type { LogBinding } from "./log-types.ts";
 import type { MergePreview, ChangeReceipt, PlannedChange, WriteIssue, WriteReceipt, WriteRequest } from "./write-types.ts";
 import { createStoredEvidence, createStoredReason, readStoredEvidence, readStoredProposal, replaceStoredProposal } from "./proposal-storage.ts";
 import { prepareRejectedProposal, proposalDecisionFingerprint, proposalEvidenceDigest, proposalReconcileFingerprint, proposalRecordDigest, type ProposalRecord } from "./proposals.ts";
+import { readJournal, relinkSubjects, subjectsAtNote } from "./assertions.ts";
 export const MUTATION_LOCK = "mutation.lock";
 export { MAX_WRITE_BYTES } from "./write-types.ts";
 const MAX_MERGE_ACK_BYTES = 224 * 1024;
+/** Preserve publication state when a post-publication relink list outgrows the MCP result budget. */
+export function boundMcpWriteReceipt(receipt: WriteReceipt): WriteReceipt {
+  if (!receipt.applied || !receipt.assertions || Buffer.byteLength(JSON.stringify(receipt)) <= MAX_MERGE_ACK_BYTES) return receipt;
+  const count = receipt.assertions.relinked.length;
+  const reduced: WriteReceipt = { ...receipt, assertions: { ...receipt.assertions, relinked: [], relinkedCount: count, omitted: count } };
+  if (Buffer.byteLength(JSON.stringify(reduced)) <= MAX_MERGE_ACK_BYTES) return reduced;
+  return { ok: receipt.ok, applied: true, indexUpdated: receipt.indexUpdated, changes: [],
+    issues: [{ code: "LIMIT", severity: "warning", message: "the applied receipt was too large; change details and diagnostics were omitted. Inspect the vault and assertion journal before retrying" }],
+    ...(receipt.logged !== undefined ? { logged: receipt.logged } : {}),
+    assertions: { relinked: [], relinkedCount: count, omitted: count, ...(receipt.assertions.issue ? { issue: { code: "ASSERTIONS", severity: "warning", message: receipt.assertions.issue.message.slice(0, 16384) } } : {}) } };
+}
 export function sha256(text: string): string { return createHash("sha256").update(text).digest("hex"); }
 /** Canonical JSON: sorted keys, undefined members dropped. The assertion journal hashes and stores this form. */
 export function canonical(value: unknown): string {
@@ -326,6 +338,7 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
     ? { ...change, applied: appliedPaths.has(change.path) } : change);
   const dateWarnings: WriteIssue[] = [];
   let mergePreview: MergePreview | undefined, mergeCopiedBody = "";
+  let relinkPlan: { from: string; to: string; subjects: string[]; issue?: WriteIssue } | undefined;
   const recordError = (code: string, message: string, path?: string) => issues.push({ code, severity: "error", message, ...(path ? { path } : {}) });
   try {
     if (!request || typeof request !== "object" || !request.operation || typeof request.operation !== "object" || typeof request.vault !== "string") refuse("V01", "invalid write request");
@@ -376,6 +389,19 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
     if (request.operation.op === "merge") {
       const plan = planMerge(request.operation, notes); changes = plan.changes; mergePreview = plan.preview; mergeCopiedBody = plan.copiedBody;
     } else changes = planOperation(request.operation, notes, reportBefore);
+    if (request.operation.op === "move" || request.operation.op === "merge") {
+      const from = request.operation.op === "move" ? moveSourcePath(request.operation.from, notes) : notePath(request.operation.absorb);
+      const to = request.operation.op === "move" ? notePath(request.operation.to) : notePath(request.operation.keep);
+      try {
+        lstatSync(join(root, "assertions"));
+        try {
+          const journal = readJournal(root, config.denyPaths ?? []);
+          if (journal.present) relinkPlan = { from, to, subjects: subjectsAtNote(journal, from) };
+        } catch {
+          relinkPlan = { from, to, subjects: [], issue: { code: "ASSERTIONS", severity: "warning", message: "assertion journal cannot be inspected; check its path and policy before relinking subjects" } };
+        }
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    }
     for (const change of changes) if (isDenied(join(root, change.path), config.denyPaths)) refuse("V06", "planned mutation path is denied", change.path);
     const validation = { vault, config, notes, operation: request.operation, ...(options.piiSurface ? { piiSurface: options.piiSurface } : {}) };
     // Validate the caller's candidate first: replacing `updated` must not hide a
@@ -400,15 +426,15 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
     const identity = lstatSync(root);
     // The identity every later commit check uses must still be the bound root, not a directory swapped in meanwhile.
     if (options.binding && (Number(identity.dev) !== options.binding.dev || Number(identity.ino) !== options.binding.ino)) refuse("VAULT_DRIFT", "vault root changed since the run started; nothing written");
-    fingerprint = sha256(canonical({ input, vault: mutationVault(vault), policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], piiSurface: options.piiSurface ?? "notes" }, root, identity: [identity.dev, identity.ino], files: [...notes].map(([path, text]) => [path, sha256(text)]), changes: receipts(changes) }));
+    fingerprint = sha256(canonical({ input, vault: mutationVault(vault), policy: { denyPaths: config.denyPaths ?? [], piiPatterns: config.piiPatterns ?? [], piiSurface: options.piiSurface ?? "notes" }, root, identity: [identity.dev, identity.ino], files: [...notes].map(([path, text]) => [path, sha256(text)]), changes: receipts(changes), ...(relinkPlan ? { assertions: relinkPlan } : {}) }));
     if (twoStep && request.confirm === true && (typeof request.fingerprint !== "string" || request.fingerprint !== fingerprint)) refuse("V09", request.operation.op === "merge" ? "stale or missing merge fingerprint; request a fresh merge preview and confirm with that fingerprint" : "stale or missing preview fingerprint");
-    if (mergePreview && request.channel === "mcp" && !issues.some(issue => issue.severity === "error") && Buffer.byteLength(JSON.stringify({ merge: mergePreview, issues, changes: receipts(changes), fingerprint })) > MAX_MERGE_ACK_BYTES) {
-      // The complete plan must be reviewable before a merge can publish. Keep the refusal compact too.
+    if (twoStep && (request.operation.op === "move" || request.operation.op === "merge") && request.channel === "mcp" && !issues.some(issue => issue.severity === "error") && Buffer.byteLength(JSON.stringify({ merge: mergePreview, issues, changes: receipts(changes), fingerprint, ...(relinkPlan ? { assertions: { relinked: relinkPlan.subjects, ...(relinkPlan.issue ? { issue: relinkPlan.issue } : {}) } } : {}) })) > MAX_MERGE_ACK_BYTES) {
+      // The complete plan must be reviewable before a move or merge can publish.
       changes = []; mergePreview = undefined; issues = [];
-      refuse("V09", "merge preview exceeds the bounded MCP acknowledgement size; use CLI --json for both preview and confirm, or reduce the notes and inbound links before requesting a fresh preview");
+      refuse("V09", `${request.operation.op} preview exceeds the bounded MCP acknowledgement size; use CLI --json for both preview and confirm, or reduce the notes, inbound links or subject relinks before requesting a fresh preview`);
     }
     if (issues.some(issue => issue.severity === "error")) return result = { ok: false, applied: false, issues, changes: receipts(changes), fingerprint, indexUpdated: false };
-    if (preview) return result = { ok: true, applied: false, preview: true, ...(request.operation.op === "link" && !changes.length ? {unchanged:true} : {}), issues, changes: receipts(changes), fingerprint, indexUpdated: false };
+    if (preview) return result = { ok: true, applied: false, preview: true, ...(request.operation.op === "link" && !changes.length ? {unchanged:true} : {}), issues, changes: receipts(changes), fingerprint, indexUpdated: false, ...(relinkPlan ? { assertions: { relinked: relinkPlan.subjects, ...(relinkPlan.issue ? { issue: relinkPlan.issue } : {}) } } : {}) };
     if (!changes.length) return result = { ok: true, applied: false, ...(request.operation.op === "link" ? {unchanged:true} : {}), issues, changes: [], fingerprint, indexUpdated: false };
     index = new VaultIndex(home, vault, config.vaults.map(value => value.path));
     const staged = new Map<string, string>();
@@ -523,6 +549,7 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
       throw error;
     }
     result = { ok: true, applied, issues, changes: receipts(changes), fingerprint, indexUpdated };
+    if (applied && relinkPlan) result.assertions = relinkSubjects(home, { vault: request.vault, from: relinkPlan.from, to: relinkPlan.to, channel: request.channel ?? "cli", planned: relinkPlan.subjects }, { env: options.env, now: options.now });
     if (request.log !== false) {
       const op = request.operation;
       const type = op.op === "link" ? "CONNECT" : op.op === "move" ? "ROUTE" : ["supersede", "tidy", "merge"].includes(op.op) ? "RETHINK" : "EXTRACT";
@@ -598,5 +625,5 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
       if (result.ok && mergePreview) result.merge = mergePreview;
     }
   }
-  return result!;
+  return request?.channel === "mcp" ? boundMcpWriteReceipt(result!) : result!;
 }

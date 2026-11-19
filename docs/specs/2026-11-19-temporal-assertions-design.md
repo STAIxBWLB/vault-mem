@@ -10,11 +10,13 @@ paths:
   - src/assertion-policy.ts
   - src/assertion-read.ts
   - src/assertions-command.ts
+  - src/writer.ts
   - test/assertions.test.ts
   - test/assertion-index.test.ts
   - test/assertion-policy.test.ts
   - test/assertion-read.test.ts
   - test/assertion-evidence-budget.test.ts
+  - test/assertion-relink.test.ts
   - test/fixtures/temporal-design
 ---
 
@@ -139,7 +141,7 @@ Scenario 5, coverage under the recommendation (A and B are in the coverage matri
 
 - Uncommitted: an appended entry answers immediately. The response counts journal files with changes not yet synced. Losing the vault directory before a sync loses those entries.
 - Deleted evidence note: evidence status `unavailable`. The assertion is still returned as a recorded claim.
-- Renamed or merged subject note: answers do not change, because subject ids do not depend on paths. The subject's note link reports `missing`, or `superseded` with the current `superseded_by` value.
+- Renamed or merged subject note: answers do not change, because subject ids do not depend on paths. A vmem move or merge appends subject relinks after publishing the note, and the subject link follows the new path. External renames still report `missing`; supersede still reports `superseded`.
 - Assertion removal: `retract` excludes it for every `as_of` at or after the retraction; `purge` removes its payload and leaves a verifiable tombstone.
 - SQLite cache deleted: a rebuild returns identical answers to Q1 through Q10.
 - External edit of a journal line: that line and every later line of the same file are reported `untrusted` and excluded.
@@ -470,7 +472,7 @@ Proposed `test/assertions.test.ts` with synthetic fixtures under `test/fixtures/
 - T8 clock regression: refused with `CLOCK`, nothing appended. Also refused: a local revision whose clock is behind a parent synced from another clone's segment. A synced revision recorded before its parent is answered at its parent's effective time, flagged `clockInverted`, and never counted at a cutoff before its parent.
 - T9 rebuild: deleting the SQLite index and rebuilding yields byte-identical JSON for every T1 query.
 - T10 policy: denied evidence returns `withheld` with no path, quote or hash; deleted or purged evidence returns `unavailable`; a denied `assertions/` path refuses reads (V06); secrets and PII are refused at append and withheld at read after a policy change.
-- T11 identity: vmem move and merge of a subject note leave answers unchanged and report `missing` or `superseded` links.
+- T11 identity: vmem move and merge of a subject note leave answers unchanged and relink the subject to the new or retained note; a failure after publication is reported without rolling back the note. Earlier as-of reads retain the prior path.
 - T12 purge: preview, fingerprint and confirm; the chain still verifies; purged entries show `unavailable` and count in `coverage.purged`; a stale fingerprint is refused; an interrupted rewrite leaves the segment intact and a retry completes it; the derived index holds no purged payload after confirm.
 - T13 compatibility: note writes, reads, lint and the note index behave the same with and without `assertions/`; `vmem sync` stages `assertions/` only after the P2 change.
 - T14 bounds and transport: each bound refuses with guidance; escape-heavy Unicode responses stay within 48 KiB with continuation.
@@ -516,7 +518,7 @@ Recorded on issue 237 on 2026-11-19.
 - O2: every assertion carries at least one evidence entry or `source` reference.
 - O3: when current policy withholds evidence, only that evidence is withheld; the assertion is still returned.
 - O4: the directory is `assertions/` at the vault root. vmem changes no Obsidian settings.
-- O5: in v1, vmem move and merge do not remap subject notes. A moved or merged subject reports `missing` or `superseded`.
+- O5: vmem move and merge append subject relinks after the note write. Relink stores an ordinary `subject` entry without parents and preserves its label; the latest entry within the as-of cutoff wins by effective record time, segment and sequence. External renames, delete and supersede do not relink.
 - O6: commands `vmem assert` and `vmem assertions`, MCP tools `vmem_assert` and `vmem_assertions`, with output following the issue 228 standard.
 
 ## Unverified items

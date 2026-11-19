@@ -168,12 +168,12 @@ test("T11 real vmem move and merge preserve answers while reporting their subjec
     const before = readAssertions(f.home, { vault: "test", at: "2026-01-01" }, { env: f.env });
     const operation = kind === "move" ? { op: "move" as const, from: "subject", to: "renamed" } : { op: "merge" as const, keep: "next", absorb: "subject" };
     const preview = applyWrite(f.home, { vault: "test", operation, channel: "cli" });
-    expect(preview.ok).toBe(true);
+    expect(preview.ok).toBe(true); expect(preview.assertions?.relinked).toEqual(["s:test"]);
     const applied = applyWrite(f.home, { vault: "test", operation, channel: "cli", confirm: true, fingerprint: preview.fingerprint });
-    expect(applied.applied).toBe(true);
+    expect(applied.applied).toBe(true); expect(applied.assertions?.relinked).toEqual(["s:test"]);
     const after = readAssertions(f.home, { vault: "test", at: "2026-01-01" }, { env: f.env });
     expect(after.items[0]?.value).toBe(before.items[0]?.value); expect(after.items[0]?.answer).toBe(before.items[0]?.answer);
-    expect(after.items[0]?.subjectNote?.status).toBe(kind === "move" ? "missing" : "superseded");
+    expect(after.items[0]?.subjectNote).toEqual({ path: kind === "move" ? "notes/renamed.md" : "notes/next.md", status: "present" });
   }
 });
 

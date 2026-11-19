@@ -21,6 +21,7 @@ import { sourceReferences, sourceWorkspaceRoot } from "./source.ts";
 import { appendLog, checkLogEvent } from "./vault-log.ts";
 import { screenContent, screenMetadata } from "./write-validation.ts";
 import type { WriteIssue } from "./write-types.ts";
+import { shellWord } from "./text-output.ts";
 import { canonical, sha256 } from "./writer.ts";
 
 export const ASSERTIONS_DIR = "assertions";
@@ -345,7 +346,7 @@ function states(kept: Iterable<Kept>): { assertions: Map<string, AssertionState>
     const { entry } = item;
     if (entry.op === "subject") {
       const subject = entry.payload?.subject;
-      if (typeof subject !== "string" || subjects.has(subject)) continue;
+      if (typeof subject !== "string") continue;
       subjects.set(subject, item);
       for (const parent of entry.parents ?? []) named.add(parent);
       continue;
@@ -369,6 +370,11 @@ function states(kept: Iterable<Kept>): { assertions: Map<string, AssertionState>
     state.retracted = state.heads.length === 1 && state.heads[0]!.entry.op === "retract";
   }
   return { assertions, subjects };
+}
+/** Current subjects attached to one note, computed from verified journal entries. */
+export function subjectsAtNote(journal: VerifiedJournal, note: string): string[] {
+  const { subjects } = states(resolveEntries(journal).kept.values());
+  return [...subjects].filter(([, value]) => value.entry.payload?.note === note).map(([subject]) => subject).sort();
 }
 /** Causal order: a parent's depth is always below its child's, so an entry is never processed before the one it revises. */
 const order = (a: Kept, b: Kept) => a.effective < b.effective ? -1 : a.effective > b.effective ? 1
@@ -453,6 +459,7 @@ export function evaluateAssertions(journal: VerifiedJournal, query: AssertionQue
 
 export type AssertOp =
   | { op: "declare"; subject: string; label?: string; note?: string }
+  | { op: "relink"; subject: string; note: string }
   | { op: "assert"; subject: string; relation: string; value: string; kind: "state" | "event"; from?: string; to?: string; held_on?: string; on?: string; evidence?: EvidenceEntry[]; source?: string[] }
   | { op: "revise"; id: string; expected_heads: string[]; value: string; kind: "state" | "event"; from?: string; to?: string; held_on?: string; on?: string; evidence?: EvidenceEntry[]; source?: string[] }
   | { op: "retract"; id: string; expected_heads: string[]; reason: typeof REASONS[number] };
@@ -476,6 +483,7 @@ function refuse(code: string, message: string, path?: string): never { throw new
 
 const OP_KEYS: Record<string, string[]> = {
   declare: ["op", "subject", "label", "note"],
+  relink: ["op", "subject", "note"],
   assert: ["op", "subject", "relation", "value", "kind", "from", "to", "held_on", "on", "evidence", "source"],
   revise: ["op", "id", "expected_heads", "value", "kind", "from", "to", "held_on", "on", "evidence", "source"],
   retract: ["op", "id", "expected_heads", "reason"],
@@ -561,20 +569,25 @@ function plan(ctx: Context, ops: unknown, journal: VerifiedJournal): Planned[] {
   if (bytes(canonical(ops)) > MAX_BATCH_BYTES) refuse("V09", `the canonical batch exceeds ${MAX_BATCH_BYTES} bytes; split it into smaller batches`);
   const resolved = resolveEntries(journal), { assertions, subjects } = states(resolved.kept.values());
   const declared = new Set(subjects.keys()), touched = new Set<string>(), reads: EvidenceReads = new Map(), planned: Planned[] = [];
+  const labels = new Map([...subjects].map(([subject, current]) => [subject, current.entry.payload?.label]));
   for (const [index, raw] of ops.entries()) {
     const at = `ops[${index}]`;
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) refuse("V01", `${at}: expected an object with op; send {op: declare|assert|revise|retract, ...}`);
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) refuse("V01", `${at}: expected an object with op; send {op: declare|relink|assert|revise|retract, ...}`);
     const op = raw as Record<string, unknown>, keys = OP_KEYS[op.op as string];
-    if (!keys) refuse("V01", `${at}: op must be declare, assert, revise or retract; correct the op name`);
+    if (!keys) refuse("V01", `${at}: op must be declare, relink, assert, revise or retract; correct the op name`);
     for (const key of Object.keys(op)) if (!keys.includes(key)) refuse("V01", `${at}: unknown field ${key.slice(0, 32)} for ${String(op.op)}; vmem assigns ids, times and hashes itself`);
     let entry: Planned;
-    if (op.op === "declare") {
+    if (op.op === "declare" || op.op === "relink") {
       if (typeof op.subject !== "string" || !SUBJECT.test(op.subject)) refuse("V01", `${at}: subject must match s:[a-z0-9][a-z0-9-]{0,63}; write s: then lowercase letters, digits and hyphens`);
-      if (declared.has(op.subject)) refuse("V01", `${at}: subject ${op.subject} is already declared; drop the declare op`);
+      if (op.op === "declare" && declared.has(op.subject)) refuse("V01", `${at}: subject ${op.subject} is already declared; use relink to change its note`);
+      if (op.op === "relink" && !declared.has(op.subject)) refuse("V01", `${at}: subject ${op.subject} is not declared; declare it before relinking`);
+      if (op.op === "relink" && op.note === undefined) refuse("V01", `${at}: relink needs a note path; supply notes/<stem>.md`);
       if (op.label !== undefined && (typeof op.label !== "string" || !op.label.trim() || [...op.label].length > MAX_LABEL_CHARS || /\p{Cc}/u.test(op.label) || !op.label.isWellFormed())) refuse("V01", `${at}: label must be 1..${MAX_LABEL_CHARS} characters without control characters; shorten it and remove control characters`);
       if (op.note !== undefined && (typeof op.note !== "string" || !/^notes\/[^/\\]+\.md$/.test(op.note) || /\p{Cc}/u.test(op.note))) refuse("V01", `${at}: note must be a flat notes/<stem>.md path of this vault; cite this vault's note by its notes/<stem>.md path`);
       declared.add(op.subject);
-      entry = { op: "subject", id: op.subject, payload: { subject: op.subject, ...(op.label !== undefined ? { label: op.label } : {}), ...(op.note !== undefined ? { note: op.note } : {}) } };
+      const label = op.op === "relink" ? labels.get(op.subject) : op.label;
+      labels.set(op.subject, label);
+      entry = { op: "subject", id: op.subject, payload: { subject: op.subject, ...(label !== undefined ? { label } : {}), ...(op.note !== undefined ? { note: op.note } : {}) } };
     } else if (op.op === "assert") {
       if (typeof op.subject !== "string" || !declared.has(op.subject)) refuse("V01", `${at}: subject ${String(op.subject).slice(0, 80)} is not declared; add a declare op earlier in this batch`);
       if (typeof op.relation !== "string" || !RELATION.test(op.relation)) refuse("V01", `${at}: relation must match [a-z0-9][a-z0-9-]{0,63}; write lowercase letters, digits and hyphens`);
@@ -693,6 +706,9 @@ function release(lock: { fd: number; file: string; ino: number; dev: number }, i
  * any byte is written. A dry run validates against the journal as read, without lock, append or `recordedAt`.
  */
 export function appendAssertions(home: string, request: AssertRequest, options: { env?: NodeJS.ProcessEnv; now?: Date } = {}): AssertReceipt {
+  return appendAssertionsInternal(home, request, options);
+}
+function appendAssertionsInternal(home: string, request: AssertRequest, options: { env?: NodeJS.ProcessEnv; now?: Date }, heldRoot?: string): AssertReceipt {
   const env = options.env ?? process.env;
   const receipt: AssertReceipt = { ok: false, applied: false, dryRun: request?.dryRun === true, segment: null, entries: [], recovery: [], issues: [], indexUpdated: false };
   let lock: ReturnType<typeof acquire> | undefined;
@@ -700,6 +716,7 @@ export function appendAssertions(home: string, request: AssertRequest, options: 
     if (!request || typeof request !== "object" || Object.keys(request).some(key => !["vault", "ops", "channel", "dryRun", "log"].includes(key))) refuse("V01", "unknown request option; send {vault, ops[, dryRun, log]}");
     if (request.dryRun !== undefined && typeof request.dryRun !== "boolean") refuse("V01", "dryRun must be a boolean");
     const ctx = context(home, request);
+    if (heldRoot && ctx.root !== heldRoot) refuse("V04", "registered vault root changed during relink; inspect the vault and retry the relink");
     if (request.log !== undefined) {
       const logIssues = checkLogEvent(home, { vault: request.vault, event: request.log, channel: ctx.channel }, env);
       if (logIssues.length) throw new Refused(logIssues.map(found => ({ ...found, message: `log event refused, nothing written: ${found.message}; fix the event fields (rules as for log append) or omit it` })));
@@ -711,7 +728,7 @@ export function appendAssertions(home: string, request: AssertRequest, options: 
       receipt.ok = true;
       return receipt;
     }
-    lock = acquire(ctx.root);
+    if (!heldRoot) lock = acquire(ctx.root);
     const journal = readJournal(ctx.root, ctx.config.denyPaths ?? []);
     const planned = plan(ctx, request.ops, journal);
     if (journal.entries + planned.length > MAX_JOURNAL_ENTRIES) refuse("V09", `the journal would exceed ${MAX_JOURNAL_ENTRIES} entries; appends refuse rather than rotate history`);
@@ -722,6 +739,12 @@ export function appendAssertions(home: string, request: AssertRequest, options: 
     if (chosen.note) receipt.recovery.push(chosen.note);
     const recordedAt = instant(options.now ?? new Date());
     clockCheck(planned, journal, chosen.report?.tail?.recordedAt, recordedAt);
+    const currentSubjects = states(resolveEntries(journal).kept.values()).subjects;
+    for (const entry of planned) if (entry.op === "subject") {
+      const current = currentSubjects.get(entry.id);
+      if (current && (recordedAt < current.effective || (recordedAt === current.effective && chosen.segment < current.entry.seg)))
+        refuse("CLOCK", `the writer clock cannot place the relink after the current subject entry (${current.effective}); wait until the next second or correct the system clock and retry`);
+    }
     // Lines: assert ids name the seq of their own entry in the chosen segment.
     const actor = actorOf(ctx.channel, env), base = chosen.report?.entries.length ?? 0, batchId = `${chosen.segment}:${base + 1}`;
     let prev = chosen.report?.tail?.hash ?? ZERO;
@@ -808,6 +831,36 @@ export function appendAssertions(home: string, request: AssertRequest, options: 
     receipt.log = appendLog(home, { vault: request.vault, event: request.log, channel: request.channel ?? "cli" }, { env });
   }
   return receipt;
+}
+
+/** Relink current subjects under one assertion lock, after the caller has published the note write. */
+export function relinkSubjects(home: string, request: { vault: string; from: string; to: string; channel: "cli" | "mcp"; planned: string[] }, options: { env?: NodeJS.ProcessEnv; now?: Date } = {}): { relinked: string[]; issue?: WriteIssue } {
+  const relinked: string[] = [], issues: WriteIssue[] = [];
+  let pending = [...request.planned], uncertain: string[] = [], lock: ReturnType<typeof acquire> | undefined;
+  try {
+    const ctx = context(home, request, "automatic subject relinking");
+    try { lstatSync(join(ctx.root, ASSERTIONS_DIR)); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { relinked };
+      throw error;
+    }
+    lock = acquire(ctx.root);
+    const locked = context(home, request, "automatic subject relinking");
+    if (locked.root !== ctx.root) throw new Error("registered vault root changed while acquiring the assertion lock");
+    pending = subjectsAtNote(readJournal(locked.root, locked.config.denyPaths ?? []), request.from);
+    while (pending.length) {
+      const batch = pending.slice(0, MAX_BATCH_OPS);
+      const receipt = appendAssertionsInternal(home, { vault: request.vault, channel: request.channel, ops: batch.map(subject => ({ op: "relink", subject, note: request.to })) }, options, ctx.root);
+      if (receipt.applied) { relinked.push(...batch); pending = pending.slice(batch.length); }
+      if (!receipt.ok) { if (receipt.applied) uncertain = batch; throw new Error(receipt.issues.map(issue => issue.message).join("; ") || "assertion append refused"); }
+      if (!receipt.applied) throw new Error("assertion append did not publish");
+    }
+  } catch (error) {
+    const cause = error instanceof Refused ? error.issues.map(issue => issue.message).join("; ") : error instanceof Error ? error.message : "assertion append failed";
+    const commands = (pending.length ? pending : uncertain).slice(0, MAX_BATCH_OPS).map(subject => ({ op: "relink", subject, note: request.to }));
+    const command = commands.length ? `printf '%s\\n' ${shellWord(JSON.stringify({ ops: commands }))} | vmem assert ${shellWord(request.vault)} --batch -` : `vmem assert ${shellWord(request.vault)} --batch -`;
+    issues.push({ code: "ASSERTIONS", severity: "warning", message: `note published but automatic relink failed (${cause}); ${uncertain.length ? "inspect the journal and run only for subjects still unlinked:" : commands.length ? "run" : "inspect the journal, supply relink operations on stdin, then run"} ${command}${pending.length > MAX_BATCH_OPS ? " and repeat for the remaining subjects" : ""}` });
+  } finally { if (lock) release(lock, issues); }
+  return { relinked, ...(issues.length ? { issue: issues[0] } : {}) };
 }
 
 // ---------------------------------------------------------------- purge (design: Retention and deletion, T12)
