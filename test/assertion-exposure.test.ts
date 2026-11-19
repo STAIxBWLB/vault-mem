@@ -313,6 +313,24 @@ test("MCP: an oversized exposure reply drops refs first, then rows with an omitt
   expect(tiny.refsOmitted).toBe(true);
 });
 
+test("MCP: a few thousand exposed rows are trimmed to the bound without a serialization per row", () => {
+  const rows = Array.from({ length: 8000 }, (_, index) => ({ assertion: `a:0123456789abcdef:${index + 1}`, segment: "0123456789abcdef", seq: index + 1, hash: "a".repeat(64),
+    commits: { count: 3, first: "b".repeat(40), last: "c".repeat(40) }, refs: ["refs/heads/main"], replaceable: true }));
+  const base = { vault: "test", scanned: { commits: 12, blobs: 12, bytes: 4096 }, clean: false as const, truncated: null, issues: ["the scan reads this local repository only"] };
+  const started = performance.now();
+  const trimmed = exposureReply({ ...base, exposed: rows }) as ExposureReceipt;
+  const elapsed = performance.now() - started;
+  expect(assertFrameBytes(trimmed, "result")).toBeLessThanOrEqual(48 * 1024);
+  expect(trimmed.refsOmitted).toBe(true);
+  // The rows it keeps are a prefix of the input, and the omitted count accounts for all the rest.
+  expect(trimmed.omitted).toBeGreaterThan(0);
+  expect(trimmed.exposed.length + trimmed.omitted!).toBe(rows.length);
+  expect(trimmed.exposed).toEqual(rows.slice(0, trimmed.exposed.length).map(row => ({ ...row, refs: [] })));
+  // Trimming row by row spends ~7 s on this input and halving answers in ~10 ms, so the bound is far above the fixed
+  // path and still well below the quadratic one.
+  expect(elapsed).toBeLessThan(2000);
+});
+
 test("X1: every purged entry is reported, and a purged revision resolves its assertion through parents", () => {
   const f = fixture();
   f.commit("notes only");
@@ -343,6 +361,21 @@ test("X1: a commit that touches another assertions/ path still counts as holding
   f.commit("purge the payload");
   const row = f.exposure().exposed[0]!;
   expect(row.commits).toEqual({ count: 2, first: payloadCommit, last: strayCommit });
+});
+
+test("X1: a note-only commit between the payload and the purge still counts as holding the line", () => {
+  const f = fixture();
+  f.commit("notes only");
+  const { id } = seed(f);
+  const payloadCommit = f.commit("journal with payload");
+  // Nothing under assertions/ changes here: the same segment blob, reached through a new root tree.
+  writeFileSync(join(f.notes, "subject.md"), "---\nstatus: active\ntype: note\n---\n# Subject\n\nedited between payload and purge\n");
+  const noteCommit = f.commit("note edit between payload and purge");
+  purge(f, id);
+  f.commit("purge the payload");
+  const row = f.exposure().exposed[0]!;
+  expect(row.commits).toEqual({ count: 2, first: payloadCommit, last: noteCommit });
+  expect(JSON.stringify(row)).not.toContain(CANARY);
 });
 
 test("writeReplaceFile refuses a scan with nothing replaceable and writes no file", () => {
