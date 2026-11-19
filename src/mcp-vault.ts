@@ -140,14 +140,21 @@ const str = (value: unknown): string | undefined => typeof value === "string" ? 
 
 /** Keep a `vmem_assertions_exposure` reply inside the 48 KiB frame bound: refs first, then rows with an omitted count. */
 export function exposureReply(reply: ExposureReceipt & { refused?: true }): unknown {
-  if (assertFrameBytes(reply, "result") <= ASSERT_FRAME_BYTES) return reply;
-  const stripped = { ...reply, exposed: reply.exposed.map(row => ({ ...row, refs: [] })), refsOmitted: true as const };
-  if (assertFrameBytes(stripped, "result") <= ASSERT_FRAME_BYTES) return stripped;
-  for (let keep = stripped.exposed.length - 1; keep >= 0; keep--) {
-    const candidate = { ...stripped, exposed: stripped.exposed.slice(0, keep), omitted: reply.exposed.length - keep };
-    if (assertFrameBytes(candidate, "result") <= ASSERT_FRAME_BYTES) return candidate;
+  const fits = (value: unknown) => assertFrameBytes(value, "result") <= ASSERT_FRAME_BYTES;
+  if (fits(reply)) return reply;
+  const rows = reply.exposed.map(row => ({ ...row, refs: [] }));
+  const stripped = { ...reply, exposed: rows, refsOmitted: true as const };
+  if (fits(stripped)) return stripped;
+  const keep = (count: number) => ({ ...stripped, exposed: rows.slice(0, count), omitted: reply.exposed.length - count });
+  if (!fits(keep(0))) return { ...reply, exposed: [], refsOmitted: true as const, omitted: reply.exposed.length };
+  // A longer prefix is never smaller, so the longest one that fits is found by halving: about a dozen serializations
+  // for a few thousand rows instead of one per row.
+  let low = 0, high = rows.length;
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (fits(keep(middle))) low = middle; else high = middle;
   }
-  return { ...reply, exposed: [], refsOmitted: true as const, omitted: reply.exposed.length };
+  return keep(low);
 }
 
 /**

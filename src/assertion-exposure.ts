@@ -28,7 +28,8 @@ const GIT_TIMEOUT_MS = 20_000;
 const LIST_BUFFER_BYTES = 16 * 1024 * 1024;
 /** Issue sentences kept in one receipt; a corrupt repository must not grow the reply without bound. */
 const ISSUE_LIMIT = 15;
-const SEGMENT_PATH = /^assertions\/[0-9a-f]{16}\.jsonl$/;
+/** Paths inside an `assertions` tree object, which `ls-tree <tree oid>` lists without the directory prefix. */
+const SEGMENT_NAME = /^[0-9a-f]{16}\.jsonl$/;
 const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const NO_PURGED_LINE = "the current verified segment no longer holds this entry's purged line, so there is no byte-for-byte replacement to write; restore or re-purge the assertion, then rerun exposure";
 const NOT_EXPRESSIBLE = "this line contains a newline, a carriage return, \"==>\" or a leading #, which git-filter-repo --replace-text cannot express literally; open the exposed line by hand in the fresh clone and remove its payload";
@@ -73,11 +74,11 @@ const expressible = (line: string) => line.length > 0 && !line.includes("\n") &&
 
 type GitOutcome = { status: number | null; stdout: Buffer; stderr: string };
 /** Hardened Git call: no pager, hooks, fsmonitor, external diff, prompts, lazy fetch or inherited Git directories. */
-function git(root: string, args: string[], env: NodeJS.ProcessEnv, maxBuffer = 1 << 16): GitOutcome {
+function git(root: string, args: string[], env: NodeJS.ProcessEnv, maxBuffer = 1 << 16, stdin?: string): GitOutcome {
   const argv = memoryGitArgv(["-c", "log.follow=false", "-c", "log.showSignature=false", "-c", "gpg.program=", "-C", root, ...args]);
   const safe = memoryGitEnv({ ...env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }, { repositoryIsolation: true, readOnlyDiagnostic: true });
   safe.GIT_LITERAL_PATHSPECS = "1";
-  const result = spawnSync(argv[0]!, argv.slice(1), { env: safe, timeout: GIT_TIMEOUT_MS, maxBuffer, stdio: ["pipe", "pipe", "pipe"] });
+  const result = spawnSync(argv[0]!, argv.slice(1), { env: safe, timeout: GIT_TIMEOUT_MS, maxBuffer, stdio: ["pipe", "pipe", "pipe"], ...(stdin === undefined ? {} : { input: stdin }) });
   if (result.error) {
     const code = (result.error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return { status: null, stdout: Buffer.alloc(0), stderr: "ENOENT" };
@@ -119,7 +120,7 @@ function purgedTargets(journal: VerifiedJournal, history: readonly AssertionItem
 }
 
 interface TreeBlob { oid: string; size: number }
-/** The `assertions/<16 hex>.jsonl` blobs of one tree from `ls-tree -r -l -z`, with the sizes it lists. */
+/** The `assertions/<16 hex>.jsonl` blobs of one `assertions/` tree from `ls-tree -r -l -z`, with the sizes it lists. */
 function treeBlobs(stdout: Buffer): TreeBlob[] {
   const blobs: TreeBlob[] = [];
   for (const record of text(stdout).split("\0")) {
@@ -128,12 +129,31 @@ function treeBlobs(stdout: Buffer): TreeBlob[] {
     if (tab < 0) continue;
     // `-l` pads the size column with spaces, so the fields are split on any whitespace.
     const [, type, oid, size] = record.slice(0, tab).split(/\s+/);
-    if (type !== "blob" || !oid || !SEGMENT_PATH.test(record.slice(tab + 1))) continue;
+    if (type !== "blob" || !oid || !SEGMENT_NAME.test(record.slice(tab + 1))) continue;
     const bytes = Number(size);
     if (!Number.isSafeInteger(bytes) || bytes < 0) continue;
     blobs.push({ oid, size: bytes });
   }
   return blobs;
+}
+
+/**
+ * Each commit's `assertions/` tree oid, resolved for every commit in one `cat-file --batch-check` call, or null when
+ * that call failed. A commit that changes no journal byte resolves to the tree it already had, which lets the deep
+ * listing be cached per tree instead of per commit.
+ */
+function assertionsTrees(root: string, env: NodeJS.ProcessEnv, commits: readonly string[]): Map<string, string> | null {
+  const out = git(root, ["cat-file", "--batch-check"], env, LIST_BUFFER_BYTES, commits.map(commit => `${commit}:${ASSERTIONS_DIR}\n`).join(""));
+  if (out.status !== 0) return null;
+  const lines = text(out.stdout).split("\n");
+  // One answer per query, in order: `<tree oid> tree <size>`, or `<query> missing` when the commit has no assertions/.
+  if (lines.length < commits.length) return null;
+  const found = new Map<string, string>();
+  for (const [index, commit] of commits.entries()) {
+    const [oid, type] = (lines[index] ?? "").split(" ");
+    if (type === "tree" && oid !== undefined && OID.test(oid)) found.set(commit, oid);
+  }
+  return found;
 }
 
 /** Ref names containing `commit`, resolved once per commit. Annotated tags are peeled by `for-each-ref` itself. */
@@ -219,10 +239,12 @@ export function scanAssertionExposure(home: string, request: ExposureRequest, op
   const refs = git(root, ["for-each-ref", "--format=%(refname)", "refs/heads", "refs/tags", "refs/remotes"], env, LIST_BUFFER_BYTES);
   if (refs.status !== 0) { issue("git could not list this repository's refs; the scan is incomplete and is not reported clean"); return scan; }
   if (!text(refs.stdout).trim()) { receipt.clean = true; return scan; }
-  const listed = git(root, ["rev-list", "--full-history", `--max-count=${EXPOSURE_COMMIT_BUDGET + 1}`, "--branches", "--tags", "--remotes", "--", ASSERTIONS_DIR], env, LIST_BUFFER_BYTES);
+  // Every reachable commit is visited, not only the ones that change `assertions/`: a note-only commit between the
+  // payload and the purge still holds the segment blob, and the receipt promises every commit that still holds it.
+  const listed = git(root, ["rev-list", `--max-count=${EXPOSURE_COMMIT_BUDGET + 1}`, "--branches", "--tags", "--remotes"], env, LIST_BUFFER_BYTES);
   if (listed.status !== 0) {
     const first = listed.stderr.split(/\r?\n/)[0] ?? "";
-    issue(`git could not list the commits that touch ${ASSERTIONS_DIR}/ (${first.slice(0, 200) || `exit ${listed.status}`}); the scan is incomplete and is not reported clean`);
+    issue(`git could not list this repository's reachable commits (${first.slice(0, 200) || `exit ${listed.status}`}); the scan is incomplete and is not reported clean`);
     return scan;
   }
   let commits = text(listed.stdout).split("\n").map(line => line.trim()).filter(line => OID.test(line));
@@ -230,17 +252,31 @@ export function scanAssertionExposure(home: string, request: ExposureRequest, op
     commits = commits.slice(0, EXPOSURE_COMMIT_BUDGET);
     receipt.truncated = `commit budget (${EXPOSURE_COMMIT_BUDGET} commits)`;
   }
+  const subtrees = assertionsTrees(root, env, commits);
+  if (!subtrees) {
+    issue("git could not resolve the assertions/ tree of these commits; the scan is incomplete and is not reported clean");
+    return scan;
+  }
   const byKey = new Map(targets.map(target => [key(target.entry), target]));
   const blobCache = new Map<string, { target: Target; line: string }[]>(), refCache = new Map<string, { refs: string[]; ok: boolean }>();
+  const treeCache = new Map<string, TreeBlob[]>();
   let incomplete = false;
   for (const commit of commits) {
-    const tree = git(root, ["ls-tree", "-r", "-l", "-z", commit, "--", ASSERTIONS_DIR], env, LIST_BUFFER_BYTES);
-    if (tree.status !== 0) {
-      incomplete = true;
-      issue(`git could not list ${ASSERTIONS_DIR}/ in commit ${commit.slice(0, 12)} (exit ${tree.status}); the scan is incomplete`);
-      continue;
+    const subtree = subtrees.get(commit);
+    // A commit that never had an `assertions/` tree holds no assertion line.
+    if (subtree === undefined) continue;
+    let blobs = treeCache.get(subtree);
+    if (!blobs) {
+      // The listing is per tree, not per commit: commits that leave the journal alone share one tree and one read.
+      const tree = git(root, ["ls-tree", "-r", "-l", "-z", subtree], env, LIST_BUFFER_BYTES);
+      if (tree.status !== 0) {
+        incomplete = true;
+        issue(`git could not list the assertions/ tree of commit ${commit.slice(0, 12)} (exit ${tree.status}); the scan is incomplete`);
+        continue;
+      }
+      blobs = treeBlobs(tree.stdout);
+      treeCache.set(subtree, blobs);
     }
-    const blobs = treeBlobs(tree.stdout);
     // The per-commit total is summed from the sizes Git lists, so the bound is crossed without reading a byte.
     if (blobs.reduce((sum, blob) => sum + blob.size, 0) > EXPOSURE_COMMIT_BYTES) { receipt.truncated ??= `64 MiB per-commit budget (commit ${commit.slice(0, 12)})`; continue; }
     receipt.scanned.commits++;
