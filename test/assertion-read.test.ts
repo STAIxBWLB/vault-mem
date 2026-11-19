@@ -193,3 +193,43 @@ test("MCP refuses a long request id before calling the assertion reader", async 
   expect(JSON.parse(frame)).toMatchObject({ id: null, error: { message: "Invalid request id" } });
   expect(existsSync(join(f.home, "indexes"))).toBe(false);
 });
+
+test("large overlap membership pages with items and stays within the frame bound", async () => {
+  const { entryHash, payloadHash } = await import("../src/assertions.ts"), { canonical } = await import("../src/writer.ts");
+  const f = fixture(), receipt = f.append([{ op: "declare", subject: "s:test" }], "2026-01-01T00:00:00Z");
+  expect(receipt.ok).toBe(true);
+  const file = join(f.vault, "assertions", `${receipt.segment}.jsonl`), first = readFileSync(file, "utf8").trimEnd();
+  let prev = JSON.parse(first).hash as string;
+  const lines = [first], count = 2600;
+  for (let seq = 2; seq <= count + 1; seq++) {
+    const payload = { subject: "s:test", relation: "role", value: `value-${seq}`, kind: "state", from: seq === 2 ? "unknown" : "2025", to: seq === 2 ? "2027-01-01" : "open", source: ["mem:fixture"], evidence: [] };
+    const entry = { v: 1, seg: receipt.segment!, seq, prev, payload_sha256: payloadHash(payload), recorded_at: "2026-01-01T00:00:00Z", channel: "cli" as const, actor: "person" as const, op: "assert" as const, batch: { id: `${receipt.segment}:${seq}`, size: 1, index: 0 }, payload };
+    const hash = entryHash(entry); lines.push(canonical({ ...entry, hash })); prev = hash;
+  }
+  writeFileSync(file, lines.join("\n") + "\n");
+  expect(Buffer.byteLength(JSON.stringify(Array.from({ length: count }, (_, i) => `a:${receipt.segment}:${i + 2}`)))).toBeGreaterThan(48 * 1024);
+  const firstPage = readAssertions(f.home, { vault: "test", at: "2026-01-01", subject: "s:test", relation: "role", limit: 1 }, { env: f.env });
+  expect(firstPage.items).toHaveLength(1); expect(firstPage.truncated).toBe(true);
+  expect(firstPage.overlaps).toEqual([{ subject: "s:test", relation: "role", ids: [firstPage.items[0]!.id], size: count, possible: true }]);
+  const next = readAssertions(f.home, { vault: "test", at: "2026-01-01", subject: "s:test", relation: "role", limit: 1, cursor: firstPage.continuation }, { env: f.env });
+  expect(next.overlaps).toEqual([{ subject: "s:test", relation: "role", ids: [next.items[0]!.id], size: count, possible: true }]);
+  expect(next.items[0]!.id).not.toBe(firstPage.items[0]!.id);
+  for (const page of [firstPage, next]) {
+    const frame = { jsonrpc: "2.0", id: "x".repeat(200), result: { content: [{ type: "text", text: JSON.stringify(page) }] } };
+    expect(Buffer.byteLength(JSON.stringify(frame)) + 1).toBeLessThanOrEqual(48 * 1024);
+  }
+});
+
+test("paging an overlap query recovers every member once", () => {
+  const f = fixture();
+  expect(f.append([{ op: "declare", subject: "s:test" }, ...Array.from({ length: 6 }, (_, i) => ({ op: "assert", subject: "s:test", relation: "role", value: `v${i}`, kind: "state", from: "2025", to: "open", source: ["mem:fixture"] }))], "2026-01-01T00:00:00Z").ok).toBe(true);
+  const ids = new Set<string>(); let cursor: string | undefined;
+  do {
+    const page = readAssertions(f.home, { vault: "test", at: "2026-01-01", subject: "s:test", relation: "role", limit: 2, ...(cursor ? { cursor } : {}) }, { env: f.env });
+    expect(page.overlaps?.[0]?.size).toBe(6);
+    expect(page.overlaps?.[0]?.ids).toEqual(page.items.map(item => item.id));
+    for (const id of page.overlaps![0]!.ids) { expect(ids.has(id)).toBe(false); ids.add(id); }
+    cursor = page.continuation;
+  } while (cursor);
+  expect(ids.size).toBe(6);
+});

@@ -24,7 +24,7 @@ export interface AssertionsReadResult {
   asOf: ReturnType<typeof evaluateAssertions>["asOf"]; pin: ReturnType<typeof evaluateAssertions>["pin"];
   coverage: ReturnType<typeof evaluateAssertions>["coverage"] & { unsynced: number | null; indexIssue?: string };
   items: (ScreenedAssertion & { subjectNote?: { path?: string; status: "present" | "missing" | "superseded"; supersededBy?: unknown } })[];
-  overlaps?: ReturnType<typeof evaluateAssertions>["overlaps"]; truncated: boolean; continuation?: string;
+  overlaps?: (ReturnType<typeof evaluateAssertions>["overlaps"][number] & { size: number })[]; truncated: boolean; continuation?: string;
 }
 const fail = (message: string, code = "V04"): never => { throw Object.assign(new Error(message), { code }); };
 const fits = (value: unknown) => Buffer.byteLength(JSON.stringify(JSON.stringify(value))) <= FRAME_LIMIT - FRAME_RESERVE;
@@ -135,7 +135,20 @@ export function readAssertions(home: string, request: AssertionsReadRequest, opt
   const budget: EvidenceReadBudget = { remainingBytes: 64 * 1024 * 1024, remainingFiles: 1000 }, reads: EvidenceReads = new Map();
   const subjectNotes = declaredNotes(journal, answer.asOf), notes = new Map<string, ReturnType<typeof noteStatus>>();
   const output: AssertionsReadResult = { schemaVersion: 1, basis: "assertion_journal", vault: vault.id, at: answer.at, asOf: answer.asOf, pin: answer.pin,
-    coverage: { ...answer.coverage, unsynced: unsynced(root, options.env ?? process.env), ...(indexIssue ? { indexIssue } : {}) }, items: [], ...(request.at ? { overlaps: answer.overlaps } : {}), truncated: false };
+    coverage: { ...answer.coverage, unsynced: unsynced(root, options.env ?? process.env), ...(indexIssue ? { indexIssue } : {}) }, items: [], ...(request.at ? { overlaps: [] } : {}), truncated: false };
+  const overlapById = new Map<string, typeof answer.overlaps[number]>();
+  for (const group of answer.overlaps) for (const id of group.ids) overlapById.set(id, group);
+  const pageOverlaps = () => {
+    const groups = new Map<typeof answer.overlaps[number], string[]>();
+    for (const item of output.items) {
+      const group = overlapById.get(item.id);
+      if (!group) continue;
+      const ids = groups.get(group) ?? [];
+      if (!ids.includes(item.id)) ids.push(item.id);
+      groups.set(group, ids);
+    }
+    return [...groups].map(([group, ids]) => ({ subject: group.subject, relation: group.relation, ids, size: group.ids.length, ...(group.possible ? { possible: true as const } : {}) }));
+  };
   const continuation = (next: number) => Buffer.from(JSON.stringify({ v: 1, binding, offset: next })).toString("base64url");
   if (!fits(output)) fail("assertions: journal coverage exceeds the 48 KiB response bound; narrow the journal or inspect its segments", "V09");
   for (let i = offset; i < answer.items.length && output.items.length < limit; i++) {
@@ -143,10 +156,12 @@ export function readAssertions(home: string, request: AssertionsReadRequest, opt
     let subjectNote: ReturnType<typeof noteStatus> | undefined;
     if (note) { subjectNote = notes.get(note); if (!subjectNote) { subjectNote = noteStatus(vault, note, config, budget); notes.set(note, subjectNote); } }
     output.items.push({ ...screenAssertion(item, vault, config, reads, budget), ...(subjectNote ? { subjectNote } : {}) });
+    if (output.overlaps) output.overlaps = pageOverlaps();
     const hasMore = i + 1 < answer.items.length;
     output.truncated = hasMore; if (hasMore) output.continuation = continuation(i + 1); else delete output.continuation;
     if (!fits(output)) {
       output.items.pop();
+      if (output.overlaps) output.overlaps = pageOverlaps();
       if (!output.items.length) fail("assertions: one result exceeds the 48 KiB response bound; narrow its evidence or query", "V09");
       output.truncated = true; output.continuation = continuation(i); break;
     }
