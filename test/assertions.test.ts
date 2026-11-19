@@ -1,17 +1,25 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addVault } from "../src/registry.ts";
-import { appendAssertions, assertFrameBytes, ASSERT_FRAME_BYTES, ASSERTIONS_LOCK, evaluateAssertions, readJournal, type Answer, type AssertReceipt, type AssertionAnswerSet, type VerifiedJournal } from "../src/assertions.ts";
+import { PassThrough } from "node:stream";
+import { CONFIG_FILE } from "../src/config.ts";
+import { addVault, loadRegistry } from "../src/registry.ts";
+import { appendAssertions, assertFrameBytes, ASSERT_FRAME_BYTES, ASSERTIONS_LOCK, asOfCutoff, evaluateAssertions, readJournal, type Answer, type AssertReceipt, type AssertionAnswerSet, type VerifiedJournal } from "../src/assertions.ts";
 import { run } from "../src/cli.ts";
-import { createVaultMcp } from "../src/mcp-vault.ts";
-import { argumentError } from "../src/mcp.ts";
+import { argumentError, FRAME_BYTES, serveMcp } from "../src/mcp.ts";
+import { assertReply, createVaultMcp } from "../src/mcp-vault.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : value && typeof value === "object" ? `{${Object.entries(value).sort(([x], [y]) => x.localeCompare(y)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}` : JSON.stringify(value);
+/** Rewrite one segment line and recompute its chained hash, so a forgery is a valid chain on its own. */
+function rehash(entry: Record<string, unknown>): string {
+  const { hash: _hash, payload: _payload, purged: _purged, ...hashed } = entry;
+  return canonical({ ...entry, hash: sha(canonical(hashed)) });
+}
 const CORPUS = JSON.parse(readFileSync(join(import.meta.dir, "fixtures/temporal-design/corpus.json"), "utf8")) as {
   batches: { entry: string; now: string; ops: Record<string, unknown>[] }[];
   scenario3: { columns: string[]; rows: Record<string, (Answer | undefined)[]> };
@@ -53,6 +61,17 @@ function loadCorpus(f: Fixture): Record<string, string> {
     batch.ops.forEach((raw, index) => { if (typeof raw.label === "string") ids[raw.label] = receipt.entries[index]!.id; });
   }
   return ids;
+}
+/** Drive the real stdio transport, so a bound is measured on the frames as they are sent and returned. */
+async function mcpSession(home: string, env: NodeJS.ProcessEnv, frames: (string | object)[]) {
+  const server = createVaultMcp(home, env), input = new PassThrough(), output = new PassThrough();
+  let text = "";
+  output.on("data", chunk => { text += chunk.toString(); });
+  const done = serveMcp({ tools: server.tools, handlers: server.handlers, input, output });
+  const init = [{ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } } }, { jsonrpc: "2.0", method: "notifications/initialized" }];
+  for (const frame of [...init, ...frames]) input.write((typeof frame === "string" ? frame : JSON.stringify(frame)) + "\n");
+  input.end(); await done;
+  return text.trim().split("\n").map(line => JSON.parse(line) as { error?: { code: number; message: string }; result?: { content: { text: string }[] } }).slice(1);
 }
 const pick = (answer: AssertionAnswerSet, id: string) => answer.items.filter(item => item.id === id);
 const yes = (answer: AssertionAnswerSet) => answer.items.filter(item => item.answer === "yes").map(item => item.value);
@@ -287,10 +306,7 @@ test("T8 clock: regression refused with CLOCK and nothing appended; synced inver
   const segC = forged.segment!, pathC = join(f.vault, "assertions", `${segC}.jsonl`);
   const entry = JSON.parse(readFileSync(pathC, "utf8")) as Record<string, unknown>;
   entry.recorded_at = "2026-04-20T00:00:00Z";
-  const { hash: _hash, payload: _payload, ...hashed } = entry;
-  const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : value && typeof value === "object" ? `{${Object.entries(value).sort(([x], [y]) => x.localeCompare(y)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}` : JSON.stringify(value);
-  entry.hash = sha(canonical(hashed));
-  writeFileSync(pathC, canonical(entry) + "\n");
+  writeFileSync(pathC, rehash(entry) + "\n");
   const j = f.journal();
   const current = pick(evaluateAssertions(j, {}), a)[0]!;
   expect(current).toMatchObject({ value: "b", clockInverted: true, recordedAt: "2026-04-20T00:00:00Z", effectiveRecordedAt: "2026-05-01T00:00:00Z" });
@@ -380,14 +396,43 @@ test("CLI and MCP share one implementation; MCP frames stay within 48 KiB", asyn
   const reply = await mcp.handlers.vmem_assert!(args) as AssertReceipt;
   expect(reply).toMatchObject({ ok: true, applied: true });
   expect(assertFrameBytes(reply, "result")).toBeLessThanOrEqual(ASSERT_FRAME_BYTES);
-  // Largest valid batch: 32 ops of escape-heavy values still fit in the request and reply bound or refuse with guidance.
-  const big = { vault: "mine", ops: Array.from({ length: 32 }, () => ({ op: "assert", subject: "s:a", relation: "r", value: "\"\\".repeat(500), kind: "state", from: "2026", to: "open", source: ["mem:y"] })) };
-  const refused = await mcp.handlers.vmem_assert!(big) as { refused: boolean; issues: { code: string; message: string }[] };
-  expect(assertFrameBytes(big)).toBeGreaterThan(ASSERT_FRAME_BYTES);
-  expect(refused).toMatchObject({ refused: true }); expect(refused.issues[0]!.message).toContain("split the batch");
+  // Largest valid batch: 32 declares still answer inside the reply bound.
   const fullReply = await mcp.handlers.vmem_assert!({ vault: "mine", ops: Array.from({ length: 32 }, (_, i) => ({ op: "declare", subject: `s:b${i}`, label: "😀".repeat(200) })) }) as AssertReceipt;
   expect(fullReply.ok).toBe(true);
   expect(assertFrameBytes(fullReply, "result")).toBeLessThanOrEqual(ASSERT_FRAME_BYTES);
+});
+
+test("J2: the request bound is measured on the frame as sent, and an oversized reply is trimmed without inviting a replay", async () => {
+  const f = fixture();
+  ok(f.append([{ op: "declare", subject: "s:a" }], "2026-01-01T00:00:00Z"));
+  const before = f.journal().entries, call = (id: number, args: unknown) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "vmem_assert", arguments: args } });
+  // The same arguments re-serialized measure far less than the frame the client actually sent.
+  const small = { vault: "mine", ops: [{ op: "declare", subject: "s:z" }] }, line = JSON.stringify(call(7, small));
+  expect(assertFrameBytes(small)).toBeLessThan(ASSERT_FRAME_BYTES);
+  const padded = line + " ".repeat(ASSERT_FRAME_BYTES - Buffer.byteLength(line) + 1);
+  expect(Buffer.byteLength(padded) + 1).toBeGreaterThan(ASSERT_FRAME_BYTES);
+  expect(Buffer.byteLength(padded) + 1).toBeLessThan(FRAME_BYTES);
+  // A real 32-op batch whose evidence pushes the frame itself over the bound is refused the same way.
+  const wide = { vault: "mine", ops: Array.from({ length: 32 }, () => ({ op: "assert", subject: "s:a", relation: "r", value: "x".repeat(1000), kind: "state", from: "2026", to: "open", evidence: [{ source: "vault/notes/src-note.md", sha256: sha(SOURCE), quote: "m".repeat(400) }] })) };
+  const wideLine = JSON.stringify(call(8, wide));
+  expect(Buffer.byteLength(wideLine) + 1).toBeGreaterThan(ASSERT_FRAME_BYTES);
+  expect(Buffer.byteLength(wideLine) + 1).toBeLessThan(FRAME_BYTES);
+  const [stuffed, oversized, accepted] = await mcpSession(f.home, f.env, [padded, call(8, wide), call(9, { vault: "mine", ops: [{ op: "declare", subject: "s:ok" }] })]);
+  for (const refused of [stuffed!, oversized!]) { expect(refused.error).toMatchObject({ code: -32600 }); expect(refused.error!.message).toContain("48 KiB"); }
+  expect(JSON.parse(accepted!.result!.content[0]!.text)).toMatchObject({ ok: true, applied: true });
+  expect(f.journal().entries).toBe(before + 1);
+  // A reply over the bound drops the rows, keeps the fact that the batch is on disk, and never invites a retry.
+  const row = (index: number) => ({ seq: index + 1, id: `a:0123456789abcdef:${index + 1}`, rev: 1, op: "assert" as const, hash: "a".repeat(64) });
+  const huge: AssertReceipt = { ok: true, applied: true, dryRun: false, segment: "0123456789abcdef", recordedAt: "2026-01-01T00:00:00Z",
+    entries: Array.from({ length: 32 }, (_, index) => row(index)), recovery: ["r".repeat(30_000)],
+    issues: [{ code: "V01", severity: "error", message: "m".repeat(30_000) }], indexUpdated: false };
+  expect(assertFrameBytes(huge, "result")).toBeGreaterThan(ASSERT_FRAME_BYTES);
+  const trimmed = assertReply(huge) as AssertReceipt, note = trimmed.issues.at(-1)!;
+  expect(trimmed).toMatchObject({ ok: true, applied: true, segment: "0123456789abcdef", entries: [], indexUpdated: false });
+  expect(assertFrameBytes(trimmed, "result")).toBeLessThanOrEqual(ASSERT_FRAME_BYTES);
+  expect(note).toMatchObject({ code: "LIMIT" });
+  expect(note.message).toContain("32 rows were appended to segment 0123456789abcdef");
+  expect(note.message).toContain("send smaller batches"); expect(note.message).not.toMatch(/retry/i);
 });
 
 test("journal reads are independent of the derived index and report an absent journal", () => {
@@ -397,4 +442,100 @@ test("journal reads are independent of the derived index and report an absent jo
   expect(evaluateAssertions(empty, { at: "2026-01-01" }).coverage.journal).toBe("absent");
   writeFileSync(join(f.vault, "assertions"), "not a dir");
   expect(() => f.journal()).toThrow(/plain directory/);
+});
+
+/** The only segment file of a fixture, and its lines parsed for tampering. */
+function segmentOf(f: Fixture): { file: string; lines: string[] } {
+  const [name] = readdirSync(join(f.vault, "assertions"));
+  const file = join(f.vault, "assertions", name!);
+  return { file, lines: readFileSync(file, "utf8").split("\n").filter(Boolean) };
+}
+/** Re-register the home so one absolute path is denied. */
+function denyPath(f: Fixture, path: string): void {
+  const config = loadRegistry(f.home); config.denyPaths = [path];
+  writeFileSync(join(f.home, CONFIG_FILE), JSON.stringify(config));
+}
+
+test("T7: a payload under a purged marker, a malformed marker and a foreign parent are untrusted", () => {
+  const three = (f: Fixture) => {
+    ok(f.append([{ op: "declare", subject: "s:p" }, { op: "assert", subject: "s:p", relation: "r", value: "a", kind: "state", from: "2026", to: "open", source: ["mem:p"] }], "2026-01-01T00:00:00Z"));
+    ok(f.append([{ op: "assert", subject: "s:p", relation: "r", value: "b", kind: "state", from: "2026", to: "open", source: ["mem:p"] }], "2026-01-03T00:00:00Z"));
+    return segmentOf(f);
+  };
+  const purge = { at: "2026-02-01T00:00:00Z", reason: "evidence_withdrawn" };
+  // 1. An edited payload that hides under a purged marker is forged content: neither `purged` nor `payload` is hashed.
+  const forged = fixture(), forgedSegment = three(forged), forgedRow = JSON.parse(forgedSegment.lines[2]!) as Record<string, any>;
+  forgedRow.payload.value = "FORGED"; forgedRow.purged = purge;
+  writeFileSync(forgedSegment.file, [...forgedSegment.lines.slice(0, 2), canonical(forgedRow), ...forgedSegment.lines.slice(3)].join("\n") + "\n");
+  const forgedAnswer = evaluateAssertions(forged.journal(), { history: true });
+  expect(forgedAnswer.coverage.untrusted).toEqual([{ segment: forgedRow.seg, seq: 3, reason: "a purged entry still carries a payload" }]);
+  expect(forgedAnswer.items.some(item => item.value === "FORGED")).toBe(false);
+  // 2. A well-formed purge drops only the payload, verifies with the same chain, and is counted as purged.
+  const purged = fixture(), purgedSegment = three(purged), purgedRow = JSON.parse(purgedSegment.lines[2]!) as Record<string, any>;
+  delete purgedRow.payload; purgedRow.purged = purge;
+  writeFileSync(purgedSegment.file, [...purgedSegment.lines.slice(0, 2), canonical(purgedRow)].join("\n") + "\n");
+  const purgedAnswer = evaluateAssertions(purged.journal(), { history: true });
+  expect(purgedAnswer.coverage.untrusted).toEqual([]); expect(purgedAnswer.coverage.purged).toBe(1);
+  expect(purgedAnswer.items.filter(item => item.purged).map(item => item.value)).toEqual([undefined]);
+  expect(purgedAnswer.items.filter(item => item.value !== undefined).map(item => item.value)).toEqual(["a"]);
+  // 3. The marker is exactly {at, reason}: a bad instant or an extra key is not a purge.
+  for (const [marker, name] of [[{ at: "2026-02-30T00:00:00Z", reason: "other" }, "instant"], [{ ...purge, extra: 1 }, "key"]] as const) {
+    const malformed = fixture(), segment = three(malformed), row = JSON.parse(segment.lines[2]!) as Record<string, any>;
+    delete row.payload; row.purged = marker;
+    writeFileSync(segment.file, [...segment.lines.slice(0, 2), canonical(row)].join("\n") + "\n");
+    expect([name, evaluateAssertions(malformed.journal(), {}).coverage.untrusted]).toEqual([name, [{ segment: row.seg, seq: 3, reason: "invalid purged" }]]);
+  }
+  // 4. A revision naming a parent that belongs to another assertion is untrusted: the named assertion keeps its own
+  // head, and the dropped revision leaves its real parent as the head it already was.
+  const foreign = fixture();
+  const first = ok(foreign.append([{ op: "declare", subject: "s:p" }, { op: "assert", subject: "s:p", relation: "r", value: "a", kind: "state", from: "2026", to: "open", source: ["mem:p"] }], "2026-01-01T00:00:00Z")).entries[1]!.id;
+  const other = ok(foreign.append([{ op: "assert", subject: "s:p", relation: "r2", value: "b", kind: "state", from: "2026", to: "open", source: ["mem:p"] }], "2026-01-02T00:00:00Z")).entries[0]!.id;
+  ok(foreign.append([{ op: "revise", id: first, expected_heads: heads(foreign, first), value: "c", kind: "state", from: "2026", to: "open", source: ["mem:p"] }], "2026-01-04T00:00:00Z"));
+  const segment = segmentOf(foreign), revise = JSON.parse(segment.lines.at(-1)!) as Record<string, any>;
+  revise.payload.id = other; revise.payload_sha256 = sha(canonical(revise.payload));
+  writeFileSync(segment.file, [...segment.lines.slice(0, -1), rehash(revise)].join("\n") + "\n");
+  const answer = evaluateAssertions(foreign.journal(), { history: true });
+  expect(answer.coverage.untrusted).toEqual([{ segment: revise.seg, seq: revise.seq, reason: "a parent belongs to another assertion" }]);
+  expect(pick(answer, first).map(item => item.value)).toEqual(["a"]); expect(pick(answer, other).map(item => item.value)).toEqual(["b"]);
+});
+
+test("write contract: absolute denyPaths refuse, a linked segment is ignored, and a post-write failure keeps applied", () => {
+  const f = fixture();
+  denyPath(f, join(f.root, "secret"));
+  const denied = f.append([{ op: "declare", subject: "s:d" }, { op: "assert", subject: "s:d", relation: "r", value: "v", kind: "state", from: "2026", to: "open", source: ["secret/x.md"] }], "2026-01-01T00:00:00Z");
+  expect(denied.issues[0]).toMatchObject({ code: "V06" }); expect(existsSync(join(f.vault, "assertions"))).toBe(false);
+  // A segment that is a link is never read: it is reported as ignored and the journal keeps its own entries.
+  const g = fixture(), first = ok(g.append([{ op: "declare", subject: "s:l" }], "2026-01-01T00:00:00Z")).segment!;
+  const outside = join(g.root, "outside.jsonl");
+  writeFileSync(outside, readFileSync(join(g.vault, "assertions", `${first}.jsonl`)));
+  symlinkSync(outside, join(g.vault, "assertions", "0123456789abcdef.jsonl"));
+  const journal = g.journal();
+  expect(journal.ignored).toEqual(["0123456789abcdef.jsonl"]);
+  expect(journal.segments.map(report => report.segment)).toEqual([first]);
+  expect(journal.entries).toBe(1);
+  // A failure after the bytes are in the segment reports the batch as applied and never offers a retry.
+  const i = fixture();
+  writeFileSync(join(i.home, "assertion-writers"), "not a directory");
+  const written = ok(i.append([{ op: "declare", subject: "s:w" }, { op: "assert", subject: "s:w", relation: "r", value: "v", kind: "state", from: "2026", to: "open", source: ["mem:w"] }], "2026-01-01T00:00:00Z"));
+  expect(written).toMatchObject({ ok: true, applied: true });
+  expect(written.issues[0]).toMatchObject({ code: "WRITER_RECORD", severity: "warning" });
+  expect(written.issues[0]!.message).toContain("the batch is appended");
+  expect(evaluateAssertions(i.journal(), {}).items.map(item => item.value)).toEqual(["v"]);
+});
+
+test.skipIf(process.getuid?.() === 0)("write contract: the lock names its own cause, not another writer", () => {
+  const f = fixture();
+  chmodSync(f.vault, 0o500);
+  try {
+    const blocked = f.append([{ op: "declare", subject: "s:k" }], "2026-01-01T00:00:00Z");
+    expect(blocked.issues[0]).toMatchObject({ code: "LOCK" });
+    expect(blocked.issues[0]!.message).toContain("EACCES"); expect(blocked.issues[0]!.message).toContain("read-only mount");
+    expect(blocked.issues[0]!.message).not.toContain("held by another writer");
+  } finally { chmodSync(f.vault, 0o700); }
+});
+
+test("n1: as_of on the last representable day keeps its own last second", () => {
+  expect(asOfCutoff("9999-12-31")).toEqual({ requested: "9999-12-31", cutoff: "9999-12-31T23:59:59Z", cutoffInclusive: true });
+  expect(asOfCutoff("9999-12-30")).toEqual({ requested: "9999-12-30", cutoff: "9999-12-31T00:00:00Z", cutoffInclusive: false });
+  expect(asOfCutoff("2026-04-10")).toEqual({ requested: "2026-04-10", cutoff: "2026-04-11T00:00:00Z", cutoffInclusive: false });
 });
