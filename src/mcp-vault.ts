@@ -2,7 +2,7 @@ import { readAssertions, ASSERTIONS_PAGE_LIMIT } from "./assertion-read.ts";
 import { vaultBrief } from "./vault-brief.ts";
 import { applyProposal, confirmProposalReconciliation, listProposals, previewProposalApply, previewProposalReject, reconcileProposal, rejectProposal, showProposal, submitProposal, type ProposalContext } from "./proposal-provider.ts";
 import { evidenceReport } from "./evidence.ts";
-import { appendAssertions, assertFrameBytes, ASSERT_FRAME_BYTES, type AssertReceipt } from "./assertions.ts";
+import { appendAssertions, assertFrameBytes, ASSERT_FRAME_BYTES, purgeAssertions, type AssertReceipt } from "./assertions.ts";
 import { explainGraphPath } from "./graph-evidence.ts";
 import { createSpecMcp } from "./mcp-spec.ts";
 import { SPEC_COMMANDS } from "./spec-command-table.ts";
@@ -51,7 +51,7 @@ const proposalOperation = object({ op: { type: "string", enum: ["create", "patch
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_brief", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_history", "vmem_changes", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_graph_explain", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_evidence", "vmem_stats", "vmem_proposal_submit", "vmem_proposal_list", "vmem_proposal_show", "vmem_proposal_apply", "vmem_proposal_reject", "vmem_proposal_reconcile", "vmem_assert", "vmem_assertions", ...SPEC_COMMANDS.map(item => item.name)] as const;
+  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_graph_explain", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_evidence", "vmem_stats", "vmem_proposal_submit", "vmem_proposal_list", "vmem_proposal_show", "vmem_proposal_apply", "vmem_proposal_reject", "vmem_proposal_reconcile", "vmem_assert", "vmem_assertions", "vmem_assertions_purge", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Server `initialize` instructions: purpose, navigation order and the write contract. Pinned by a test, under 400 bytes. */
 export const VMEM_INSTRUCTIONS = "vmem is a vault of durable, linked knowledge: notes with frontmatter, wiki-links and an append-only log. Search first with vmem_search, then read the best match with vmem_read, using section for one H2. Writes are validated and receipted: a refusal lists issues, and a failure after publication can leave changes behind, so read the receipt and its issues before retrying.";
@@ -109,6 +109,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_assert", "Append one all-or-nothing batch of 1..32 temporal assertion operations (declare, assert, revise, retract) to the vault's append-only assertions/ journal; the MCP form of `vmem assert`. vmem assigns ids, rev, recorded_at and hashes. Each assert or revise needs evidence (path sources verified at append) or source references; revise and retract need expected_heads equal to the current head set. Writes no note; a log line only with log. dryRun validates without lock or append. Requires write=mcp. Request and reply stay within 48 KiB.",
       object({ vault, ops: { type: "array", minItems: 1, maxItems: 32, items: ASSERT_OP }, dryRun: { type: "boolean" }, log: logEvent }, ["ops"]), "write"),
     tool("vmem_assertions", "Read verified temporal assertions with current policy and bounded pages. The journal is the source of truth; results include a verified pin and coverage. Pass continuation as cursor.", object({ vault, subject: string(66), relation: string(64), at: string(10), asOf: string(20), history: { type: "boolean" }, limit: integer(1, ASSERTIONS_PAGE_LIMIT), cursor: string(512) })),
+    tool("vmem_assertions_purge", "Two-step purge of one assertion's payloads from the append-only journal: without confirm it returns the affected entries, segment counts and a fingerprint and writes nothing. confirm=true with that fingerprint rewrites each affected segment through a temporary file and a rename under assertions.lock, removes payload, keeps payload_sha256 and every hashed field, and adds purged {at, reason}, so the chain still verifies; reads then show the assertion as unavailable and count it in coverage.purged. The reason stays in the journal. Bytes in Git history, other clones or remotes need a history rewrite outside vmem. Requires write=mcp.", object({ vault, id: string(40), reason: string(200), ...twoStep }, ["id", "reason"]), "confirm"),
   ];
 }
 type Issue = { code: string; severity: "error"; message: string };
@@ -205,6 +206,10 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_list: args => read(args, index => index.list(str(args.prefix) ?? "", (args.limit as number | undefined) ?? 100, str(args.cursor))),
     // Registry is reloaded per call so the source root is rebound on every verification.
     vmem_assertions: args => readAssertions(home, { vault: pick(args).id, ...(str(args.subject) ? { subject: str(args.subject)! } : {}), ...(str(args.relation) ? { relation: str(args.relation)! } : {}), ...(str(args.at) ? { at: str(args.at)! } : {}), ...(str(args.asOf) ? { asOf: str(args.asOf)! } : {}), ...(args.history === true ? { history: true } : {}), ...(typeof args.limit === "number" ? { limit: args.limit } : {}), ...(str(args.cursor) ? { cursor: str(args.cursor)! } : {}) }, { env }),
+    vmem_assertions_purge: args => {
+      const receipt = purgeAssertions(home, { vault: pick(args).id, id: str(args.id)!, reason: str(args.reason)!, channel: "mcp", ...twoStep(args) }, { env });
+      return receipt.ok || receipt.applied ? receipt : { ...receipt, refused: true };
+    },
     vmem_evidence: args => { const registry = loadRegistry(home), spec = registry.vaults.find(v => v.id === pick(args).id); if (!spec) throw Object.assign(new Error("unknown vault id; list registered vaults with vmem status"), { code: "V04" }); return evidenceReport(spec, str(args.path)!, registry.denyPaths ?? []); },
     vmem_assert: args => {
       const receipt = appendAssertions(home, { vault: pick(args).id, ops: args.ops, channel: "mcp", dryRun: args.dryRun === true, ...(args.log ? { log: args.log as LogEvent } : {}) }, { env });

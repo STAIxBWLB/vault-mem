@@ -10,6 +10,7 @@ import { randomBytes } from "node:crypto";
 import { closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
+import { assertionIndexPath, rebuildAssertionIndex } from "./assertion-index.ts";
 import { unenforceablePii, type VaultSpec, type VmemConfig } from "./config.ts";
 import { parseEvidence, verifyEvidenceEntry, type EvidenceEntry, type EvidenceReads } from "./evidence.ts";
 import { AGENT_MARKERS } from "./log-format.ts";
@@ -538,12 +539,12 @@ function support(op: Record<string, unknown>, at: string, vault: VaultSpec, conf
 
 interface Planned { op: EntryOp; payload: Record<string, unknown>; parents?: string[]; id: string; target?: string }
 interface Context { vault: VaultSpec; config: VmemConfig; root: string; channel: "cli" | "mcp" }
-function context(home: string, request: AssertRequest): Context {
+function context(home: string, request: { vault: string; channel?: "cli" | "mcp" }, verb = "assertion appends"): Context {
   const config = loadRegistry(home), vault = config.vaults.find(item => item.id === request.vault);
   if (!vault) refuse("V04", "unknown vault id; list registered vaults with vmem status");
   const channel = request.channel ?? "cli";
   if (channel !== "cli" && channel !== "mcp") refuse("POLICY", "unknown write channel; use cli or mcp");
-  if (vault.write === "none" || (channel === "mcp" && vault.write !== "mcp")) refuse("POLICY", `vault write policy (${vault.write}) refuses assertion appends over ${channel}; change the policy with vmem vaults add or use an allowed channel`);
+  if (vault.write === "none" || (channel === "mcp" && vault.write !== "mcp")) refuse("POLICY", `vault write policy (${vault.write}) refuses ${verb} over ${channel}; change the policy with vmem vaults add or use an allowed channel`);
   const unenforceable = unenforceablePii(vault);
   if (unenforceable) refuse("PII_POLICY", unenforceable);
   let root: string;
@@ -803,6 +804,141 @@ export function appendAssertions(home: string, request: AssertRequest, options: 
   }
   if (receipt.applied && request.log !== undefined) {
     receipt.log = appendLog(home, { vault: request.vault, event: request.log, channel: request.channel ?? "cli" }, { env });
+  }
+  return receipt;
+}
+
+// ---------------------------------------------------------------- purge (design: Retention and deletion, T12)
+
+export const PURGE_LIST_LIMIT = 100;
+export interface PurgeRequest { vault: string; id: string; reason: string; confirm?: boolean; fingerprint?: string; channel?: "cli" | "mcp" }
+export interface PurgeReceipt {
+  ok: boolean; applied: boolean; preview: boolean; vault: string; assertion: string; reason: string;
+  /** Recorded in every `purged` marker this purge writes; absent from a preview. */
+  at?: string; fingerprint: string;
+  entries: { segment: string; seq: number; op: EntryOp; hash: string }[];
+  segments: { segment: string; entries: number; bytes: number; after: number }[];
+  /** Entries that already carried a purge marker and were left as they are. */
+  alreadyPurged: number; omitted: number;
+  recovery: string[];
+  issues: WriteIssue[];
+}
+const PURGE_KEYS = ["vault", "id", "reason", "confirm", "fingerprint", "channel"];
+
+/** Every verified entry of one assertion, resolved through `parents` so a purged revision keeps its identity. */
+function assertionEntries(journal: VerifiedJournal, id: string): JournalEntry[] {
+  const { kept } = resolveEntries(journal);
+  return [...kept.values()].filter(item => item.assertionId === id).map(item => item.entry)
+    .sort((a, b) => a.seg < b.seg ? -1 : a.seg > b.seg ? 1 : a.seq - b.seq);
+}
+/**
+ * The value a preview hands to confirm: the assertion, the reason, every entry hash and each affected segment's
+ * verified length and chain tail. `at` is left out because confirm assigns it, and the rewrite itself is derived
+ * from these bytes, so a segment that changed cannot pass with an old fingerprint.
+ */
+function purgeFingerprint(root: string, id: string, reason: string, entries: readonly JournalEntry[], journal: VerifiedJournal): string {
+  const segments = [...new Set(entries.map(entry => entry.seg))].sort().map(segment => {
+    const report = journal.segments.find(value => value.segment === segment);
+    return [segment, report?.verifiedBytes ?? 0, report?.tail?.hash ?? ZERO];
+  });
+  return sha256(canonical({ purge: 1, root, assertion: id, reason, entries: entries.map(entry => entry.hash).sort(), segments }));
+}
+
+/**
+ * Remove an assertion's payloads in two steps (design: Retention and deletion). A preview changes nothing and
+ * returns a fingerprint; confirm rewrites each affected segment through a sibling file and a rename under
+ * `assertions.lock`, drops `payload`, keeps `payload_sha256` and every hashed field, and adds `purged`.
+ */
+export function purgeAssertions(home: string, request: PurgeRequest, options: { env?: NodeJS.ProcessEnv; now?: Date } = {}): PurgeReceipt {
+  const receipt: PurgeReceipt = { ok: false, applied: false, preview: request?.confirm !== true, vault: String(request?.vault ?? ""), assertion: String(request?.id ?? ""), reason: String(request?.reason ?? ""), fingerprint: "", entries: [], segments: [], alreadyPurged: 0, omitted: 0, recovery: [], issues: [] };
+  let lock: ReturnType<typeof acquire> | undefined;
+  try {
+    if (!request || typeof request !== "object" || Array.isArray(request) || Object.keys(request).some(key => !PURGE_KEYS.includes(key))) refuse("V01", "unknown purge option; send {vault, id, reason[, confirm, fingerprint]}");
+    if (request.confirm !== undefined && typeof request.confirm !== "boolean") refuse("V01", "confirm must be a boolean; omit it for a preview");
+    if (request.confirm === true && typeof request.fingerprint !== "string") refuse("V01", `confirm needs the fingerprint the preview returned; rerun the preview and pass --fingerprint`);
+    if (request.confirm !== true && request.fingerprint !== undefined) refuse("V01", "a fingerprint is only used with confirm; drop it for a preview");
+    if (request.fingerprint !== undefined && !HEX64.test(request.fingerprint)) refuse("V01", "fingerprint must be the 64-character value a preview returned; rerun the preview");
+    const reason = request.reason;
+    if (typeof reason !== "string" || !reason.trim() || [...reason].length > 200 || /\p{Cc}/u.test(reason) || !reason.isWellFormed())
+      refuse("V01", "reason must be 1..200 characters of well-formed text without control characters; it stays in the journal, so keep it free of sensitive content");
+    if (typeof request.id !== "string" || !ASSERTION_ID.test(request.id)) refuse("V01", "assertion id must look like a:<16 lowercase hex>:<seq>; list ids with vmem assertions <vault> --history");
+    const id = request.id, ctx = context(home, { vault: request.vault, channel: request.channel }, "assertion purges");
+    const read = () => readJournal(ctx.root, ctx.config.denyPaths ?? []);
+    const prepare = (journal: VerifiedJournal) => {
+      const broken = journal.segments.find(segment => segment.untrusted || segment.unsupported);
+      if (broken) refuse("V09", `segment ${broken.segment} fails verification from seq ${(broken.untrusted ?? broken.unsupported)!.seq}; purge rewrites verified segments only. Restore the file from Git, or delete the segment after checking it, then retry`);
+      const found = assertionEntries(journal, id);
+      if (!found.length) refuse("V01", `no verified journal entry belongs to ${id}; list assertion ids with vmem assertions ${request.vault} --history`);
+      const remaining = found.filter(entry => entry.purged === undefined);
+      if (!remaining.length) refuse("V01", `${id} is already purged (${JSON.stringify(found.find(entry => entry.purged)!.purged)}); there is no payload left to remove`);
+      return { journal, found, remaining, fingerprint: purgeFingerprint(ctx.root, id, reason, remaining, journal) };
+    };
+    let plan = prepare(read());
+    receipt.fingerprint = plan.fingerprint;
+    receipt.alreadyPurged = plan.found.length - plan.remaining.length;
+    receipt.omitted = Math.max(0, plan.remaining.length - PURGE_LIST_LIMIT);
+    receipt.entries = plan.remaining.slice(0, PURGE_LIST_LIMIT).map(entry => ({ segment: entry.seg, seq: entry.seq, op: entry.op, hash: entry.hash }));
+    receipt.segments = [...new Set(plan.remaining.map(entry => entry.seg))].sort().map(segment => {
+      const report = plan.journal.segments.find(value => value.segment === segment)!;
+      return { segment, entries: plan.remaining.filter(entry => entry.seg === segment).length, bytes: report.verifiedBytes, after: report.verifiedBytes };
+    });
+    if (request.confirm !== true) { receipt.ok = true; return receipt; }
+    if (request.fingerprint !== plan.fingerprint) refuse("V09", `stale or missing purge fingerprint for ${id}; the journal changed since that preview. Run vmem assertions purge ${request.vault} ${id} --reason again and confirm with the fingerprint it returns`);
+    lock = acquire(ctx.root);
+    plan = prepare(read());
+    if (lock && plan.fingerprint !== receipt.fingerprint) refuse("V09", `the journal changed while the purge waited for assertions.lock; ${id} was not rewritten. Request a fresh preview and confirm again`);
+    const at = instant(options.now ?? new Date()), dir = join(ctx.root, ASSERTIONS_DIR), marker = { at, reason };
+    for (const segment of receipt.segments.map(value => value.segment)) {
+      const report = plan.journal.segments.find(value => value.segment === segment)!;
+      const file = join(dir, `${segment}.jsonl`);
+      const data = readBounded(file, MAX_SEGMENT_BYTES + MAX_BATCH_BYTES * 4);
+      if (typeof data === "string") refuse("V09", `segment ${segment} could not be reread (${data}); restore it from Git before purging`);
+      if (data.length < report.verifiedBytes) refuse("CONCURRENT", `segment ${segment} shrank while it was read; nothing was rewritten, retry the purge`);
+      const lines = data.subarray(0, report.verifiedBytes).toString("utf8").split("\n");
+      const targets = new Map(plan.remaining.filter(entry => entry.seg === segment).map(entry => [entry.seq, entry]));
+      const next: string[] = [];
+      for (let index = 0; index < lines.length - 1; index++) {
+        const entry = targets.get(index + 1);
+        if (!entry) { next.push(lines[index]!); continue; }
+        const { payload: _payload, purged: _purged, ...hashed } = entry as unknown as Record<string, unknown>;
+        next.push(canonical({ ...hashed, purged: marker }));
+      }
+      const buffer = Buffer.from(next.map(line => line + "\n").join(""), "utf8");
+      const temporary = join(dir, `.${segment}.jsonl.${randomBytes(6).toString("hex")}.tmp`);
+      let fd: number;
+      try { fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644); }
+      catch { refuse("IO", `the purge could not create a temporary file in ${ASSERTIONS_DIR}; check free space and directory permissions, then retry`); }
+      try { writeFileSync(fd, buffer); fsyncSync(fd); } finally { closeSync(fd); }
+      try { renameSync(temporary, file); }
+      catch (caught) {
+        try { unlinkSync(temporary); } catch { receipt.issues.push({ code: "CLEANUP", severity: "warning", message: `${temporary.slice(dir.length + 1)} could not be removed; delete it from ${ASSERTIONS_DIR} once no purge is running` }); }
+        throw caught;
+      }
+      syncDirectory(dir);
+      // The segment is rewritten from here on: report it, so a failure on a later segment never reads as "nothing happened".
+      receipt.applied = true; receipt.at = at;
+      const written = receipt.segments.find(value => value.segment === segment)!;
+      written.after = buffer.length;
+      if (data.length > report.verifiedBytes) receipt.recovery.push(`dropped ${data.length - report.verifiedBytes} unverified bytes after seq ${report.tail?.seq ?? 0} of segment ${segment} while purging`);
+    }
+    // The disposable projection stores canonical entries, payloads included, so it is replaced with one built from
+    // the purged journal while the lock is still held. Its removal comes first, so a failed rebuild leaves no copy.
+    const roots = ctx.config.vaults.map(value => value.path), index = assertionIndexPath(home, ctx.root, roots);
+    try {
+      try { unlinkSync(index); } catch (caught) { if ((caught as NodeJS.ErrnoException).code !== "ENOENT") throw caught; }
+      rebuildAssertionIndex(home, ctx.root, read(), roots);
+    } catch (caught) {
+      receipt.issues.push({ code: "INDEX", severity: "warning", message: `the payloads are gone from the segments but the derived index at ${index} was not refreshed (${(caught as NodeJS.ErrnoException).code ?? (caught as Error).message}); delete that file and the next read rebuilds it` });
+    }
+    receipt.ok = true;
+  } catch (caught) {
+    if (caught instanceof Refused) receipt.issues.push(...caught.issues);
+    else if (caught instanceof Coded) receipt.issues.push(err(caught.code, caught.message));
+    else if (receipt.applied) receipt.issues.push(err("DURABILITY", `the purge rewrote ${receipt.segments.filter(value => value.after !== value.bytes).length} of ${receipt.segments.length} segment(s) and a later step failed (${(caught as NodeJS.ErrnoException).code ?? (caught as Error).message}); the remaining entries are still in the journal. Request a fresh preview and confirm again to finish`));
+    else receipt.issues.push(err("IO", "assertion purge failed on file I/O; check permissions and disk space, then retry"));
+    receipt.ok = false;
+  } finally {
+    if (lock) release(lock, receipt.issues);
   }
   return receipt;
 }
