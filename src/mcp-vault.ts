@@ -1,6 +1,7 @@
 import { vaultBrief } from "./vault-brief.ts";
 import { applyProposal, confirmProposalReconciliation, listProposals, previewProposalApply, previewProposalReject, reconcileProposal, rejectProposal, showProposal, submitProposal, type ProposalContext } from "./proposal-provider.ts";
 import { evidenceReport } from "./evidence.ts";
+import { appendAssertions, assertFrameBytes, ASSERT_FRAME_BYTES } from "./assertions.ts";
 import { explainGraphPath } from "./graph-evidence.ts";
 import { createSpecMcp } from "./mcp-spec.ts";
 import { SPEC_COMMANDS } from "./spec-command-table.ts";
@@ -32,6 +33,13 @@ const tool = (name: string, description: string, inputSchema: Record<string, unk
 const RELATIONS = ["supports", "contradicts", "extends", "applies-to", "context-for"];
 const LOG_TYPES = ["INGEST", "ROUTE", "EXTRACT", "CONNECT", "DIGEST", "LEARN", "LINT", "TASK", "GRAPH", "SYNC", "RETHINK", "SOURCE"];
 const note = string(1024), sha = { type: "string", minLength: 64, maxLength: 64 };
+const evidenceItem = object({ source: string(512), sha256: sha, quote: string(2048), section: string(1024) }, ["source", "sha256", "quote"]);
+const dateValue = string(10);
+/** One assertion operation; the closed op-specific checks follow in `appendAssertions`. */
+const ASSERT_OP = object({ op: { type: "string", enum: ["declare", "assert", "revise", "retract"] }, subject: string(66), label: string(200), note: string(1024), relation: string(64), value: string(1024),
+  kind: { type: "string", enum: ["state", "event"] }, from: dateValue, to: dateValue, held_on: dateValue, on: dateValue, id: string(40),
+  expected_heads: { type: "array", minItems: 1, maxItems: 32, items: sha }, reason: { type: "string", enum: ["recorded_in_error", "evidence_withdrawn", "other"] },
+  evidence: { type: "array", minItems: 1, maxItems: 16, items: evidenceItem }, source: { type: "array", minItems: 1, maxItems: 32, items: string(512) } }, ["op"]);
 const oid = { type: "string", minLength: 40, maxLength: 64, pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" };
 const logEvent = LOG_EVENT_SCHEMA;
 const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLength: 4096, maxItems: 64, items: { type: ["string", "number", "boolean"], maxLength: 1024 } };
@@ -42,7 +50,7 @@ const proposalOperation = object({ op: { type: "string", enum: ["create", "patch
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_brief", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_history", "vmem_changes", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_graph_explain", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_evidence", "vmem_stats", "vmem_proposal_submit", "vmem_proposal_list", "vmem_proposal_show", "vmem_proposal_apply", "vmem_proposal_reject", "vmem_proposal_reconcile", ...SPEC_COMMANDS.map(item => item.name)] as const;
+  "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_graph_explain", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_evidence", "vmem_stats", "vmem_proposal_submit", "vmem_proposal_list", "vmem_proposal_show", "vmem_proposal_apply", "vmem_proposal_reject", "vmem_proposal_reconcile", "vmem_assert", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Server `initialize` instructions: purpose, navigation order and the write contract. Pinned by a test, under 400 bytes. */
 export const VMEM_INSTRUCTIONS = "vmem is a vault of durable, linked knowledge: notes with frontmatter, wiki-links and an append-only log. Search first with vmem_search, then read the best match with vmem_read, using section for one H2. Writes are validated and receipted: a refusal lists issues, and a failure after publication can leave changes behind, so read the receipt and its issues before retrying.";
@@ -97,6 +105,8 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_proposal_apply", "Preview an apply, then confirm with its fingerprint. An interrupted apply remains apply_unknown and is never replayed automatically.", object({ vault, id: string(36), ...twoStep }, ["id"]), "confirm"),
     tool("vmem_proposal_reject", "Preview rejection with a reason, then confirm with the returned fingerprint; rejection does not change vault notes or log.", object({ vault, id: string(36), reason: string(4096), ...twoStep }, ["id", "reason"]), "confirm"),
     tool("vmem_proposal_reconcile", "Preview an uncertain apply using the target and durable writer receipt; confirm only with the preview fingerprint. Matching content alone does not prove attribution.", object({ vault, id: string(36), ...twoStep }, ["id"]), "confirm"),
+    tool("vmem_assert", "Append one all-or-nothing batch of 1..32 temporal assertion operations (declare, assert, revise, retract) to the vault's append-only assertions/ journal; the MCP form of `vmem assert`. vmem assigns ids, rev, recorded_at and hashes. Each assert or revise needs evidence (path sources verified at append) or source references; revise and retract need expected_heads equal to the current head set. Writes no note; a log line only with log. dryRun validates without lock or append. Requires write=mcp. Request and reply stay within 48 KiB.",
+      object({ vault, ops: { type: "array", minItems: 1, maxItems: 32, items: ASSERT_OP }, dryRun: { type: "boolean" }, log: logEvent }, ["ops"]), "write"),
   ];
 }
 type Issue = { code: string; severity: "error"; message: string };
@@ -184,6 +194,11 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_list: args => read(args, index => index.list(str(args.prefix) ?? "", (args.limit as number | undefined) ?? 100, str(args.cursor))),
     // Registry is reloaded per call so the source root is rebound on every verification.
     vmem_evidence: args => { const registry = loadRegistry(home), spec = registry.vaults.find(v => v.id === pick(args).id); if (!spec) throw Object.assign(new Error("unknown vault id; list registered vaults with vmem status"), { code: "V04" }); return evidenceReport(spec, str(args.path)!, registry.denyPaths ?? []); },
+    vmem_assert: args => {
+      if (assertFrameBytes(args) > ASSERT_FRAME_BYTES) return refusal("V09", `request exceeds ${ASSERT_FRAME_BYTES} bytes as an encoded JSON-RPC frame; split the batch into smaller vmem_assert calls`);
+      const receipt = appendAssertions(home, { vault: pick(args).id, ops: args.ops, channel: "mcp", dryRun: args.dryRun === true, ...(args.log ? { log: args.log as LogEvent } : {}) }, { env });
+      return receipt.ok || receipt.applied ? receipt : { ...receipt, refused: true };
+    },
     vmem_stats: args => vaultStats(home, pick(args).id, { expectedVault: pick(args), ...(typeof args.days === "number" ? { days: args.days } : {}) }),
     vmem_links: args => read(args, index => {
       const direction = str(args.direction) ?? "both", limit = (args.limit as number | undefined) ?? 50;

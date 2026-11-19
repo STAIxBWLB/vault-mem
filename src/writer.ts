@@ -24,7 +24,8 @@ export const MUTATION_LOCK = "mutation.lock";
 export { MAX_WRITE_BYTES } from "./write-types.ts";
 const MAX_MERGE_ACK_BYTES = 224 * 1024;
 export function sha256(text: string): string { return createHash("sha256").update(text).digest("hex"); }
-function canonical(value: unknown): string {
+/** Canonical JSON: sorted keys, undefined members dropped. The assertion journal hashes and stores this form. */
+export function canonical(value: unknown): string {
   if (value === undefined) return "null";
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") return `{${Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}`;

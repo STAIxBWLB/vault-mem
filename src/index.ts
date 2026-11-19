@@ -11,6 +11,8 @@ export { VaultIndex, MAX_NOTE_BYTES, MAX_RESULTS, MAX_READ_BYTES } from "./vault
 export type { IndexedNote, SearchOptions, SearchResult } from "./vault-index.ts";
 export { readHistory, readRevision, readChanges, historyText, revisionText, changesText, HISTORY_PAGE_LIMIT, HISTORY_SCAN_LIMIT, CHANGES_PAGE_LIMIT, SNAPSHOT_TRANSPORT_BYTES } from "./vault-history.ts";
 export type { HistoryRequest, RevisionRequest, ChangesRequest, HistoryResult, RevisionResult, ChangesResult, SnapshotCoverage, SnapshotCapability } from "./vault-history.ts";
+export { readJournal, verifySegment, evaluateAssertions, asOfCutoff, appendAssertions, assertFrameBytes, ASSERTIONS_DIR, ASSERTIONS_LOCK, ASSERTION_SCHEMA_VERSION, ASSERT_FRAME_BYTES, MAX_BATCH_OPS } from "./assertions.ts";
+export type { AssertRequest, AssertReceipt, AssertOp, AssertionAnswerSet, AssertionItem, AssertionQuery, Answer, JournalEntry, SegmentReport, VerifiedJournal } from "./assertions.ts";
 export { applyWrite, sha256, MUTATION_LOCK, MAX_WRITE_BYTES } from "./writer.ts";
 export { submitProposal, listProposals, showProposal, previewProposalApply, applyProposal, previewProposalReject, rejectProposal, reconcileProposal, confirmProposalReconciliation } from "./proposal-provider.ts";
 export type { ProposalSubmitRequest, ProposalContext, ProposalSubmitted, ProposalListRequest, ProposalPage, ProposalShowRequest, ProposalView, ProposalApplyPreview, ProposalApplyResult, ProposalRejectPreview, ProposalReconciliation } from "./proposal-provider.ts";
