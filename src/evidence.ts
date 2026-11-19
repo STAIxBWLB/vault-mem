@@ -13,7 +13,7 @@ export const EVIDENCE_SCHEMA_VERSION = 1;
 export const MAX_EVIDENCE_ENTRIES = 16, MAX_EVIDENCE_BYTES = 16 * 1024, MAX_QUOTE_BYTES = 2048, MAX_SECTION_BYTES = 1024;
 export type EvidenceStatus = "verified" | "stale" | "missing" | "ambiguous" | "unverified_external" | "unsupported";
 export type EvidenceReason = "sha_mismatch" | "source_not_found" | "quote_not_found" | "section_not_found" | "section_ambiguous" | "quote_ambiguous"
-  | "outside_vault" | "denied" | "oversized" | "invalid_utf8" | "not_a_file" | "unresolved_source_root" | "invalid_metadata" | "external_reference";
+  | "outside_vault" | "denied" | "oversized" | "invalid_utf8" | "not_a_file" | "unresolved_source_root" | "invalid_metadata" | "external_reference" | "read_budget";
 export interface EvidenceResult {
   index: number;
   source: string | null;
@@ -79,12 +79,16 @@ export function parseEvidence(value: unknown, source: unknown): { entries: (Evid
 }
 
 /** Read a plain file without following a final symlink, refusing over the note bound. */
-function boundedRead(file: string): Buffer | "not_a_file" | "oversized" {
+export interface EvidenceReadBudget { remainingBytes: number; remainingFiles: number }
+function boundedRead(file: string, budget?: EvidenceReadBudget): Buffer | "not_a_file" | "oversized" | "read_budget" {
+  if (budget && budget.remainingBytes <= 0) return "read_budget";
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile()) return "not_a_file";
     if (stat.size > MAX_NOTE_BYTES) return "oversized";
+    if (budget && stat.size > budget.remainingBytes) return "read_budget";
+    if (budget) budget.remainingBytes -= stat.size;
     const buffer = Buffer.alloc(stat.size); let read = 0;
     while (read < stat.size) { const n = readSync(fd, buffer, read, stat.size - read, null); if (!n) break; read += n; }
     if (fstatSync(fd).size !== stat.size) return "oversized";
@@ -117,10 +121,14 @@ function occurrences(haystack: string, needle: string): { count: number; first: 
 /** Verify one parsed entry. Every call reads the source afresh; nothing is cached. */
 /** Per-run read memo keyed by resolved real path. Callers create one per run; it is never kept across calls. */
 export type EvidenceReads = Map<string, ReturnType<typeof boundedRead>>;
-export function verifyEvidenceEntry(vault: VaultSpec, entry: EvidenceEntry, index: number, denyPaths: readonly string[] = [], reads?: EvidenceReads): EvidenceResult {
+export function verifyEvidenceEntry(vault: VaultSpec, entry: EvidenceEntry, index: number, denyPaths: readonly string[] = [], reads?: EvidenceReads, budget?: EvidenceReadBudget): EvidenceResult {
   const ref = sourceReferences(entry.source)[0]!;
   const base: EvidenceResult = { index, source: ref.value, kind: ref.kind, ...(entry.section !== undefined ? { section: entry.section } : {}), expectedSha256: entry.sha256, status: "unsupported" };
   if (ref.kind !== "path") return { ...base, status: "unverified_external", reason: "external_reference" };
+  if (budget) {
+    if (budget.remainingFiles <= 0 || budget.remainingBytes <= 0) return { ...base, reason: "read_budget" };
+    budget.remainingFiles--;
+  }
   const root = sourceWorkspaceRoot(vault);
   if (!root) return { ...base, reason: "unresolved_source_root" };
   const located = resolveVaultNote(vault, root, ref.value, denyPaths);
@@ -128,10 +136,10 @@ export function verifyEvidenceEntry(vault: VaultSpec, entry: EvidenceEntry, inde
   let data: ReturnType<typeof boundedRead>;
   try {
     const cached = reads?.get(located.path);
-    data = cached ?? boundedRead(located.path);
+    data = cached ?? boundedRead(located.path, budget);
     if (!cached) reads?.set(located.path, data);
   } catch { return { ...base, status: "missing", reason: "source_not_found" }; }
-  if (data === "not_a_file" || data === "oversized") return { ...base, reason: data };
+  if (data === "not_a_file" || data === "oversized" || data === "read_budget") return { ...base, reason: data };
   let text: string;
   try { text = utf8.decode(data); } catch { return { ...base, reason: "invalid_utf8" }; }
   const observed = sha256(data), seen = { ...base, observedSha256: observed };
@@ -182,7 +190,7 @@ function noteFile(vault: VaultSpec, target: string, denyPaths: readonly string[]
  */
 export function evidenceReport(vault: VaultSpec, target: string, denyPaths: readonly string[] = []): EvidenceReport {
   const file = noteFile(vault, target, denyPaths), data = boundedRead(file);
-  if (data === "not_a_file" || data === "oversized") throw Object.assign(new Error(`note: ${data === "oversized" ? "exceeds the 2 MiB read bound; split the note" : "not a regular file"}`), { code: "V09" });
+  if (typeof data === "string") throw Object.assign(new Error(`note: ${data === "oversized" ? "exceeds the 2 MiB read bound; split the note" : "not a regular file"}`), { code: "V09" });
   let text: string;
   try { text = utf8.decode(data); } catch { throw Object.assign(new Error(`note: not valid UTF-8; validate it with vmem check ${vault.id} <file>`), { code: "V01" }); }
   let fm: Record<string, unknown>;

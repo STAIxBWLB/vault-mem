@@ -9,7 +9,7 @@ import { canonical } from "./writer.ts";
 /** The index belongs to the configured home, never to the vault or its source journal. */
 export function assertionIndexPath(home: string, vaultRoot: string, protectedRoots: readonly string[] = [vaultRoot]): string {
   const root = realpathSync(vaultRoot), state = realpathSync(home);
-  for (const protectedRoot of protectedRoots) {
+  for (const protectedRoot of [vaultRoot, ...protectedRoots]) {
     const rel = relative(realpathSync(protectedRoot), state);
     if (!rel || (rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(rel)))
       throw new Error("assertion index: configured home is inside a vault; move VMEM_HOME outside every registered vault");
