@@ -3,6 +3,11 @@ id: temporal-assertions-design
 type: architecture
 title: Temporal assertions design
 status: active
+paths:
+  - src/assertions.ts
+  - src/assert-command.ts
+  - test/assertions.test.ts
+  - test/fixtures/temporal-design
 ---
 
 # Temporal assertions design
@@ -346,10 +351,10 @@ A purged line keeps every hashed field, drops `payload` and adds `"purged": {"at
 ### Write contract
 
 - Proposed surface: `vmem assert <vault> --batch FILE|- [--dry-run] [--log JSON] [--json]` and MCP `vmem_assert` with the same schema. Final names must be reconciled with the CLI presentation work in issue 228.
-- Input is `{ops: [...]}` with 1 to 32 operations. The client never supplies `recorded_at`, `seg`, `seq`, `id`, `rev`, `prev`, `hash` or `actor`. `revise` and `retract` carry `expected_heads`, the hashes of the assertion's heads as the client read them (one hash unless it saw a `revisionConflict`). vmem records them as `parents`.
+- Input is `{ops: [...]}` with 1 to 32 operations. The client never supplies `recorded_at`, `seg`, `seq`, `id`, `rev`, `prev`, `hash` or `actor`. An input op `declare` is stored as journal entry op `subject`: the declaration is the entry that records a subject, so its stored `op` is `subject` and its payload is `{subject, label?, note?}`. `revise` and `retract` carry `expected_heads`, the hashes of the assertion's heads as the client read them (one hash unless it saw a `revisionConflict`). vmem records them as `parents`.
 - Validation runs before any append, and any error refuses the whole batch:
   - Vault write policy (`none`, `cli`, `mcp`), as in `src/writer.ts#applyWrite`.
-  - Shapes and bounds; the subject declared earlier or in the same batch; the target of `revise` or `retract` exists and is not retracted, and `expected_heads` equals its current head set in the local index. A stale or partial set is refused, naming the current heads and the next step: re-read the assertion and resend with every head. A partial set would leave a conflict silently unresolved.
+  - Shapes and bounds; the subject declared earlier or in the same batch; the target of `revise` or `retract` exists and is not retracted, and `expected_heads` equals its current head set computed from the verified segments under `assertions.lock` (the same read the append uses), never from the derived SQLite index, which is issue 251's surface and can lag the segments. A stale or partial set is refused, naming the current heads and the next step: re-read the assertion and resend with every head. A partial set would leave a conflict silently unresolved.
   - Temporal rules from the precision section.
   - Evidence in the issue 233 version 1 shape, each entry checked with `src/evidence.ts#verifyEvidenceEntry`. `src/evidence.ts#evidenceProblem` is not reused: its rule that every evidence source is also listed in the note `source` field has no counterpart in an assertion.
   - A path source is workspace-relative, resolved against `src/source.ts#sourceWorkspaceRoot` (the workspace that holds the vault registry), never against the vault. A vault note is therefore cited as, for example, `vault/notes/x.md`; a bare `notes/x.md` resolves outside the vault and fails.
