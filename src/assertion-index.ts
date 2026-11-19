@@ -7,10 +7,13 @@ import type { VerifiedJournal } from "./assertions.ts";
 import { canonical } from "./writer.ts";
 
 /** The index belongs to the configured home, never to the vault or its source journal. */
-export function assertionIndexPath(home: string, vaultRoot: string): string {
+export function assertionIndexPath(home: string, vaultRoot: string, protectedRoots: readonly string[] = [vaultRoot]): string {
   const root = realpathSync(vaultRoot), state = realpathSync(home);
-  const rel = relative(root, state);
-  if (!rel || (!rel.startsWith("..") && !isAbsolute(rel))) throw new Error("assertion index: configured home is inside the vault; move VMEM_HOME outside the vault");
+  for (const protectedRoot of protectedRoots) {
+    const rel = relative(realpathSync(protectedRoot), state);
+    if (!rel || (rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(rel)))
+      throw new Error("assertion index: configured home is inside a vault; move VMEM_HOME outside every registered vault");
+  }
   const digest = createHash("sha256").update(root).digest("hex");
   return join(state, "indexes", `assertions-${digest}-v1.sqlite`);
 }
@@ -19,8 +22,8 @@ export function assertionIndexPath(home: string, vaultRoot: string): string {
  * Rebuild from verified entries in a fixed order. The caller must re-read the journal for each request and must
  * never use this projection as proof of journal integrity or as a substitute for current read policy.
  */
-export function rebuildAssertionIndex(home: string, vaultRoot: string, journal: VerifiedJournal): string {
-  const target = assertionIndexPath(home, vaultRoot), dir = join(realpathSync(home), "indexes");
+export function rebuildAssertionIndex(home: string, vaultRoot: string, journal: VerifiedJournal, protectedRoots: readonly string[] = [vaultRoot]): string {
+  const target = assertionIndexPath(home, vaultRoot, protectedRoots), dir = join(realpathSync(home), "indexes");
   try { mkdirSync(dir, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
   const info = lstatSync(dir);
   if (info.isSymbolicLink() || !info.isDirectory()) throw new Error("assertion index: indexes is not a plain directory; replace the link or file with a directory in VMEM_HOME");

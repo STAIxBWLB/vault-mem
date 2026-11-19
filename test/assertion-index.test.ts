@@ -27,7 +27,8 @@ test("a verified journal builds a private, byte-identical disposable SQLite proj
 
 test("the index refuses an in-vault home and a linked indexes directory", () => {
   const f = fixture(), inside = join(f.vault, "home"); mkdirSync(inside);
-  expect(() => assertionIndexPath(inside, f.vault)).toThrow("inside the vault");
+  expect(() => assertionIndexPath(inside, f.vault)).toThrow("inside a vault");
+  expect(() => assertionIndexPath(inside, f.home, [f.home, f.vault])).toThrow("inside a vault");
   symlinkSync(f.vault, join(f.home, "indexes"));
   expect(() => rebuildAssertionIndex(f.home, f.vault, f.journal)).toThrow("not a plain directory");
   expect(existsSync(join(f.vault, "assertions"))).toBe(false);
