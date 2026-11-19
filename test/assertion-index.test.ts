@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertionIndexPath, rebuildAssertionIndex } from "../src/assertion-index.ts";
+import { assertionIndexPath, indexedJournal, rebuildAssertionIndex } from "../src/assertion-index.ts";
 import type { JournalEntry, VerifiedJournal } from "../src/assertions.ts";
 
 const roots: string[] = [];
@@ -23,6 +23,9 @@ test("a verified journal builds a private, byte-identical disposable SQLite proj
   try { expect(db.query("SELECT segment, seq, entry FROM entries").all()).toEqual([{ segment: "1234567890abcdef", seq: 1, entry: expect.stringContaining('"subject":"s:fixture"') }]); } finally { db.close(); }
   rmSync(file); rebuildAssertionIndex(f.home, f.vault, f.journal);
   expect(readFileSync(file).equals(first)).toBe(true);
+  expect(indexedJournal(file, f.journal)).toEqual(f.journal);
+  const altered = new Database(file); try { altered.exec("UPDATE entries SET entry = '{}' WHERE seq = 1"); } finally { altered.close(); }
+  expect(indexedJournal(file, f.journal)).toBe(f.journal);
 });
 
 test("the index refuses an in-vault home and a linked indexes directory", () => {

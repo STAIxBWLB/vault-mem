@@ -539,3 +539,31 @@ test("n1: as_of on the last representable day keeps its own last second", () => 
   expect(asOfCutoff("9999-12-30")).toEqual({ requested: "9999-12-30", cutoff: "9999-12-31T00:00:00Z", cutoffInclusive: false });
   expect(asOfCutoff("2026-04-10")).toEqual({ requested: "2026-04-10", cutoff: "2026-04-11T00:00:00Z", cutoffInclusive: false });
 });
+
+test("T9 assertion reads match the corpus evaluation after index removal and rebuild", async () => {
+  const { readAssertions } = await import("../src/assertion-read.ts");
+  const f = fixture(); loadCorpus(f);
+  const requests = [
+    { at: "2026-04-05", asOf: "2026-04-06", subject: "s:person-a", relation: "role" },
+    { at: "2026-04-05", asOf: "2026-04-11", subject: "s:person-a", relation: "role" },
+    { at: "2026-04-01", asOf: "2026-04-11", subject: "s:person-a", relation: "role" },
+    { at: "2026-04-05", asOf: "2026-04-10", subject: "s:person-a", relation: "role" },
+    { at: "2026-04-05", asOf: "2026-04-10T08:59:59Z", subject: "s:person-a", relation: "role" },
+    { at: "2026-04-05", asOf: "2026-04-10T09:00:00Z", subject: "s:person-a", relation: "role" },
+    { at: "2026-04-05", asOf: "2025-09-01", subject: "s:person-a", relation: "role" },
+    { at: "2026-03-30", asOf: "2026-04-11", subject: "s:person-a", relation: "role" },
+    { at: "2026-03-30", asOf: "2026-05-03", subject: "s:person-a", relation: "role" },
+    { at: "2026-05-20", subject: "s:person-a", relation: "team" },
+    { at: "2026-05-10", subject: "s:person-a", relation: "team" },
+    { history: true },
+    {},
+    ...Object.keys(CORPUS.scenario3.rows).map(at => ({ at })),
+  ];
+  for (const request of requests) {
+    const pure = evaluateAssertions(f.journal(), request), query = { vault: f.id, ...request, limit: 100 };
+    const first = readAssertions(f.home, query, { env: f.env });
+    expect(first.pin).toEqual(pure.pin); expect(first.items.map(item => [item.id, item.rev, item.answer, item.value])).toEqual(pure.items.map(item => [item.id, item.rev, item.answer, item.value]));
+    const indexes = join(f.home, "indexes"); rmSync(indexes, { recursive: true, force: true });
+    expect(readAssertions(f.home, query, { env: f.env })).toEqual(first);
+  }
+});

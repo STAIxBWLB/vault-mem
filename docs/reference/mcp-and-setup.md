@@ -53,7 +53,7 @@ The vault set is read once at startup: every tool's `vault` property is an enum 
 
 <!-- facts:mcp-tools -->
 
-`vmem mcp` lists 49 tools: `vmem_status`, `vmem_search`, `vmem_brief`, `vmem_read`, `vmem_read_many`, `vmem_list`, `vmem_links`, `vmem_history`, `vmem_changes`, `vmem_mocs`, `vmem_check`, `vmem_log_tail`, `vmem_create`, `vmem_patch`, `vmem_append`, `vmem_set_frontmatter`, `vmem_link`, `vmem_supersede`, `vmem_log_append`, `vmem_move`, `vmem_merge`, `vmem_delete`, `vmem_promote_from_amem`, `vmem_lint`, `vmem_graph_build`, `vmem_graph_neighbors`, `vmem_graph_path`, `vmem_graph_explain`, `vmem_promote`, `vmem_skills_mine`, `vmem_read_file`, `vmem_list_files`, `vmem_report`, `vmem_evidence`, `vmem_stats`, `vmem_proposal_submit`, `vmem_proposal_list`, `vmem_proposal_show`, `vmem_proposal_apply`, `vmem_proposal_reject`, `vmem_proposal_reconcile`, `vmem_assert`, `vmem_spec_get`, `vmem_spec_graph`, `vmem_spec_grep`, `vmem_spec_validate`, `vmem_spec_create`, `vmem_spec_update`, `vmem_spec_delete`.
+`vmem mcp` lists 50 tools: `vmem_status`, `vmem_search`, `vmem_brief`, `vmem_read`, `vmem_read_many`, `vmem_list`, `vmem_links`, `vmem_history`, `vmem_changes`, `vmem_mocs`, `vmem_check`, `vmem_log_tail`, `vmem_create`, `vmem_patch`, `vmem_append`, `vmem_set_frontmatter`, `vmem_link`, `vmem_supersede`, `vmem_log_append`, `vmem_move`, `vmem_merge`, `vmem_delete`, `vmem_promote_from_amem`, `vmem_lint`, `vmem_graph_build`, `vmem_graph_neighbors`, `vmem_graph_path`, `vmem_graph_explain`, `vmem_promote`, `vmem_skills_mine`, `vmem_read_file`, `vmem_list_files`, `vmem_report`, `vmem_evidence`, `vmem_stats`, `vmem_proposal_submit`, `vmem_proposal_list`, `vmem_proposal_show`, `vmem_proposal_apply`, `vmem_proposal_reject`, `vmem_proposal_reconcile`, `vmem_assert`, `vmem_assertions`, `vmem_spec_get`, `vmem_spec_graph`, `vmem_spec_grep`, `vmem_spec_validate`, `vmem_spec_create`, `vmem_spec_update`, `vmem_spec_delete`.
 
 <!-- /facts:mcp-tools -->
 
@@ -93,3 +93,5 @@ Apply is idempotent and touches only the `vmem` entry: other servers and setting
 - Actions: `delete`, `move`, `promote` (to an org vault) and `promote-from-amem` reuse the two-step MCP tools. Each first answers a preview with the planned changes; the write happens only after the console's confirm dialog, and only while the fingerprint still matches.
 - The provider calls the `vmem mcp` handlers in process, so the console has exactly the MCP rights: writes need a vault with `write: mcp`, and log lines carry the agent attribution.
 - The module is exported as `@staix/vault-mem/ui-plugin`. Lint results are cached for 60 seconds per vault.
+
+`vmem_assertions` is a read-only temporal journal query. Its `asOf`, `at`, `history`, `limit` and `cursor` parameters follow the assertion read contract in [reads](reads.md#temporal-assertions); it rechecks current policy and returns a bounded JSON-RPC response.

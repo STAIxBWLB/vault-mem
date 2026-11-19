@@ -1,3 +1,5 @@
+export { readAssertions, ASSERTIONS_PAGE_LIMIT } from "./assertion-read.ts";
+export type { AssertionsReadRequest, AssertionsReadResult, AssertionsReadOptions } from "./assertion-read.ts";
 export { resolveHome } from "./home.ts";
 export { parseConfig, parseVault, parseSpec, readConfig, CONFIG_FILE, MAX_CONFIG_BYTES } from "./config.ts";
 export type { VaultSpec, SpecSourceSpec, VmemConfig } from "./config.ts";

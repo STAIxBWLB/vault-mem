@@ -7,6 +7,7 @@ import { registryIds } from "./vault-log.ts";
 import { runAnalysisCommand } from "./analysis-commands.ts";
 import { runLogCommand } from "./log-commands.ts";
 import { runAssertCommand } from "./assert-command.ts";
+import { runAssertionsCommand } from "./assertions-command.ts";
 import { runOrgCommand } from "./org-commands.ts";
 import { isWriteCommand, runWriteCommand } from "./write-commands.ts";
 import { isReadCommand, runReadCommand } from "./read-commands.ts";
@@ -87,6 +88,7 @@ function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLA
   if (args[0] === "lint" || args[0] === "graph") return runAnalysisCommand(args[0],args.slice(1),resolveHome(env).home,env,text);
   if (args[0] === "promote" || args[0] === "sync") return runOrgCommand(args[0], args.slice(1), resolveHome(env).home, env, text);
   if (args[0] === "log") return runLogCommand(args.slice(1), resolveHome(env).home, env, text);
+  if (args[0] === "assertions") return runAssertionsCommand(args.slice(1), resolveHome(env).home, env, text);
   if (args[0] === "assert") return runAssertCommand(args.slice(1), resolveHome(env).home, env, text);
   if (isWriteCommand(args[0]!)) return runWriteCommand(args[0]!, args.slice(1), resolveHome(env).home, env, text);
   if (args[0] === "brief") return runBriefCommand(args.slice(1), resolveHome(env).home);

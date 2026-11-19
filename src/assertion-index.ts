@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, lstatSync, mkdirSync, openSync, realpathSync, renameSync, unlinkSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
-import type { VerifiedJournal } from "./assertions.ts";
+import { MAX_JOURNAL_BYTES, MAX_JOURNAL_ENTRIES, type JournalEntry, type VerifiedJournal } from "./assertions.ts";
 import { canonical } from "./writer.ts";
 
 /** The index belongs to the configured home, never to the vault or its source journal. */
@@ -47,4 +47,30 @@ export function rebuildAssertionIndex(home: string, vaultRoot: string, journal: 
     renameSync(temporary, target);
     return target;
   } finally { try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; } }
+}
+
+/**
+ * Read the projection only after verifying the journal. Compare every indexed entry with the verified bytes before
+ * using it, so a replaced, stale or corrupt cache can never become an authority over the source journal.
+ */
+export function indexedJournal(file: string, verified: VerifiedJournal): VerifiedJournal {
+  let db: Database | undefined;
+  try {
+    const stat = lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > MAX_JOURNAL_BYTES * 4) return verified;
+    db = new Database(file, { readonly: true });
+    const sizes = db.query("SELECT count(*) AS count, coalesce(sum(length(cast(entry AS blob))), 0) AS bytes FROM entries").get() as { count: number; bytes: number };
+    if (sizes.count !== verified.entries || sizes.count > MAX_JOURNAL_ENTRIES || sizes.bytes > MAX_JOURNAL_BYTES) return verified;
+    const rows = db.query("SELECT segment, seq, entry FROM entries ORDER BY segment, seq").all() as { segment: string; seq: number; entry: string }[];
+    const expected = verified.segments.flatMap(segment => segment.entries.map(entry => ({ segment: segment.segment, entry }))).sort((a, b) => a.segment < b.segment ? -1 : a.segment > b.segment ? 1 : a.entry.seq - b.entry.seq);
+    if (rows.length !== expected.length) return verified;
+    const entries = new Map<string, JournalEntry[]>();
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]!, source = expected[i]!;
+      if (row.segment !== source.segment || row.seq !== source.entry.seq || row.entry !== canonical(source.entry)) return verified;
+      const segmentEntries = entries.get(row.segment) ?? [];
+      segmentEntries.push(JSON.parse(row.entry) as JournalEntry); entries.set(row.segment, segmentEntries);
+    }
+    return { ...verified, segments: verified.segments.map(segment => ({ ...segment, entries: entries.get(segment.segment) ?? [] })) };
+  } catch { return verified; } finally { db?.close(); }
 }

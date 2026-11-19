@@ -6,7 +6,15 @@ status: active
 paths:
   - src/assertions.ts
   - src/assert-command.ts
+  - src/assertion-index.ts
+  - src/assertion-policy.ts
+  - src/assertion-read.ts
+  - src/assertions-command.ts
   - test/assertions.test.ts
+  - test/assertion-index.test.ts
+  - test/assertion-policy.test.ts
+  - test/assertion-read.test.ts
+  - test/assertion-evidence-budget.test.ts
   - test/fixtures/temporal-design
 ---
 

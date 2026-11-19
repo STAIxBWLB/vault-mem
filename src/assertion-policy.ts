@@ -32,13 +32,21 @@ function deniedSource(source: string, vault: VaultSpec, config: VmemConfig): boo
 export function screenAssertion(item: AssertionItem, vault: VaultSpec, config: VmemConfig, reads: EvidenceReads, budget: EvidenceReadBudget): ScreenedAssertion {
   const { value, evidence, source, ...safe } = item;
   const out: ScreenedAssertion = { ...safe };
-  if (value !== undefined) {
+  if (typeof value === "string") {
     const reason = withheld(value, vault, config);
     out.value = reason ? { withheld: reason } : value;
   }
-  if (source !== undefined) out.source = source.filter(entry => !deniedSource(entry, vault, config) && !withheld(entry, vault, config));
+  if (Array.isArray(source)) out.source = source.filter((entry): entry is string => typeof entry === "string" && !deniedSource(entry, vault, config) && !withheld(entry, vault, config));
   if (evidence !== undefined) {
-    const parsed = parseEvidence(evidence, source);
+    if (!Array.isArray(evidence)) { out.evidence = [{ status: "unsupported", reason: "invalid_metadata" }]; return out; }
+    // Journal entries add the write-time status; verify again and never treat that old status as current proof.
+    const entries = evidence.map(value => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+      const { status: _status, ...entry } = value as Record<string, unknown>;
+      return entry;
+    });
+    const evidenceSources = entries.flatMap(value => value && typeof value === "object" && "source" in value && typeof value.source === "string" ? [value.source] : []);
+    const parsed = entries.length ? parseEvidence(entries, evidenceSources.length ? evidenceSources : undefined) : { entries: [] };
     out.evidence = parsed.problem ? [{ status: "unsupported", reason: "invalid_metadata" }] : parsed.entries.map((entry, index) => {
       if ("problem" in entry) return { status: "unsupported", reason: "invalid_metadata" };
       if (deniedSource(entry.source, vault, config) || withheld(entry.source, vault, config) || withheld(entry.quote, vault, config) || (entry.section && withheld(entry.section, vault, config))) return { status: "withheld" };
