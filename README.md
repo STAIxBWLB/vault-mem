@@ -30,9 +30,9 @@ vmem tidy personal --all        # once after upgrading an existing vault: previe
 - **Home**: the registry and policies live in `vmem.config.json` under the vmem home: `VMEM_HOME`, else the `home` pointer in the default home's config, else the default home (`$AGENTHUB_HOME/vmem`, or `~/.agenthub/vmem`). Derived index caches live under the home, never inside a vault. Proposal records are durable home data, not a rebuildable cache: include the configured home in backups.
 - **Vault**: a directory with a flat `notes/` folder, an append-only `log` and optional `reports/` and `ops/`. Each vault has a `kind` (`personal` or `org`), a `write` policy (`mcp` allows CLI and MCP writes, `cli` CLI only, `none` no writes) and a PII policy (default `allow` for personal, `deny` for org).
 - **Notes**: frontmatter `type` is one of <!-- facts:note-types -->`insight`, `decision`, `observation`, `person`, `project`, `method`, `moc`, `reference`<!-- /facts:note-types -->; links are `[[wiki links]]` resolved by filename stem inside the same vault.
-- **Two-step changes**: move, delete, merge, tidy, promotion, sync and proposal decisions first return a preview with a fingerprint and change nothing; `--confirm --fingerprint <sha>` (MCP `confirm`, `fingerprint`) applies exactly that preview.
+- **Two-step changes**: move, delete, merge, tidy, promotion, sync, proposal decisions and assertion purges first return a preview with a fingerprint and change nothing; `--confirm --fingerprint <sha>` (MCP `confirm`, `fingerprint`) applies exactly that preview.
 - **Proposals**: opt-in create or exact-patch requests remain outside the vault and index until confirmed. Review and rejection do not authenticate a human; existing direct writes retain their policy. An interrupted apply remains `apply_unknown` until inspected, and is never replayed automatically.
-- **Assertions**: an optional `assertions/` directory holds an append-only, hash-chained journal of manually authored subject/relation/value assertions, each with its evidence and its record time. `vmem assert` appends a validated batch there and writes no note, so a note edit never rewrites history; `vmem sync` commits the segments like the log.
+- **Assertions**: an optional `assertions/` directory holds an append-only, hash-chained journal of manually authored subject/relation/value assertions, each with its evidence and its record time. `vmem assert` appends a validated batch there and writes no note, so a note edit never rewrites history; `vmem assertions` and `vmem_assertions` read it with current policy, and `vmem sync` commits the segments like the log. `vmem assertions purge` removes one assertion's payloads: `payload` goes, `payload_sha256` and every hashed field stay, `purged: {at, reason}` is added, the chain still verifies, and reads then leave the assertion out of answers, show it `unavailable` in history and count it in `coverage.purged`.
 - **Receipts**: an applied write can still report a later failure (log append, cleanup, sync). Read `applied`, `logged` and `issues` before retrying, and never repeat an applied write blindly.
 - **Git**: each vault is its own repository. Only `vmem sync` commits or pushes, and nothing runs on a schedule.
 
@@ -47,7 +47,7 @@ Output: every command prints text for people by default, following agent-hub's C
 | Registry and policy | `status`, `doctor`, `recover`, `vaults add\|list\|remove\|pii`, `specs add\|list\|remove` | [configuration](docs/reference/configuration.md) |
 | Reads | `rebuild`, `search`, `show`, `links`, `brief`, `stats`, `evidence` | [reads](docs/reference/reads.md) |
 | Writes and log | `new`, `patch`, `append`, `frontmatter`, `link`, `supersede`, `merge`, `move`, `delete`, `check`, `report`, `tidy`, `log append\|tail\|grep` | [writes](docs/reference/writes.md) |
-| Assertions | `assert` (append a validated batch of temporal assertions) | [writes](docs/reference/writes.md#assertions) |
+| Assertions | `assert` (append a validated batch of temporal assertions), `assertions purge` (preview, then confirm removal of one assertion's payloads) | [writes](docs/reference/writes.md#assertions) |
 | Proposals | `proposal submit\|list\|show\|apply\|reject\|reconcile` | [writes](docs/reference/writes.md#proposals) |
 | MCP and hosts | `mcp`, `setup`, `completion`, `manifest` | [mcp-and-setup](docs/reference/mcp-and-setup.md) |
 | Promotion and sync | `promote-from-amem`, `promote`, `sync` | [promotion-and-sync](docs/reference/promotion-and-sync.md) |
@@ -63,7 +63,7 @@ Output: every command prints text for people by default, following agent-hub's C
 - Cross-vault links: `[[x]]` always resolves inside its own vault.
 - Evidence verification of sources outside the same vault's `notes/` (other files, other vaults, URLs, memory ids): those entries are stored and reported `unverified_external` or `unsupported`, never fetched.
 - Scheduled or automatic sync and push.
-- Reading the assertion journal: `vmem assertions` and `vmem_assertions` with the derived index and read-time policy are issue 251; this release appends, verifies and evaluates assertions through the CLI, the MCP write tool and the exported `evaluateAssertions` function only. Purging a payload is issue 252.
+- Rewriting assertion bytes out of Git history, other clones or remotes: `vmem assertions purge` removes a payload from the journal in the working tree, and complete erasure needs a history rewrite outside vmem.
 - A resolution setting for graph communities.
 - An event-filtered capture read for skill mining.
 - A console bin: vault-mem ships only the plugin module for the `acon` console of [agent-console](https://github.com/STAIxBWLB/agent-console).
@@ -81,7 +81,7 @@ The only runtime dependency is the exact first-party pin <!-- facts:amem-pin -->
 - `src/links.ts`: `extractLinks`, `resolveLinks`, `normalizeTarget`
 - `src/vault-index.ts`: `VaultIndex`, `MAX_NOTE_BYTES`, `MAX_RESULTS`, `MAX_READ_BYTES`
 - `src/vault-history.ts`: `readHistory`, `readRevision`, `readChanges`, `historyText`, `revisionText`, `changesText`, `HISTORY_PAGE_LIMIT`, `HISTORY_SCAN_LIMIT`, `CHANGES_PAGE_LIMIT`, `SNAPSHOT_TRANSPORT_BYTES`
-- `src/assertions.ts`: `readJournal`, `verifySegment`, `evaluateAssertions`, `asOfCutoff`, `appendAssertions`, `assertFrameBytes`, `ASSERTIONS_DIR`, `ASSERTIONS_LOCK`, `ASSERTION_SCHEMA_VERSION`, `ASSERT_FRAME_BYTES`, `MAX_BATCH_OPS`
+- `src/assertions.ts`: `readJournal`, `verifySegment`, `evaluateAssertions`, `asOfCutoff`, `appendAssertions`, `purgeAssertions`, `assertFrameBytes`, `ASSERTIONS_DIR`, `ASSERTIONS_LOCK`, `ASSERTION_SCHEMA_VERSION`, `ASSERT_FRAME_BYTES`, `MAX_BATCH_OPS`, `PURGE_LIST_LIMIT`
 - `src/writer.ts`: `applyWrite`, `sha256`, `MUTATION_LOCK`, `MAX_WRITE_BYTES`
 - `src/proposal-provider.ts`: `submitProposal`, `listProposals`, `showProposal`, `previewProposalApply`, `applyProposal`, `previewProposalReject`, `rejectProposal`, `reconcileProposal`, `confirmProposalReconciliation`
 - `src/write-validation.ts`: `validateWrite`, `screenContent`
