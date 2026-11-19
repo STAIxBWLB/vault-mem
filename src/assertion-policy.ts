@@ -11,7 +11,7 @@ export type AssertionValue = string | { withheld: "secret" | "pii_policy" };
 export type ScreenedAssertion = Omit<AssertionItem, "value" | "evidence" | "source"> & {
   value?: AssertionValue;
   evidence?: Record<string, unknown>[];
-  source?: string[];
+  source?: (string | { withheld: true })[];
   availability?: "unavailable";
 };
 
@@ -38,7 +38,7 @@ export function screenAssertion(item: AssertionItem, vault: VaultSpec, config: V
     const reason = withheld(value, vault, config);
     out.value = reason ? { withheld: reason } : value;
   }
-  if (Array.isArray(source)) out.source = source.filter((entry): entry is string => typeof entry === "string" && !deniedSource(entry, vault, config) && !withheld(entry, vault, config));
+  if (Array.isArray(source)) out.source = source.map(entry => typeof entry === "string" && !deniedSource(entry, vault, config) && !withheld(entry, vault, config) ? entry : { withheld: true as const });
   if (evidence !== undefined) {
     if (!Array.isArray(evidence)) { out.evidence = [{ status: "unsupported", reason: "invalid_metadata" }]; return out; }
     // Journal entries add the write-time status; verify again and never treat that old status as current proof.
@@ -51,9 +51,9 @@ export function screenAssertion(item: AssertionItem, vault: VaultSpec, config: V
     const parsed = entries.length ? parseEvidence(entries, evidenceSources.length ? evidenceSources : undefined) : { entries: [] };
     out.evidence = parsed.problem ? [{ status: "unsupported", reason: "invalid_metadata" }] : parsed.entries.map((entry, index) => {
       if ("problem" in entry) return { status: "unsupported", reason: "invalid_metadata" };
-      if (deniedSource(entry.source, vault, config) || withheld(entry.source, vault, config) || withheld(entry.quote, vault, config) || (entry.section && withheld(entry.section, vault, config))) return { status: "withheld" };
+      if (deniedSource(entry.source, vault, config) || withheld(entry.source, vault, config) || withheld(entry.quote, vault, config) || (entry.section && withheld(entry.section, vault, config))) return { status: "withheld", reason: "denied_by_current_policy" };
       const result = verifyEvidenceEntry(vault, entry, index, config.denyPaths ?? [], reads, budget);
-      if (result.reason === "denied") return { status: "withheld" };
+      if (result.reason === "denied") return { status: "withheld", reason: "denied_by_current_policy" };
       if (result.reason === "read_budget") throw Object.assign(new Error("assertions: evidence read budget exceeded; narrow the query or lower the page limit"), { code: "V09" });
       if (result.reason === "source_not_found") return { source: entry.source, status: "unavailable" };
       return { ...entry, status: result.status, ...(result.reason ? { reason: result.reason } : {}) };

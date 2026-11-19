@@ -22,8 +22,8 @@ test("current policy withholds only denied evidence and rechecks values", () => 
     evidence: sources.map(source => ({ source, sha256, quote: "synthetic source" })) };
   const screened = screenAssertion(item, vault, config, new Map(), { remainingBytes: 1024, remainingFiles: 5 });
   expect(screened.value).toEqual({ withheld: "pii_policy" });
-  expect(screened.source).toEqual([sources[0]!]);
-  expect(screened.evidence).toEqual([{ source: sources[0], sha256, quote: "synthetic source", status: "verified" }, { status: "withheld" }]);
+  expect(screened.source).toEqual([sources[0]!, { withheld: true }]);
+  expect(screened.evidence).toEqual([{ source: sources[0], sha256, quote: "synthetic source", status: "verified" }, { status: "withheld", reason: "denied_by_current_policy" }]);
   expect(JSON.stringify(screened)).not.toContain("denied.md");
   rmSync(join(notes, "allowed.md"));
   expect(screenAssertion(item, vault, config, new Map(), { remainingBytes: 1024, remainingFiles: 5 }).evidence?.[0]).toEqual({ source: sources[0], status: "unavailable" });

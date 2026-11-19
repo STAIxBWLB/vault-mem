@@ -29,5 +29,6 @@ export function runAssertionsCommand(args: string[], home: string, env: NodeJS.P
   const rows = result.items.map(item => [clean(item.subject), clean(item.relation), item.answer ?? "-", typeof item.value === "string" ? clean(item.value) : item.value ? "withheld" : "-", item.id]);
   return { text: blocks(heading(`Assertions in ${clean(result.vault)}`, text), table(["SUBJECT", "RELATION", "ANSWER", "VALUE", "ID"], rows, text),
     result.truncated ? status("pending", `more results: rerun with --cursor ${result.continuation}`, text) : status("ok", `${result.items.length} assertion(s) shown`, text),
-    result.coverage.untrusted.length ? status("warn", `${result.coverage.untrusted.length} untrusted journal segment(s); inspect assertions/`, text) : undefined), code: 0 };
+    result.coverage.untrusted.length ? status("warn", `${result.coverage.untrusted.length} untrusted journal segment(s); inspect assertions/`, text) : undefined,
+    result.coverage.indexIssue ? status("warn", result.coverage.indexIssue, text) : undefined), code: 0 };
 }

@@ -15,13 +15,14 @@ import type { EvidenceReadBudget, EvidenceReads } from "./evidence.ts";
 import { screenContent } from "./write-validation.ts";
 
 export const ASSERTIONS_PAGE_LIMIT = 100;
+// The transport refuses request IDs over 200 UTF-16 units; even JSON's six-byte escapes fit in this reserve.
 const FRAME_LIMIT = 48 * 1024, FRAME_RESERVE = 2048;
 export interface AssertionsReadRequest extends AssertionQuery { vault: string; limit?: number; cursor?: string }
 export interface AssertionsReadOptions { env?: NodeJS.ProcessEnv }
 export interface AssertionsReadResult {
   schemaVersion: 1; basis: "assertion_journal"; vault: string; at: string | null;
   asOf: ReturnType<typeof evaluateAssertions>["asOf"]; pin: ReturnType<typeof evaluateAssertions>["pin"];
-  coverage: ReturnType<typeof evaluateAssertions>["coverage"] & { unsynced: number | null };
+  coverage: ReturnType<typeof evaluateAssertions>["coverage"] & { unsynced: number | null; indexIssue?: string };
   items: (ScreenedAssertion & { subjectNote?: { path?: string; status: "present" | "missing" | "superseded"; supersededBy?: unknown } })[];
   overlaps?: ReturnType<typeof evaluateAssertions>["overlaps"]; truncated: boolean; continuation?: string;
 }
@@ -110,9 +111,18 @@ export function readAssertions(home: string, request: AssertionsReadRequest, opt
   const limit = request.limit ?? 50;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > ASSERTIONS_PAGE_LIMIT) fail("assertions: limit must be 1..100; choose a smaller page");
   const journal = readJournal(root, config.denyPaths ?? []);
-  const index = rebuildAssertionIndex(home, root, journal, config.vaults.map(value => value.path));
+  let indexed = journal, indexIssue: string | undefined;
+  try {
+    const index = rebuildAssertionIndex(home, root, journal, config.vaults.map(value => value.path));
+    indexed = indexedJournal(index, journal);
+    if (indexed === journal) indexIssue = "assertion index could not be read or verified; check VMEM_HOME/indexes and retry";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    const cause = typeof code === "string" && /^[A-Z0-9_]{1,24}$/.test(code) ? code : error instanceof Error && error.message.startsWith("assertion index: ") ? error.message.slice("assertion index: ".length).split(";")[0] : "cache unavailable";
+    indexIssue = `assertion index not refreshed (${cause}); check VMEM_HOME/indexes permissions and location`;
+  }
   const query: AssertionQuery = { ...(request.subject !== undefined ? { subject: request.subject } : {}), ...(request.relation !== undefined ? { relation: request.relation } : {}), ...(request.at !== undefined ? { at: request.at } : {}), ...(request.asOf !== undefined ? { asOf: request.asOf } : {}), ...(request.history !== undefined ? { history: request.history } : {}) };
-  const answer = evaluateAssertions(indexedJournal(index, journal), query), binding = fingerprint({ root, query, pin: answer.pin, coverage: answer.coverage });
+  const answer = evaluateAssertions(indexed, query), binding = fingerprint({ root, query, pin: answer.pin, coverage: answer.coverage });
   let offset = 0;
   if (request.cursor !== undefined) {
     try {
@@ -125,7 +135,7 @@ export function readAssertions(home: string, request: AssertionsReadRequest, opt
   const budget: EvidenceReadBudget = { remainingBytes: 64 * 1024 * 1024, remainingFiles: 1000 }, reads: EvidenceReads = new Map();
   const subjectNotes = declaredNotes(journal, answer.asOf), notes = new Map<string, ReturnType<typeof noteStatus>>();
   const output: AssertionsReadResult = { schemaVersion: 1, basis: "assertion_journal", vault: vault.id, at: answer.at, asOf: answer.asOf, pin: answer.pin,
-    coverage: { ...answer.coverage, unsynced: unsynced(root, options.env ?? process.env) }, items: [], ...(request.at ? { overlaps: answer.overlaps } : {}), truncated: false };
+    coverage: { ...answer.coverage, unsynced: unsynced(root, options.env ?? process.env), ...(indexIssue ? { indexIssue } : {}) }, items: [], ...(request.at ? { overlaps: answer.overlaps } : {}), truncated: false };
   const continuation = (next: number) => Buffer.from(JSON.stringify({ v: 1, binding, offset: next })).toString("base64url");
   if (!fits(output)) fail("assertions: journal coverage exceeds the 48 KiB response bound; narrow the journal or inspect its segments", "V09");
   for (let i = offset; i < answer.items.length && output.items.length < limit; i++) {

@@ -33,6 +33,11 @@ test("the index refuses an in-vault home and a linked indexes directory", () => 
   expect(() => assertionIndexPath(inside, f.vault)).toThrow("inside a vault");
   expect(() => assertionIndexPath(inside, f.home, [f.home, f.vault])).toThrow("inside a vault");
   symlinkSync(f.vault, join(f.home, "indexes"));
-  expect(() => rebuildAssertionIndex(f.home, f.vault, f.journal)).toThrow("not a plain directory");
+  expect(() => rebuildAssertionIndex(f.home, f.vault, f.journal)).toThrow("inside a vault");
   expect(existsSync(join(f.vault, "assertions"))).toBe(false);
+});
+
+test("the index directory cannot itself be a registered vault", () => {
+  const f = fixture(), indexes = join(f.home, "indexes"); mkdirSync(indexes);
+  expect(() => assertionIndexPath(f.home, f.vault, [indexes])).toThrow("inside a vault");
 });

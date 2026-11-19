@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendAssertions } from "../src/assertions.ts";
@@ -116,6 +116,25 @@ test("a newer segment schema reports unsupported and is never evaluated", () => 
   expect(result.items).toEqual([]);
 });
 
+test("unavailable registered vaults do not block reading a healthy vault", () => {
+  const f = fixture(), other = join(f.root, "other"); mkdirSync(join(other, "notes"), { recursive: true });
+  addVault(f.home, { id: "other", path: other, kind: "personal", write: "none" }); rmSync(other, { recursive: true });
+  expect(f.append([{ op: "declare", subject: "s:test" }], "2026-01-01T00:00:00Z").ok).toBe(true);
+  const result = readAssertions(f.home, { vault: "test" }, { env: f.env });
+  expect(result.coverage.journal).toBe("present"); expect(result.coverage.indexIssue).toBeUndefined();
+});
+
+test("an unwritable index remains a nonfatal, actionable read issue", () => {
+  const f = fixture();
+  expect(f.append([{ op: "declare", subject: "s:test" }, { op: "assert", subject: "s:test", relation: "r", value: "value", kind: "state", from: "2025", to: "open", source: ["mem:fixture"] }], "2026-01-01T00:00:00Z").ok).toBe(true);
+  const indexes = join(f.home, "indexes"); mkdirSync(indexes, { mode: 0o700 }); chmodSync(indexes, 0o500);
+  try {
+    const result = readAssertions(f.home, { vault: "test" }, { env: f.env });
+    expect(result.items[0]?.value).toBe("value");
+    expect(result.coverage.indexIssue).toMatch(/EACCES.*VMEM_HOME\/indexes/);
+  } finally { chmodSync(indexes, 0o700); }
+});
+
 test("unsynced counts journal segments only in a Git vault", async () => {
   const { spawnSync } = await import("node:child_process");
   const f = fixture();
@@ -156,4 +175,21 @@ test("T11 real vmem move and merge preserve answers while reporting their subjec
     expect(after.items[0]?.value).toBe(before.items[0]?.value); expect(after.items[0]?.answer).toBe(before.items[0]?.answer);
     expect(after.items[0]?.subjectNote?.status).toBe(kind === "move" ? "missing" : "superseded");
   }
+});
+
+test("MCP refuses a long request id before calling the assertion reader", async () => {
+  const { createVaultMcp } = await import("../src/mcp-vault.ts"), { serveMcp } = await import("../src/mcp.ts"), { PassThrough } = await import("node:stream");
+  const f = fixture(), server = createVaultMcp(f.home, f.env), input = new PassThrough(), output = new PassThrough();
+  let text = ""; output.on("data", chunk => { text += chunk.toString(); });
+  const done = serveMcp({ tools: server.tools, handlers: server.handlers, input, output });
+  for (const frame of [
+    { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } } },
+    { jsonrpc: "2.0", method: "notifications/initialized" },
+    { jsonrpc: "2.0", id: "x".repeat(47000), method: "tools/call", params: { name: "vmem_assertions", arguments: { vault: "test" } } },
+  ]) input.write(JSON.stringify(frame) + "\n");
+  input.end(); await done;
+  const frame = text.trimEnd().split("\n").at(-1)!;
+  expect(Buffer.byteLength(frame) + 1).toBeLessThanOrEqual(48 * 1024);
+  expect(JSON.parse(frame)).toMatchObject({ id: null, error: { message: "Invalid request id" } });
+  expect(existsSync(join(f.home, "indexes"))).toBe(false);
 });

@@ -12,10 +12,17 @@ export function assertionIndexPath(home: string, vaultRoot: string, protectedRoo
   for (const protectedRoot of [vaultRoot, ...protectedRoots]) {
     let canonicalRoot: string;
     try { canonicalRoot = realpathSync(protectedRoot); }
-    catch { throw new Error("assertion index: a registered vault root is unavailable; restore it or unregister it with vmem vaults remove before retrying"); }
-    const rel = relative(canonicalRoot, state);
-    if (!rel || (rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(rel)))
-      throw new Error("assertion index: configured home is inside a vault; move VMEM_HOME outside every registered vault");
+    catch (error) {
+      if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) continue;
+      throw error;
+    }
+    let indexDir = join(state, "indexes");
+    try { indexDir = realpathSync(indexDir); } catch { /* A missing cache directory has its lexical location. */ }
+    for (const candidate of [state, indexDir]) {
+      const rel = relative(canonicalRoot, candidate);
+      if (!rel || (rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(rel)))
+        throw new Error("assertion index: configured home or index directory is inside a vault; move VMEM_HOME outside every registered vault");
+    }
   }
   const digest = createHash("sha256").update(root).digest("hex");
   return join(state, "indexes", `assertions-${digest}-v1.sqlite`);

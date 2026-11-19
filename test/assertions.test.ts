@@ -584,7 +584,7 @@ test("Q1 read uses the full corpus and the example's evidence and subject fixtur
   const source = "vault/notes/onboarding-2025-09.md", query = { vault: f.id, subject: "s:person-a", relation: "role", at: "2026-04-05", asOf: "2026-04-06" };
   denyPath(f, join(f.notes, "onboarding-2025-09.md"));
   const withheld = readAssertions(f.home, query, { env: f.env });
-  expect(withheld.items[0]?.evidence).toEqual([{ status: "withheld" }]);
+  expect(withheld.items[0]?.evidence).toEqual([{ status: "withheld", reason: "denied_by_current_policy" }]);
   expect(JSON.stringify(withheld)).not.toContain(source); expect(JSON.stringify(withheld)).not.toContain("joins as member");
   const config = loadRegistry(f.home); delete config.denyPaths; writeFileSync(join(f.home, CONFIG_FILE), JSON.stringify(config));
   rmSync(join(f.notes, "onboarding-2025-09.md"));
