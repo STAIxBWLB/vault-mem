@@ -15,6 +15,8 @@ export { readHistory, readRevision, readChanges, historyText, revisionText, chan
 export type { HistoryRequest, RevisionRequest, ChangesRequest, HistoryResult, RevisionResult, ChangesResult, SnapshotCoverage, SnapshotCapability } from "./vault-history.ts";
 export { readJournal, verifySegment, evaluateAssertions, asOfCutoff, appendAssertions, purgeAssertions, assertFrameBytes, ASSERTIONS_DIR, ASSERTIONS_LOCK, ASSERTION_SCHEMA_VERSION, ASSERT_FRAME_BYTES, MAX_BATCH_OPS, PURGE_LIST_LIMIT } from "./assertions.ts";
 export type { AssertRequest, AssertReceipt, AssertOp, AssertionAnswerSet, AssertionItem, AssertionQuery, Answer, JournalEntry, SegmentReport, VerifiedJournal, PurgeRequest, PurgeReceipt } from "./assertions.ts";
+export { scanAssertionExposure, writeReplaceFile, EXPOSURE_COMMIT_BUDGET, EXPOSURE_BLOB_BYTES, EXPOSURE_COMMIT_BYTES, EXPOSURE_FRAME_BYTES } from "./assertion-exposure.ts";
+export type { ExposureRequest, ExposureReceipt, ExposureRow, ExposureScan, ExposureLine, ExposureCommits, ReplaceFileReceipt } from "./assertion-exposure.ts";
 export { applyWrite, sha256, MUTATION_LOCK, MAX_WRITE_BYTES } from "./writer.ts";
 export { submitProposal, listProposals, showProposal, previewProposalApply, applyProposal, previewProposalReject, rejectProposal, reconcileProposal, confirmProposalReconciliation } from "./proposal-provider.ts";
 export type { ProposalSubmitRequest, ProposalContext, ProposalSubmitted, ProposalListRequest, ProposalPage, ProposalShowRequest, ProposalView, ProposalApplyPreview, ProposalApplyResult, ProposalRejectPreview, ProposalReconciliation } from "./proposal-provider.ts";

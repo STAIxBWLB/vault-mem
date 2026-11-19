@@ -5,7 +5,7 @@ import type { Readable, Writable } from "node:stream";
 export const FRAME_BYTES = 65_536, RESULT_BYTES = 262_144;
 /** Tools whose complete request is bounded to 48 KiB as the raw frame the client sent, escapes included. */
 export const TOOL_FRAME_BYTES = 48 * 1024;
-const narrowedFrame = (name: string) => name.startsWith("vmem_proposal_") || ["vmem_assert", "vmem_assertions", "vmem_assertions_purge"].includes(name);
+const narrowedFrame = (name: string) => name.startsWith("vmem_proposal_") || ["vmem_assert", "vmem_assertions", "vmem_assertions_purge", "vmem_assertions_exposure"].includes(name);
 export interface McpTool { name: string; description: string; inputSchema: Record<string, unknown>; annotations: Record<string, boolean> }
 export type McpHandler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
 export interface McpServerOptions { tools: readonly McpTool[]; handlers: Record<string, McpHandler>; input?: Readable; output?: Writable; name?: string; version?: string; instructions?: string }
