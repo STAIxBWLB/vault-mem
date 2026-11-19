@@ -462,7 +462,7 @@ function denyPath(f: Fixture, path: string): void {
   writeFileSync(join(f.home, CONFIG_FILE), JSON.stringify(config));
 }
 
-test("T7: a payload under a purged marker, a malformed marker and a foreign parent are untrusted", () => {
+test("T7: a payload under a purged marker, a malformed marker and a foreign parent are untrusted", async () => {
   const three = (f: Fixture) => {
     ok(f.append([{ op: "declare", subject: "s:p" }, { op: "assert", subject: "s:p", relation: "r", value: "a", kind: "state", from: "2026", to: "open", source: ["mem:p"] }], "2026-01-01T00:00:00Z"));
     ok(f.append([{ op: "assert", subject: "s:p", relation: "r", value: "b", kind: "state", from: "2026", to: "open", source: ["mem:p"] }], "2026-01-03T00:00:00Z"));
@@ -484,6 +484,8 @@ test("T7: a payload under a purged marker, a malformed marker and a foreign pare
   expect(purgedAnswer.coverage.untrusted).toEqual([]); expect(purgedAnswer.coverage.purged).toBe(1);
   expect(purgedAnswer.items.filter(item => item.purged).map(item => item.value)).toEqual([undefined]);
   expect(purgedAnswer.items.filter(item => item.value !== undefined).map(item => item.value)).toEqual(["a"]);
+  const { readAssertions } = await import("../src/assertion-read.ts");
+  expect(readAssertions(purged.home, { vault: purged.id, history: true }, { env: purged.env }).items.find(item => item.purged)).toMatchObject({ availability: "unavailable", evidence: [{ status: "unavailable" }] });
   // 3. The marker is exactly {at, reason}: a bad instant or an extra key is not a purge.
   for (const [marker, name] of [[{ at: "2026-02-30T00:00:00Z", reason: "other" }, "instant"], [{ ...purge, extra: 1 }, "key"]] as const) {
     const malformed = fixture(), segment = three(malformed), row = JSON.parse(segment.lines[2]!) as Record<string, any>;

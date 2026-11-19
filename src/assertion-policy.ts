@@ -12,6 +12,7 @@ export type ScreenedAssertion = Omit<AssertionItem, "value" | "evidence" | "sour
   value?: AssertionValue;
   evidence?: Record<string, unknown>[];
   source?: string[];
+  availability?: "unavailable";
 };
 
 function withheld(text: string, vault: VaultSpec, config: VmemConfig): "secret" | "pii_policy" | undefined {
@@ -32,6 +33,7 @@ function deniedSource(source: string, vault: VaultSpec, config: VmemConfig): boo
 export function screenAssertion(item: AssertionItem, vault: VaultSpec, config: VmemConfig, reads: EvidenceReads, budget: EvidenceReadBudget): ScreenedAssertion {
   const { value, evidence, source, ...safe } = item;
   const out: ScreenedAssertion = { ...safe };
+  if (item.purged) { out.availability = "unavailable"; out.evidence = [{ status: "unavailable" }]; return out; }
   if (typeof value === "string") {
     const reason = withheld(value, vault, config);
     out.value = reason ? { withheld: reason } : value;
