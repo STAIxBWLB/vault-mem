@@ -65,7 +65,7 @@ function noteStatus(vault: VaultSpec, note: string, config: VmemConfig, budget: 
   if (!/^notes\/[^/\\]+\.md$/.test(note) || note.includes("\0")) return { status: "missing" };
   const deny = config.denyPaths ?? [];
   const root = realpathSync(vault.path), dir = join(root, "notes"), file = join(root, note);
-  if (isDenied(canonicalPath(file), [...deny]) || isDenied(note, [...deny])) return { status: "missing" };
+  if (isDenied(canonicalPath(file), [...deny]) || isDenied(note, [...deny]) || screenContent(note, vault, config).some(issue => issue.severity === "error")) return { status: "missing" };
   if (budget.remainingFiles <= 0 || budget.remainingBytes <= 0) fail("assertions: subject note read budget exceeded; lower the page limit", "V09");
   budget.remainingFiles--;
   try {
@@ -84,7 +84,7 @@ function noteStatus(vault: VaultSpec, note: string, config: VmemConfig, budget: 
       const target = frontmatter.superseded_by;
       if (typeof target !== "string" || Buffer.byteLength(target) > 1024 || screenContent(target, vault, config).some(issue => issue.severity === "error")) return { path: note, status: "superseded" };
       const stem = target.replace(/^\[\[/, "").replace(/\]\]$/, "").replace(/^notes\//, "").replace(/\.md$/, "");
-      if (!stem || /[/\\\0]/.test(stem) || isDenied(target, [...deny]) || isDenied(canonicalPath(join(dir, `${stem}.md`)), [...deny])) return { path: note, status: "superseded" };
+      if (!stem || /[/\\|#\0]/.test(stem) || isDenied(target, [...deny]) || isDenied(canonicalPath(join(dir, `${stem}.md`)), [...deny])) return { path: note, status: "superseded" };
       return { path: note, status: "superseded", supersededBy: target };
     } finally { closeSync(fd); }
   } catch (error) { if ((error as { code?: string }).code === "V09") throw error; return { path: note, status: "missing" }; }

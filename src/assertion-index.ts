@@ -10,7 +10,10 @@ import { canonical } from "./writer.ts";
 export function assertionIndexPath(home: string, vaultRoot: string, protectedRoots: readonly string[] = [vaultRoot]): string {
   const root = realpathSync(vaultRoot), state = realpathSync(home);
   for (const protectedRoot of [vaultRoot, ...protectedRoots]) {
-    const rel = relative(realpathSync(protectedRoot), state);
+    let canonicalRoot: string;
+    try { canonicalRoot = realpathSync(protectedRoot); }
+    catch { throw new Error("assertion index: a registered vault root is unavailable; restore it or unregister it with vmem vaults remove before retrying"); }
+    const rel = relative(canonicalRoot, state);
     if (!rel || (rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(rel)))
       throw new Error("assertion index: configured home is inside a vault; move VMEM_HOME outside every registered vault");
   }

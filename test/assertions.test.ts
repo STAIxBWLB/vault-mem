@@ -49,11 +49,17 @@ function heads(f: Fixture, id: string): string[] {
   return found[0]?.heads ?? found.map(item => item.hash);
 }
 /** Append the corpus batches E1..E5 through the write contract; returns label -> assertion id. */
-function loadCorpus(f: Fixture): Record<string, string> {
+function loadCorpus(f: Fixture, q1Evidence = false): Record<string, string> {
   const ids: Record<string, string> = {};
+  const q1Text = "joins as member\n", q1Source = "vault/notes/onboarding-2025-09.md";
+  if (q1Evidence) {
+    writeFileSync(join(f.notes, "person-a.md"), "---\nstatus: active\n---\nPerson A\n");
+    writeFileSync(join(f.notes, "onboarding-2025-09.md"), q1Text);
+  }
   for (const batch of CORPUS.batches) {
     const ops = batch.ops.map(raw => {
       const { label: _label, ...op } = raw;
+      if (q1Evidence && raw.label === "A0") return { ...op, source: [q1Source], evidence: [{ source: q1Source, sha256: sha(q1Text), quote: "joins as member" }] };
       if (typeof op.id === "string" && op.id.startsWith("$")) { const id = ids[op.id.slice(1)]!; return { ...op, id, expected_heads: heads(f, id) }; }
       return op;
     });
@@ -566,4 +572,15 @@ test("T9 assertion reads match the corpus evaluation after index removal and reb
     const indexes = join(f.home, "indexes"); rmSync(indexes, { recursive: true, force: true });
     expect(readAssertions(f.home, query, { env: f.env })).toEqual(first);
   }
+});
+
+test("Q1 read uses the full corpus and the example's evidence and subject fixtures", async () => {
+  const { readAssertions } = await import("../src/assertion-read.ts");
+  const f = fixture(), ids = loadCorpus(f, true);
+  const answer = readAssertions(f.home, { vault: f.id, subject: "s:person-a", relation: "role", at: "2026-04-05", asOf: "2026-04-06" }, { env: f.env });
+  expect(answer.pin).toHaveLength(1); expect(answer.pin[0]?.seq).toBe(15);
+  expect(answer).toMatchObject({ schemaVersion: 1, basis: "assertion_journal", at: "2026-04-05", asOf: { requested: "2026-04-06", cutoff: "2026-04-07T00:00:00Z", cutoffInclusive: false },
+    coverage: { journal: "present", untrusted: [], unsupported: [], tornTail: [], purged: 0 }, overlaps: [], truncated: false,
+    items: [{ id: ids.A0, rev: 1, subject: "s:person-a", relation: "role", value: "member", kind: "state", from: "2025-09-01", to: "open", answer: "yes", recordedAt: "2025-09-02T09:00:00Z",
+      evidence: [{ source: "vault/notes/onboarding-2025-09.md", status: "verified", quote: "joins as member" }], subjectNote: { path: "notes/person-a.md", status: "present" } }] });
 });
