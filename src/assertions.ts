@@ -28,6 +28,8 @@ export const ASSERTIONS_LOCK = "assertions.lock";
 export const ASSERTION_SCHEMA_VERSION = 1;
 export const MAX_BATCH_OPS = 32, MAX_BATCH_BYTES = 64 * 1024, MAX_PAYLOAD_BYTES = 16 * 1024, MAX_VALUE_BYTES = 1024, MAX_LABEL_CHARS = 200;
 export const MAX_SEGMENT_BYTES = 8 * 1024 * 1024, MAX_JOURNAL_BYTES = 64 * 1024 * 1024, MAX_JOURNAL_ENTRIES = 100_000;
+/** UTF-16 units of a purge reason: the same limit the verifier applies, so an accepted reason always verifies. */
+export const MAX_PURGE_REASON = 200;
 /** Bound of a complete `vmem_assert` request or reply, measured as the encoded JSON-RPC frame. */
 export const ASSERT_FRAME_BYTES = 48 * 1024;
 const ENVELOPE_ID_BYTES = 128;
@@ -164,7 +166,7 @@ function purgeShape(value: unknown): string | undefined {
   const marker = value as Record<string, unknown>;
   if (Object.keys(marker).some(key => key !== "at" && key !== "reason")) return "invalid purged";
   if (typeof marker.at !== "string" || !validInstant(marker.at)) return "invalid purged";
-  if (typeof marker.reason !== "string" || !marker.reason || marker.reason.length > 200 || /\p{Cc}/u.test(marker.reason)) return "invalid purged";
+  if (typeof marker.reason !== "string" || !marker.reason || marker.reason.length > MAX_PURGE_REASON || /\p{Cc}/u.test(marker.reason)) return "invalid purged";
   return undefined;
 }
 function shapeProblem(entry: Record<string, unknown>): string | undefined {
@@ -859,14 +861,19 @@ export function purgeAssertions(home: string, request: PurgeRequest, options: { 
     if (request.confirm !== true && request.fingerprint !== undefined) refuse("V01", "a fingerprint is only used with confirm; drop it for a preview");
     if (request.fingerprint !== undefined && !HEX64.test(request.fingerprint)) refuse("V01", "fingerprint must be the 64-character value a preview returned; rerun the preview");
     const reason = request.reason;
-    if (typeof reason !== "string" || !reason.trim() || [...reason].length > 200 || /\p{Cc}/u.test(reason) || !reason.isWellFormed())
-      refuse("V01", "reason must be 1..200 characters of well-formed text without control characters; it stays in the journal, so keep it free of sensitive content");
+    // Same rule as `purgeShape`: UTF-16 units, so a reason this accepts is a reason verification accepts.
+    if (typeof reason !== "string" || !reason.trim() || reason.length > MAX_PURGE_REASON || /\p{Cc}/u.test(reason) || !reason.isWellFormed())
+      refuse("V01", `reason must be 1..${MAX_PURGE_REASON} characters of well-formed text without control characters; it stays in the journal, so keep it free of sensitive content`);
     if (typeof request.id !== "string" || !ASSERTION_ID.test(request.id)) refuse("V01", "assertion id must look like a:<16 lowercase hex>:<seq>; list ids with vmem assertions <vault> --history");
     const id = request.id, ctx = context(home, { vault: request.vault, channel: request.channel }, "assertion purges");
+    // The reason is written into every purged line, so it is screened like any other write: a purge must not add the
+    // class of content it exists to remove.
+    const screened = screenContent(reason, ctx.vault, ctx.config).filter(issue => issue.severity === "error");
+    if (screened.length) refuse(screened[0]!.code, `reason is refused by current policy (${screened[0]!.message}); give a reason without secrets or personal data, for example "evidence_withdrawn"`);
     const read = () => readJournal(ctx.root, ctx.config.denyPaths ?? []);
     const prepare = (journal: VerifiedJournal) => {
       const broken = journal.segments.find(segment => segment.untrusted || segment.unsupported);
-      if (broken) refuse("V09", `segment ${broken.segment} fails verification from seq ${(broken.untrusted ?? broken.unsupported)!.seq}; purge rewrites verified segments only. Restore the file from Git, or delete the segment after checking it, then retry`);
+      if (broken) refuse("V09", `segment ${broken.segment} fails verification from seq ${(broken.untrusted ?? broken.unsupported)!.seq}, so the whole journal is unverified; purge rewrites verified segments only. Restore the segment from Git, or delete it after checking it, then retry`);
       const found = assertionEntries(journal, id);
       if (!found.length) refuse("V01", `no verified journal entry belongs to ${id}; list assertion ids with vmem assertions ${request.vault} --history`);
       const remaining = found.filter(entry => entry.purged === undefined);
@@ -904,11 +911,20 @@ export function purgeAssertions(home: string, request: PurgeRequest, options: { 
         next.push(canonical({ ...hashed, purged: marker }));
       }
       const buffer = Buffer.from(next.map(line => line + "\n").join(""), "utf8");
+      // Verify the candidate before it can replace anything: the rewritten lines are what later reads trust, so a
+      // shape the verifier would reject must never reach the segment.
+      const check = verifySegment(segment, buffer);
+      if (check.untrusted || check.unsupported || check.tornTail || check.partialBatch || check.verifiedBytes !== buffer.length || check.entries.length !== report.entries.length)
+        refuse("V09", `the rewritten bytes of segment ${segment} did not verify (${check.untrusted?.reason ?? (check.unsupported ? `unsupported schema version ${JSON.stringify(check.unsupported.version)}` : "an entry count or batch mismatch")}); segment ${segment} was not renamed and is unchanged. Keep this segment and retry once the cause is fixed`);
       const temporary = join(dir, `.${segment}.jsonl.${randomBytes(6).toString("hex")}.tmp`);
       let fd: number;
       try { fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644); }
       catch { refuse("IO", `the purge could not create a temporary file in ${ASSERTIONS_DIR}; check free space and directory permissions, then retry`); }
-      try { writeFileSync(fd, buffer); fsyncSync(fd); } finally { closeSync(fd); }
+      try { writeFileSync(fd, buffer); fsyncSync(fd); }
+      catch (caught) {
+        try { unlinkSync(temporary); } catch { receipt.issues.push({ code: "CLEANUP", severity: "warning", message: `${temporary.slice(dir.length + 1)} could not be removed; delete it from ${ASSERTIONS_DIR} once no purge is running` }); }
+        refuse("IO", `the purge could not write the temporary file for segment ${segment} (${(caught as NodeJS.ErrnoException).code ?? "write failed"}); nothing was renamed, so check free space and directory permissions, then retry`);
+      } finally { closeSync(fd); }
       try { renameSync(temporary, file); }
       catch (caught) {
         try { unlinkSync(temporary); } catch { receipt.issues.push({ code: "CLEANUP", severity: "warning", message: `${temporary.slice(dir.length + 1)} could not be removed; delete it from ${ASSERTIONS_DIR} once no purge is running` }); }

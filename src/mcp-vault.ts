@@ -2,7 +2,7 @@ import { readAssertions, ASSERTIONS_PAGE_LIMIT } from "./assertion-read.ts";
 import { vaultBrief } from "./vault-brief.ts";
 import { applyProposal, confirmProposalReconciliation, listProposals, previewProposalApply, previewProposalReject, reconcileProposal, rejectProposal, showProposal, submitProposal, type ProposalContext } from "./proposal-provider.ts";
 import { evidenceReport } from "./evidence.ts";
-import { appendAssertions, assertFrameBytes, ASSERT_FRAME_BYTES, purgeAssertions, type AssertReceipt } from "./assertions.ts";
+import { appendAssertions, assertFrameBytes, ASSERT_FRAME_BYTES, purgeAssertions, type AssertReceipt, type PurgeReceipt } from "./assertions.ts";
 import { explainGraphPath } from "./graph-evidence.ts";
 import { createSpecMcp } from "./mcp-spec.ts";
 import { SPEC_COMMANDS } from "./spec-command-table.ts";
@@ -123,6 +123,17 @@ export function assertReply(reply: AssertReceipt & { refused?: true }): unknown 
     { ok: reply.ok, applied: reply.applied, dryRun: reply.dryRun, segment: reply.segment, ...(reply.recordedAt ? { recordedAt: reply.recordedAt } : {}), ...(reply.refused ? { refused: reply.refused } : {}), entries: [], recovery: [], indexUpdated: false as const, issues: [note] }];
   return trimmed.find(candidate => assertFrameBytes(candidate, "result") <= ASSERT_FRAME_BYTES) ?? trimmed[trimmed.length - 1];
 }
+/** Keep a `vmem_assertions_purge` reply inside the 48 KiB frame bound without hiding what was rewritten. */
+export function purgeReply(reply: PurgeReceipt & { refused?: true }): unknown {
+  if (assertFrameBytes(reply, "result") <= ASSERT_FRAME_BYTES) return reply;
+  const entries = reply.entries.length, segments = reply.segments.length;
+  const note: Issue = { code: "LIMIT", severity: "error", message: `the reply exceeds ${ASSERT_FRAME_BYTES} bytes as an encoded JSON-RPC frame; ${entries} ${entries === 1 ? "entry" : "entries"} in ${segments} ${segments === 1 ? "segment" : "segments"} are omitted and ${reply.applied ? "those segments were rewritten by this confirm" : "the preview wrote nothing"}. Read vmem_assertions --history for the ids, and purge fewer entries at a time` };
+  const trimmed = [{ ...reply, recovery: [], issues: [...reply.issues.slice(0, 4), note] },
+    { ...reply, entries: [], recovery: [], issues: [note] },
+    { ok: reply.ok, applied: reply.applied, preview: reply.preview, vault: reply.vault, assertion: reply.assertion, reason: reply.reason, ...(reply.at ? { at: reply.at } : {}), fingerprint: reply.fingerprint, entries: [], segments: reply.segments, alreadyPurged: reply.alreadyPurged, omitted: reply.omitted, recovery: [], ...(reply.refused ? { refused: reply.refused } : {}), issues: [note] },
+    { ok: reply.ok, applied: reply.applied, preview: reply.preview, vault: reply.vault, assertion: reply.assertion, reason: reply.reason, ...(reply.at ? { at: reply.at } : {}), fingerprint: reply.fingerprint, entries: [], segments: [], alreadyPurged: reply.alreadyPurged, omitted: reply.omitted, recovery: [], ...(reply.refused ? { refused: reply.refused } : {}), issues: [note] }];
+  return trimmed.find(candidate => assertFrameBytes(candidate, "result") <= ASSERT_FRAME_BYTES) ?? trimmed[trimmed.length - 1];
+}
 const str = (value: unknown): string | undefined => typeof value === "string" ? value : undefined;
 
 /**
@@ -208,7 +219,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_assertions: args => readAssertions(home, { vault: pick(args).id, ...(str(args.subject) ? { subject: str(args.subject)! } : {}), ...(str(args.relation) ? { relation: str(args.relation)! } : {}), ...(str(args.at) ? { at: str(args.at)! } : {}), ...(str(args.asOf) ? { asOf: str(args.asOf)! } : {}), ...(args.history === true ? { history: true } : {}), ...(typeof args.limit === "number" ? { limit: args.limit } : {}), ...(str(args.cursor) ? { cursor: str(args.cursor)! } : {}) }, { env }),
     vmem_assertions_purge: args => {
       const receipt = purgeAssertions(home, { vault: pick(args).id, id: str(args.id)!, reason: str(args.reason)!, channel: "mcp", ...twoStep(args) }, { env });
-      return receipt.ok || receipt.applied ? receipt : { ...receipt, refused: true };
+      return purgeReply(receipt.ok || receipt.applied ? receipt : { ...receipt, refused: true });
     },
     vmem_evidence: args => { const registry = loadRegistry(home), spec = registry.vaults.find(v => v.id === pick(args).id); if (!spec) throw Object.assign(new Error("unknown vault id; list registered vaults with vmem status"), { code: "V04" }); return evidenceReport(spec, str(args.path)!, registry.denyPaths ?? []); },
     vmem_assert: args => {
