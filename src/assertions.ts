@@ -72,6 +72,7 @@ export interface AssertionItem {
   evidence?: unknown[]; source?: string[];
   answer?: Answer; recordedAt: string; effectiveRecordedAt?: string; clockInverted?: true; replacedAt?: string | null;
   revisionConflict?: true; heads?: string[]; purged?: true;
+  segment?: string; seq?: number;
 }
 export interface AssertionAnswerSet {
   schemaVersion: 1;
@@ -282,7 +283,7 @@ export function readJournal(vaultPath: string, denyPaths: readonly string[] = []
 // ---------------------------------------------------------------- evaluation
 
 /** `depth` is the longest parent chain below the entry, so a parent always sorts before its child. */
-interface Kept { entry: JournalEntry; effective: string; inverted: boolean; depth: number }
+interface Kept { entry: JournalEntry; effective: string; inverted: boolean; depth: number; assertionId?: string }
 interface Resolved { kept: Map<string, Kept>; untrusted: { segment: string; seq: number; reason: string }[] }
 /** Steps 2: effective record times across segments; an entry whose parent is missing, untrusted or foreign is untrusted. */
 function resolveEntries(journal: VerifiedJournal): Resolved {
@@ -294,7 +295,7 @@ function resolveEntries(journal: VerifiedJournal): Resolved {
     if (known !== undefined) return known;
     if (visiting.has(entry.hash)) return "parent cycle in the journal";
     visiting.add(entry.hash);
-    const own = assertionOf(entry);
+    let own = assertionOf(entry);
     let effective = entry.recorded_at, depth = 0, failure = "";
     for (const parent of entry.parents ?? []) {
       const found = byHash.get(parent);
@@ -302,12 +303,13 @@ function resolveEntries(journal: VerifiedJournal): Resolved {
       const kept = resolve(found);
       if (typeof kept === "string") { failure = kept; break; }
       // A revision names its own assertion's heads only; a cross-assertion parent would displace another head set.
-      if (own !== undefined && assertionOf(found) !== own) { failure = "a parent belongs to another assertion"; break; }
+      if (own !== undefined && kept.assertionId !== own) { failure = "a parent belongs to another assertion"; break; }
+      if (own === undefined) own = kept.assertionId;
       if (kept.effective > effective) effective = kept.effective;
       if (kept.depth >= depth) depth = kept.depth + 1;
     }
     visiting.delete(entry.hash);
-    const result = failure ? failure : { entry, effective, inverted: effective !== entry.recorded_at, depth };
+    const result = failure ? failure : { entry, effective, inverted: effective !== entry.recorded_at, depth, ...(own ? { assertionId: own } : {}) };
     done.set(entry.hash, result);
     return result;
   };
@@ -345,7 +347,7 @@ function states(kept: Iterable<Kept>): { assertions: Map<string, AssertionState>
       for (const parent of entry.parents ?? []) named.add(parent);
       continue;
     }
-    const id = entry.op === "assert" ? `a:${entry.seg}:${entry.seq}` : entry.payload?.id;
+    const id = item.assertionId;
     if (typeof id !== "string") continue;
     let state = assertions.get(id);
     if (entry.op === "assert") {
@@ -371,8 +373,8 @@ const order = (a: Kept, b: Kept) => a.effective < b.effective ? -1 : a.effective
   : a.entry.seg < b.entry.seg ? -1 : a.entry.seg > b.entry.seg ? 1 : a.entry.seq - b.entry.seq;
 function item(state: AssertionState, kept: Kept, t: number | undefined): AssertionItem {
   const { entry } = kept, payload = entry.payload ?? {};
-  const out: AssertionItem = { id: state.id, rev: entry.op === "assert" ? 1 : Number(payload.rev), op: entry.op as AssertionItem["op"], subject: state.subject, relation: state.relation, hash: entry.hash, recordedAt: entry.recorded_at };
-  if (entry.purged) out.purged = true;
+  const out: AssertionItem = { id: state.id, rev: entry.op === "assert" ? 1 : entry.purged ? kept.depth + 1 : Number(payload.rev), op: entry.op as AssertionItem["op"], subject: entry.purged ? "" : state.subject, relation: entry.purged ? "" : state.relation, hash: entry.hash, recordedAt: entry.recorded_at };
+  if (entry.purged) { out.purged = true; out.segment = entry.seg; out.seq = entry.seq; }
   for (const key of ["value", "kind", "from", "to", "held_on", "on", "reason", "evidence", "source"] as const) if (payload[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = payload[key];
   if (kept.inverted) { out.effectiveRecordedAt = kept.effective; out.clockInverted = true; }
   if (t !== undefined && entry.op !== "retract" && !entry.purged) out.answer = answerOn(payload, t);
@@ -390,16 +392,19 @@ export function evaluateAssertions(journal: VerifiedJournal, query: AssertionQue
   const within = (kept: Kept) => !asOf || (asOf.cutoffInclusive ? kept.effective <= asOf.cutoff : kept.effective < asOf.cutoff);
   const kept = [...resolved.kept.values()].filter(within);
   const { assertions } = states(kept);
+  // Purge is a present-day availability constraint, including for earlier record-time queries.
+  const purgedIds = new Set([...resolved.kept.values()].filter(k => k.entry.purged && k.assertionId).map(k => k.assertionId!));
+  for (const state of assertions.values()) if (purgedIds.has(state.id)) state.purged = true;
   const items: AssertionItem[] = [];
   let purged = 0;
   for (const state of assertions.values()) {
+    if (state.purged) purged++;
     if (query.subject !== undefined && state.subject !== query.subject) continue;
     if (query.relation !== undefined && state.relation !== query.relation) continue;
-    if (state.purged) purged++;
     if (query.history) {
       const replaced = new Map<string, string>();
       for (const k of state.entries) for (const parent of k.entry.parents ?? []) if (!replaced.has(parent)) replaced.set(parent, k.effective);
-      for (const k of state.entries) items.push({ ...item(state, k, t), replacedAt: replaced.get(k.entry.hash) ?? null });
+      for (const k of state.entries) if (!k.entry.purged || (query.subject === undefined && query.relation === undefined)) items.push({ ...item(state, k, t), replacedAt: replaced.get(k.entry.hash) ?? null });
       continue;
     }
     if (state.retracted || state.purged) continue;

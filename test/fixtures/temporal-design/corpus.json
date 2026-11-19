@@ -1,9 +1,9 @@
 {
-  "description": "Synthetic corpus of docs/specs/2026-11-19-temporal-assertions-design.md (Synthetic corpus and answer key). Subjects and organizations are invented. $A<n> names the id assigned to assertion A<n>; heads are resolved by the test from the journal. Sources are invented external references.",
+  "description": "Synthetic corpus of docs/specs/2026-11-19-temporal-assertions-design.md (Synthetic corpus and answer key). Subjects and organizations are invented. $A<n> names the id assigned to assertion A<n>; heads are resolved by the test from the journal. Sources and notes are synthetic.",
   "batches": [
     { "entry": "E1", "now": "2025-09-02T09:00:00Z", "ops": [
       { "op": "declare", "subject": "s:person-a", "label": "Person A", "note": "notes/person-a.md" },
-      { "label": "A0", "op": "assert", "subject": "s:person-a", "relation": "role", "value": "member", "kind": "state", "from": "2025-09-01", "to": "open", "source": ["https://example.invalid/onboarding-2025-09"] }
+      { "label": "A0", "op": "assert", "subject": "s:person-a", "relation": "role", "value": "member", "kind": "state", "from": "2025-09-01", "to": "open", "source": ["vault/notes/onboarding-2025-09.md"], "evidence": [{ "source": "vault/notes/onboarding-2025-09.md", "sha256": "174210b07795ceb65bfced75f35c1ba55885c3d427192820eeb849f4b47a5b3a", "quote": "joins as member" }] }
     ] },
     { "entry": "E2", "now": "2026-04-10T09:00:00Z", "ops": [
       { "op": "revise", "id": "$A0", "value": "member", "kind": "state", "from": "2025-09-01", "to": "2026-04-01", "source": ["https://example.invalid/meeting-2026-04-09"] },

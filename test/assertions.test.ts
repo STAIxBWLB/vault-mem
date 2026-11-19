@@ -49,17 +49,13 @@ function heads(f: Fixture, id: string): string[] {
   return found[0]?.heads ?? found.map(item => item.hash);
 }
 /** Append the corpus batches E1..E5 through the write contract; returns label -> assertion id. */
-function loadCorpus(f: Fixture, q1Evidence = false): Record<string, string> {
+function loadCorpus(f: Fixture): Record<string, string> {
   const ids: Record<string, string> = {};
-  const q1Text = "joins as member\n", q1Source = "vault/notes/onboarding-2025-09.md";
-  if (q1Evidence) {
-    writeFileSync(join(f.notes, "person-a.md"), "---\nstatus: active\n---\nPerson A\n");
-    writeFileSync(join(f.notes, "onboarding-2025-09.md"), q1Text);
-  }
+  writeFileSync(join(f.notes, "person-a.md"), "---\nstatus: active\n---\nPerson A\n");
+  writeFileSync(join(f.notes, "onboarding-2025-09.md"), "joins as member\n");
   for (const batch of CORPUS.batches) {
     const ops = batch.ops.map(raw => {
       const { label: _label, ...op } = raw;
-      if (q1Evidence && raw.label === "A0") return { ...op, source: [q1Source], evidence: [{ source: q1Source, sha256: sha(q1Text), quote: "joins as member" }] };
       if (typeof op.id === "string" && op.id.startsWith("$")) { const id = ids[op.id.slice(1)]!; return { ...op, id, expected_heads: heads(f, id) }; }
       return op;
     });
@@ -578,11 +574,41 @@ test("T9 assertion reads match the corpus evaluation after index removal and reb
 
 test("Q1 read uses the full corpus and the example's evidence and subject fixtures", async () => {
   const { readAssertions } = await import("../src/assertion-read.ts");
-  const f = fixture(), ids = loadCorpus(f, true);
+  const f = fixture(), ids = loadCorpus(f);
   const answer = readAssertions(f.home, { vault: f.id, subject: "s:person-a", relation: "role", at: "2026-04-05", asOf: "2026-04-06" }, { env: f.env });
   expect(answer.pin).toHaveLength(1); expect(answer.pin[0]?.seq).toBe(15);
   expect(answer).toMatchObject({ schemaVersion: 1, basis: "assertion_journal", at: "2026-04-05", asOf: { requested: "2026-04-06", cutoff: "2026-04-07T00:00:00Z", cutoffInclusive: false },
     coverage: { journal: "present", untrusted: [], unsupported: [], tornTail: [], purged: 0 }, overlaps: [], truncated: false,
     items: [{ id: ids.A0, rev: 1, subject: "s:person-a", relation: "role", value: "member", kind: "state", from: "2025-09-01", to: "open", answer: "yes", recordedAt: "2025-09-02T09:00:00Z",
       evidence: [{ source: "vault/notes/onboarding-2025-09.md", status: "verified", quote: "joins as member" }], subjectNote: { path: "notes/person-a.md", status: "present" } }] });
+  const source = "vault/notes/onboarding-2025-09.md", query = { vault: f.id, subject: "s:person-a", relation: "role", at: "2026-04-05", asOf: "2026-04-06" };
+  denyPath(f, join(f.notes, "onboarding-2025-09.md"));
+  const withheld = readAssertions(f.home, query, { env: f.env });
+  expect(withheld.items[0]?.evidence).toEqual([{ status: "withheld" }]);
+  expect(JSON.stringify(withheld)).not.toContain(source); expect(JSON.stringify(withheld)).not.toContain("joins as member");
+  const config = loadRegistry(f.home); delete config.denyPaths; writeFileSync(join(f.home, CONFIG_FILE), JSON.stringify(config));
+  rmSync(join(f.notes, "onboarding-2025-09.md"));
+  expect(readAssertions(f.home, query, { env: f.env }).items[0]?.evidence).toEqual([{ source, status: "unavailable" }]);
+});
+
+test("purged assert and revision remain identifiable through their verified parents", async () => {
+  const { readAssertions } = await import("../src/assertion-read.ts"), f = fixture();
+  const created = ok(f.append([{ op: "declare", subject: "s:private" }, { op: "assert", subject: "s:private", relation: "role", value: "member", kind: "state", from: "2025", to: "open", source: ["mem:fixture"] }], "2026-01-01T00:00:00Z"));
+  const id = created.entries[1]!.id;
+  ok(f.append([{ op: "revise", id, expected_heads: heads(f, id), value: "lead", kind: "state", from: "2025", to: "open", source: ["mem:fixture"] }], "2026-01-02T00:00:00Z"));
+  const segment = segmentOf(f), rows = segment.lines.map(line => JSON.parse(line) as Record<string, any>);
+  delete rows[2]!.payload; rows[2]!.purged = { at: "2026-02-01T00:00:00Z", reason: "evidence_withdrawn" };
+  writeFileSync(segment.file, rows.map(canonical).join("\n") + "\n");
+  const earlier = readAssertions(f.home, { vault: f.id, at: "2026-01-01", asOf: "2026-01-01" }, { env: f.env });
+  expect(earlier.items).toEqual([]); expect(earlier.coverage.purged).toBe(1);
+  for (const row of rows.slice(1)) { delete row.payload; row.purged = { at: "2026-02-01T00:00:00Z", reason: "evidence_withdrawn" }; }
+  writeFileSync(segment.file, rows.map(canonical).join("\n") + "\n");
+  const all = readAssertions(f.home, { vault: f.id, history: true }, { env: f.env });
+  expect(all.coverage.untrusted).toEqual([]); expect(all.coverage.purged).toBe(1);
+  expect(all.items.map(row => ({ id: row.id, segment: row.segment, seq: row.seq, hash: row.hash, rev: row.rev, availability: row.availability }))).toEqual(rows.slice(1).map((row, index) => ({ id, segment: row.seg, seq: row.seq, hash: row.hash, rev: index + 1, availability: "unavailable" })));
+  for (const query of [{ subject: "s:private" }, { relation: "role" }]) {
+    const result = readAssertions(f.home, { vault: f.id, history: true, ...query }, { env: f.env });
+    expect(result.items).toEqual([]); expect(result.coverage.purged).toBe(1);
+  }
+  expect(readAssertions(f.home, { vault: f.id, at: "2026-03-01" }, { env: f.env }).items).toEqual([]);
 });
