@@ -1,0 +1,47 @@
+/** Disposable, deterministic SQLite projection of a freshly verified assertion journal. */
+import { Database } from "bun:sqlite";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, constants, lstatSync, mkdirSync, openSync, realpathSync, renameSync, unlinkSync } from "node:fs";
+import { isAbsolute, join, relative } from "node:path";
+import type { VerifiedJournal } from "./assertions.ts";
+import { canonical } from "./writer.ts";
+
+/** The index belongs to the configured home, never to the vault or its source journal. */
+export function assertionIndexPath(home: string, vaultRoot: string): string {
+  const root = realpathSync(vaultRoot), state = realpathSync(home);
+  const rel = relative(root, state);
+  if (!rel || (!rel.startsWith("..") && !isAbsolute(rel))) throw new Error("assertion index: configured home is inside the vault; move VMEM_HOME outside the vault");
+  const digest = createHash("sha256").update(root).digest("hex");
+  return join(state, "indexes", `assertions-${digest}-v1.sqlite`);
+}
+
+/**
+ * Rebuild from verified entries in a fixed order. The caller must re-read the journal for each request and must
+ * never use this projection as proof of journal integrity or as a substitute for current read policy.
+ */
+export function rebuildAssertionIndex(home: string, vaultRoot: string, journal: VerifiedJournal): string {
+  const target = assertionIndexPath(home, vaultRoot), dir = join(realpathSync(home), "indexes");
+  try { mkdirSync(dir, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  const info = lstatSync(dir);
+  if (info.isSymbolicLink() || !info.isDirectory()) throw new Error("assertion index: indexes is not a plain directory; replace the link or file with a directory in VMEM_HOME");
+  try {
+    const existing = lstatSync(target);
+    if (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1) throw new Error("assertion index: existing index is linked or not a file; remove the disposable index from VMEM_HOME/indexes");
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const temporary = join(dir, `.assertions-${randomUUID()}.tmp`);
+  const fd = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+  closeSync(fd);
+  try {
+    const db = new Database(temporary);
+    try {
+      db.exec("PRAGMA journal_mode=MEMORY; PRAGMA synchronous=OFF; CREATE TABLE entries (segment TEXT NOT NULL, seq INTEGER NOT NULL, entry TEXT NOT NULL, PRIMARY KEY(segment, seq)) WITHOUT ROWID;");
+      const put = db.prepare("INSERT INTO entries (segment, seq, entry) VALUES (?, ?, ?)");
+      db.transaction(() => {
+        for (const segment of [...journal.segments].sort((a, b) => a.segment < b.segment ? -1 : a.segment > b.segment ? 1 : 0))
+          for (const entry of segment.entries) put.run(segment.segment, entry.seq, canonical(entry));
+      })();
+    } finally { db.close(); }
+    renameSync(temporary, target);
+    return target;
+  } finally { try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; } }
+}
