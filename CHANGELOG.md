@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-20
+
+- Raise the exact `@staix/agent-mem` runtime pin from 0.29.0 to 0.30.0, allowing the home format floor to be raised after older library hosts stop. The upgrade does not raise the floor automatically.
+
 ## [0.10.0] - 2026-11-19
 
 - N-1: 0.9.1 and 0.10.0 share the same note/spec index files (`links2-schema4`, link resolution 2, schema 4) and config format 4; neither version rebuilds the other's note/spec index or changes the config format. CLI: 0.9.1 refuses the new proposal, assertion, history, evidence and graph-explain commands/options, does not relink subject notes on move/merge, and ignores `assertions/` during sync; 0.10.0 stages recognized assertion segments, reports L16/L17, uses the new human-output markers and tables, and uses exit 2 for usage errors (0.9.1 uses 1). Notes remain shared: 0.9.1 treats an unchanged `evidence` field as a warning and refuses newly introduced or explicitly changed unknown evidence metadata. MCP: 0.9.1 exposes 38 tools and rejects unknown tools/arguments, while 0.10.0 exposes 52; existing lint results gain L16/L17, `vmem_read` accepts `revision`, and move/merge receipts may gain `assertions`. Proposal records live under the configured home and the assertion journal lives in the vault; 0.9.1 does not use either. Agent-mem: 0.9.1 pins 0.28.0 and 0.10.0 pins 0.29.0; curated `INDEX_VERSION` moves from 4 to 5, rebuilding a separate derived index while leaving v4 intact for 0.9.1 to keep using; the upgrade does not automatically raise capture, candidate, sync or home format floors. An opt-in admitted placement realm is not recognized by the older reader.
