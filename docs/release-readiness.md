@@ -1,6 +1,6 @@
 # Release readiness evidence
 
-- Status: 0.9.1 (tag `v0.9.1`) is the latest published release. This prepares 0.10.0 from main `062c92e` with fresh cgroup performance and external synthetic parity evidence. No 0.10.0 tag or publication is performed here. Historical private-corpus and native fixture evidence below is not new 0.10.0 acceptance; live cutover remains a separate operation.
+- Status: 0.10.0 (tag `v0.10.0`) is the latest published release. This prepares 0.10.1 from main `bf7a8f8` with fresh cgroup performance evidence and the unchanged external synthetic parity evidence. Historical private-corpus and native fixture evidence below is not new 0.10.1 acceptance; live cutover remains a separate operation.
 - Contract: [issue #11](https://github.com/STAIxBWLB/vault-mem/issues/11). This readiness work performed no host registration or live vault write. Publication does not authorize registration or cutover.
 - Runtime and method digests in the raw evidence bind measurements to source bytes. Evidence-only documentation changes do not alter measured runtime; a runtime/method change requires a new measurement.
 
@@ -31,6 +31,8 @@
 ## Performance record
 
 The [raw synthetic report](evidence/synthetic-performance.json) contains every search/write/RSS sample, runtime/method digests, Bun/kernel/CPU details and container quotas. RSS uses decimal byte thresholds; search p95 is the nearest-rank statistic over 30 measured MCP queries after five warmups, including metadata refresh and transport. The derived index is prebuilt before the MCP process starts.
+
+The 0.10.1 candidate ([versioned performance report](evidence/v0.10.1-synthetic-performance.json)) was measured on 2026-11-20 at preparation commit `327b45a`. MCP idle RSS was 48.80 MB, cgroup `memory.peak` 86.55 MB, sampled VmRSS/VmHWM maximum 122.07 MB, and search p95 25.81 ms. All synthetic gates passed. The Git-free run has an empty `revision`; the runtime and method digests bind the measured bytes. Representative private-write, native Obsidian, consumer and live cutover checks were not repeated.
 
 The 0.10.0 candidate ([versioned performance report](evidence/v0.10.0-synthetic-performance.json)) was measured once on 2026-11-19T04:00:00.417Z at preparation commit `0808640` based on main `062c92e`. MCP idle RSS was 50.27 MB, cgroup `memory.peak` 91.19 MB, sampled VmRSS/VmHWM maximum 124.60 MB, and search p95 25.21 ms. All declared synthetic gates passed. Stats p95 145.90 ms and synthetic CLI write p95 497.78 ms are diagnostics, not acceptance gates. The report records 23 VmHWM decreases as diagnostics; cgroup charged memory is not an upper bound of VmRSS because pages first charged by the harness are excluded. The run used Bun 1.4.4, kernel 6.8.0-147-generic, a 16-CPU/32-GiB container and 5000 synthetic notes. The Git-free run has an empty `revision`; runtime digest `f1bd795a1f6ebc6c6b45e130877e04f38ef59aca569548a051383c5661a8546d` and method digest `4f279c5b364812c0eb10ae84f706dec884dd9f226501e1812d80bd73bc1c1cc3` bind the measured bytes. `releaseReady` remains false; representative private-write, native Obsidian, consumer and live cutover checks were not repeated.
 
