@@ -4,6 +4,7 @@ export interface AnalysisSnapshot {
   /** Effective selected-vault domain set; standalone snapshots default to the built-ins. */
   domains?: string[];
   graphResolution?: number;
+  enrichmentWarnings?: Record<string, string[]>;
   notes: { path: string; source: string }[];
   today: string;
   logPath: string;
@@ -28,7 +29,7 @@ export interface AnalysisSnapshot {
    */
   linkHintBound?: { cap: number; attempted: readonly string[]; skipped: number };
 }
-export type LintCode = "L01" | "L02" | "L03" | "L09" | "L10" | "L11" | "L12" | "L13" | "L14" | "L15" | "L16" | "L17";
+export type LintCode = "L01" | "L02" | "L03" | "L09" | "L10" | "L11" | "L12" | "L13" | "L14" | "L15" | "L16" | "L17" | "L18" | "L19";
 export interface LintReport {
   findings: Record<LintCode, string[]>;
   errors: number;

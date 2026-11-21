@@ -6,7 +6,7 @@
  * `evaluateAssertions` is the pure evaluation the read surface wraps, and `appendAssertions` is the write contract.
  * Nothing here writes a note, an `updated` stamp or a log line unless the caller supplies a log event.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
@@ -19,6 +19,7 @@ import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry, syncDirectory } from "./registry.ts";
 import { sourceReferences, sourceWorkspaceRoot } from "./source.ts";
 import { appendLog, checkLogEvent } from "./vault-log.ts";
+import { MAX_NOTE_BYTES } from "./vault-index.ts";
 import { screenContent, screenMetadata } from "./write-validation.ts";
 import type { WriteIssue } from "./write-types.ts";
 import { shellWord } from "./text-output.ts";
@@ -73,7 +74,7 @@ export type Answer = "yes" | "no" | "unknown";
 export interface AssertionItem {
   id: string; rev: number; op: "assert" | "revise" | "retract"; subject: string; relation: string; hash: string;
   value?: string; kind?: "state" | "event"; from?: string; to?: string; held_on?: string; on?: string; reason?: string;
-  evidence?: unknown[]; source?: string[];
+  evidence?: unknown[]; source?: string[]; origin?: EnrichmentOrigin & { status: "unverified" };
   answer?: Answer; recordedAt: string; effectiveRecordedAt?: string; clockInverted?: true; replacedAt?: string | null;
   revisionConflict?: true; heads?: string[]; purged?: true;
   segment?: string; seq?: number;
@@ -384,7 +385,7 @@ function item(state: AssertionState, kept: Kept, t: number | undefined): Asserti
   const { entry } = kept, payload = entry.payload ?? {};
   const out: AssertionItem = { id: state.id, rev: entry.op === "assert" ? 1 : entry.purged ? kept.depth + 1 : Number(payload.rev), op: entry.op as AssertionItem["op"], subject: entry.purged ? "" : state.subject, relation: entry.purged ? "" : state.relation, hash: entry.hash, recordedAt: entry.recorded_at };
   if (entry.purged) { out.purged = true; out.segment = entry.seg; out.seq = entry.seq; }
-  for (const key of ["value", "kind", "from", "to", "held_on", "on", "reason", "evidence", "source"] as const) if (payload[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = payload[key];
+  for (const key of ["value", "kind", "from", "to", "held_on", "on", "reason", "evidence", "source", "origin"] as const) if (payload[key] !== undefined) (out as unknown as Record<string, unknown>)[key] = payload[key];
   if (kept.inverted) { out.effectiveRecordedAt = kept.effective; out.clockInverted = true; }
   if (t !== undefined && entry.op !== "retract" && !entry.purged) out.answer = answerOn(payload, t);
   return out;
@@ -463,6 +464,8 @@ export type AssertOp =
   | { op: "assert"; subject: string; relation: string; value: string; kind: "state" | "event"; from?: string; to?: string; held_on?: string; on?: string; evidence?: EvidenceEntry[]; source?: string[] }
   | { op: "revise"; id: string; expected_heads: string[]; value: string; kind: "state" | "event"; from?: string; to?: string; held_on?: string; on?: string; evidence?: EvidenceEntry[]; source?: string[] }
   | { op: "retract"; id: string; expected_heads: string[]; reason: typeof REASONS[number] };
+export interface EnrichmentOrigin { path: string; sha256: string; producer: { skill: string; version: string; model: string }; createdAt: string; intakeId?: string }
+export interface AssertOptions { env?: NodeJS.ProcessEnv; now?: Date; origin?: EnrichmentOrigin }
 export interface AssertRequest { vault: string; ops: unknown; channel?: "cli" | "mcp"; dryRun?: boolean; log?: LogEvent }
 export interface AssertReceipt {
   ok: boolean; applied: boolean; dryRun: boolean;
@@ -564,7 +567,7 @@ function context(home: string, request: { vault: string; channel?: "cli" | "mcp"
   return { vault, config, root, channel };
 }
 /** Validate a batch against the journal as read (shapes, bounds, temporal rules, evidence, screening, heads). */
-function plan(ctx: Context, ops: unknown, journal: VerifiedJournal): Planned[] {
+function plan(ctx: Context, ops: unknown, journal: VerifiedJournal, origin?: EnrichmentOrigin): Planned[] {
   if (!ops || !Array.isArray(ops) || ops.length < 1 || ops.length > MAX_BATCH_OPS) refuse("V01", `ops must be a list of 1..${MAX_BATCH_OPS} operations; split larger batches`);
   if (bytes(canonical(ops)) > MAX_BATCH_BYTES) refuse("V09", `the canonical batch exceeds ${MAX_BATCH_BYTES} bytes; split it into smaller batches`);
   const resolved = resolveEntries(journal), { assertions, subjects } = states(resolved.kept.values());
@@ -614,6 +617,7 @@ function plan(ctx: Context, ops: unknown, journal: VerifiedJournal): Planned[] {
         entry = { op: "revise", id: op.id, target: op.id, parents: heads, payload: { id: op.id, rev, value: held, ...world, evidence: backing.evidence, ...(backing.source ? { source: backing.source } : {}) } };
       }
     }
+    if (origin && (entry.op === "assert" || entry.op === "revise")) entry.payload.origin = { ...origin, status: "unverified" };
     const text = canonical(entry.payload);
     if (bytes(text) > MAX_PAYLOAD_BYTES) refuse("V09", `${at}: payload exceeds ${MAX_PAYLOAD_BYTES} bytes as canonical JSON; shorten quotes or split evidence`);
     const screened = [...screenContent(text, ctx.vault, ctx.config, "notes"), ...screenMetadata(entry.payload, { vault: ctx.vault, config: ctx.config, piiSurface: "notes" }, at)]
@@ -701,14 +705,43 @@ function release(lock: { fd: number; file: string; ino: number; dev: number }, i
   } catch { issues.push({ code: "CLEANUP", severity: "warning", message: "assertions lock retained; inspect before removing it manually" }); }
 }
 
+/** Validate untrusted producer claims independently of the public request schema. */
+function validateOrigin(value: unknown): EnrichmentOrigin {
+  if (!value || typeof value !== "object" || Array.isArray(value)) refuse("V01", "origin must contain path, sha256, producer and createdAt");
+  const origin = value as Record<string, unknown>, producer = origin.producer;
+  if ((Object.keys(origin).some(key => !["createdAt", "path", "producer", "sha256", "intakeId"].includes(key)) || (origin.intakeId !== undefined && (typeof origin.intakeId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(origin.intakeId)))) || typeof origin.path !== "string" || !/^notes\/[^/\\]+\.md$/.test(origin.path) || /\p{Cc}/u.test(origin.path) || !origin.path.isWellFormed() || typeof origin.sha256 !== "string" || !HEX64.test(origin.sha256) || !(typeof origin.createdAt === "string" && !Number.isNaN(Date.parse(origin.createdAt)) && new Date(origin.createdAt).toISOString() === origin.createdAt) || !producer || typeof producer !== "object" || Array.isArray(producer) || Object.keys(producer).sort().join(",") !== "model,skill,version") refuse("V01", "origin requires a flat note path, lowercase SHA-256, canonical ISO createdAt and producer skill, version and model");
+  for (const value of Object.values(producer as Record<string, unknown>)) if (typeof value !== "string" || !value.trim() || bytes(value) > 200 || /\p{Cc}/u.test(value) || !value.isWellFormed()) refuse("V01", "origin producer fields must be nonempty well-formed text of at most 200 bytes without control characters");
+  return origin as unknown as EnrichmentOrigin;
+}
+/** Recheck exact bytes of a plain note under the journal lock immediately before publication. */
+function verifyOrigin(ctx: Context, origin: EnrichmentOrigin): void {
+  const file = join(ctx.root, origin.path), notes = join(ctx.root, "notes");
+  if (isDenied(origin.path, ctx.config.denyPaths ?? []) || isDenied(canonicalPath(file), ctx.config.denyPaths ?? [])) refuse("V06", "origin note is denied by current policy; choose an allowed source");
+  let fd: number | undefined;
+  try {
+    if (realpathSync(notes) !== notes) refuse("V04", "origin notes directory must be a plain directory; inspect the vault path");
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const before = fstatSync(fd, { bigint: true });
+    if (!before.isFile() || before.size > BigInt(MAX_NOTE_BYTES)) refuse("V09", "origin note must be a bounded regular file; inspect the source");
+    const data = Buffer.alloc(Number(before.size) + 1); let length = 0;
+    while (length < data.length) { const n = readSync(fd, data, length, data.length - length, null); if (!n) break; length += n; }
+    const after = fstatSync(fd, { bigint: true }), named = lstatSync(file, { bigint: true });
+    if (named.isSymbolicLink() || named.dev !== after.dev || named.ino !== after.ino || length !== Number(before.size) || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) refuse("CONCURRENT", "origin note changed during verification; reread it and regenerate the result");
+    if (createHash("sha256").update(data.subarray(0, length)).digest("hex") !== origin.sha256) refuse("STALE_ORIGIN", "origin source content hash is stale; reread the note and regenerate the result before retrying");
+  } catch (caught) {
+    if (caught instanceof Refused) throw caught;
+    refuse("V04", "origin note cannot be read as a plain file; inspect its path and retry");
+  } finally { if (fd !== undefined) closeSync(fd); }
+}
+
 /**
  * Validate and append one batch (design: Write contract). All-or-nothing: any error refuses the whole batch before
  * any byte is written. A dry run validates against the journal as read, without lock, append or `recordedAt`.
  */
-export function appendAssertions(home: string, request: AssertRequest, options: { env?: NodeJS.ProcessEnv; now?: Date } = {}): AssertReceipt {
+export function appendAssertions(home: string, request: AssertRequest, options: AssertOptions = {}): AssertReceipt {
   return appendAssertionsInternal(home, request, options);
 }
-function appendAssertionsInternal(home: string, request: AssertRequest, options: { env?: NodeJS.ProcessEnv; now?: Date }, heldRoot?: string): AssertReceipt {
+function appendAssertionsInternal(home: string, request: AssertRequest, options: AssertOptions, heldRoot?: string): AssertReceipt {
   const env = options.env ?? process.env;
   const receipt: AssertReceipt = { ok: false, applied: false, dryRun: request?.dryRun === true, segment: null, entries: [], recovery: [], issues: [], indexUpdated: false };
   let lock: ReturnType<typeof acquire> | undefined;
@@ -721,16 +754,22 @@ function appendAssertionsInternal(home: string, request: AssertRequest, options:
       const logIssues = checkLogEvent(home, { vault: request.vault, event: request.log, channel: ctx.channel }, env);
       if (logIssues.length) throw new Refused(logIssues.map(found => ({ ...found, message: `log event refused, nothing written: ${found.message}; fix the event fields (rules as for log append) or omit it` })));
     }
+    const origin = options.origin === undefined ? undefined : validateOrigin(options.origin);
+    if (origin) {
+      const screened = [...screenContent(canonical(origin), ctx.vault, ctx.config, "notes"), ...screenMetadata({ ...origin }, { vault: ctx.vault, config: ctx.config, piiSurface: "notes" }, "origin")].filter(issue => issue.severity === "error");
+      if (screened.length) throw new Refused(screened);
+    }
     if (receipt.dryRun) {
+      if (origin) verifyOrigin(ctx, origin);
       const journal = readJournal(ctx.root, ctx.config.denyPaths ?? []);
-      const planned = plan(ctx, request.ops, journal);
+      const planned = plan(ctx, request.ops, journal, origin);
       receipt.entries = planned.map(entry => ({ id: entry.id || "(assigned at append)", op: entry.op, ...(entry.op !== "subject" ? { rev: Number(entry.payload.rev) } : {}) }));
       receipt.ok = true;
       return receipt;
     }
     if (!heldRoot) lock = acquire(ctx.root);
     const journal = readJournal(ctx.root, ctx.config.denyPaths ?? []);
-    const planned = plan(ctx, request.ops, journal);
+    const planned = plan(ctx, request.ops, journal, origin);
     if (journal.entries + planned.length > MAX_JOURNAL_ENTRIES) refuse("V09", `the journal would exceed ${MAX_JOURNAL_ENTRIES} entries; appends refuse rather than rotate history`);
     // An over-estimate only, so a segment chosen on it has room for the real lines; `parents` cost their own bytes.
     const estimate = planned.reduce((sum, entry) => sum + bytes(canonical(entry.payload)) + 1024 + (entry.parents ?? []).reduce((cost, parent) => cost + parent.length + 4, 0), 0);
@@ -762,6 +801,7 @@ function appendAssertionsInternal(home: string, request: AssertRequest, options:
     const buffer = Buffer.from(lines.join(""));
     // The journal bound is checked on the bytes that will be written, before the file is opened.
     if (journal.bytes + buffer.length > MAX_JOURNAL_BYTES) refuse("V09", `the journal would exceed ${MAX_JOURNAL_BYTES} bytes once this batch is written; appends refuse rather than rotate history`);
+    if (origin) verifyOrigin(ctx, origin);
     const dir = join(ctx.root, ASSERTIONS_DIR);
     let createdDir = false;
     try { const stat = lstatSync(dir); if (stat.isSymbolicLink() || !stat.isDirectory()) refuse("V04", "assertions/ must be a plain directory; move the file or link aside"); }

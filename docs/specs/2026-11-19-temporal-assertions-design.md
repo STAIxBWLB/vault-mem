@@ -43,8 +43,8 @@ Status: accepted on 2026-11-19. The owner selected alternative C and answered O2
   - Note change history: what a note file contained at a Git commit (issue 235).
   - World time: when an asserted state held or an event occurred, read through `at`.
   - Record time: when this vault's journal recorded a revision of an assertion, read through `as_of`.
-- In scope: manually authored assertions with an explicit subject, relation and value, plus evidence references.
-- Out of scope (issue 237): automatic extraction, LLM calls, embeddings, PostgreSQL, OWL/SPARQL, inference, entity resolution, retroactive fabricated history, workspace or vault policy changes, deployment.
+- In scope: assertions with an explicit subject, relation and value, plus evidence references. An explicit offline enrichment intake may supply a candidate and unverified producer claims; it does not change evidence or temporal guarantees.
+- Out of scope: model invocation, embeddings, PostgreSQL, OWL/SPARQL, inference, entity resolution, retroactive fabricated history, workspace or vault policy changes, deployment.
 - Never used as world time or record time: note `created`/`updated`, file mtimes, Git author or committer dates, `confidence`, graph `confidence_tag`.
 
 ## Current time guarantees
@@ -370,6 +370,7 @@ A purged line keeps every hashed field, drops `payload` and adds `"purged": {"at
   - A path source is workspace-relative, resolved against `src/source.ts#sourceWorkspaceRoot` (the workspace that holds the vault registry), never against the vault. A vault note is therefore cited as, for example, `vault/notes/x.md`; a bare `notes/x.md` resolves outside the vault and fails.
   - Sources denied by current policy are refused (V06). A path source must be `verified` at append; any other result refuses the whole batch with the entry index and reason. That includes `unresolved_source_root` for a vault with no resolvable workspace root, and the refusal names the next step: register the workspace root, or cite the source as an external reference.
   - Non-path references are stored as `unverified_external` without I/O, as `verifyEvidenceEntry` classifies them before resolving any root.
+  - Optional internal enrichment origin is stored in assert and revise payloads with a source note path and content SHA-256, producer skill/version/model and creation time. Producer claims are marked unverified. The source is checked under the journal lock immediately before append; a stale hash refuses the batch. Reads apply current path and content policy to the origin. Older payloads remain valid without it.
   - Screening with `src/write-validation.ts#screenContent` over the canonical payload (secrets always, PII per vault policy), plus a traversal like `src/write-validation.ts#screenMetadata`.
   - Clock: `recorded_at` must not precede the segment's last `recorded_at`. For a `revise` or `retract`, it also must not precede the `recorded_at` of any parent, whichever segment holds it, including entries synced from other clones. Otherwise the batch is refused with `CLOCK`, naming the later time to wait for or the clock to correct. There is no clamping.
   - Segment health: the clone's segment tail must match the writer record and verify; otherwise the batch goes to a new segment and the receipt says so.

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { readEnrichmentStore } from "./enrichment-store.ts";
 import { localDate } from "./local-date.ts";
 import { MAX_REPORT_BYTES } from "./write-validation.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
@@ -93,6 +95,18 @@ export function analysisInput(home: string, id: string, options: { today?: strin
     }catch{ /* Invalid frontmatter remains visible to L02; do not infer missing source paths. */ }
     if(Object.keys(warnings).length)snapshot.sourceWarnings=warnings;
     if (vault.graph?.resolution !== undefined) snapshot.graphResolution = vault.graph.resolution;
+    if (options.hints && vault.enrichment?.enabled) {
+      const store = readEnrichmentStore(home, vault, config.vaults, config.denyPaths ?? []);
+      const embeddings = new Set(store.records.filter(r => r.kind === "embedding").map(r => JSON.stringify([r.path, r.contentHash])));
+      const paths = new Set(store.records.filter(r => r.kind === "embedding").map(r => r.path));
+      const enrichmentWarnings: Record<string, string[]> = Object.create(null);
+      for (const note of snapshot.notes) {
+        const path = `notes/${note.path.replace(/^notes\//, "")}`;
+        const hash = createHash("sha256").update(note.source).digest("hex");
+        if (!embeddings.has(JSON.stringify([path, hash]))) enrichmentWarnings[note.path] = [`embedding ${paths.has(path) ? "stale" : "missing"}; run enrichment for the current note`];
+      }
+      snapshot.enrichmentWarnings = enrichmentWarnings;
+    }
     // Evidence drift is a read/lint finding: status and reason only, never the quote or source text.
     const drift:Record<string,string[]>=Object.create(null),reads:EvidenceReads=new Map();
     for(const note of snapshot.notes)try{

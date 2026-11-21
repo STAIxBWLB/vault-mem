@@ -70,3 +70,8 @@ export type { SpecFreshnessEntry, SpecFreshnessReport, SpecFreshnessOptions } fr
 export { settingsSnapshot, changeSettings } from "./registry.ts";
 export type { SettingsChanges, SettingsRequest, SettingsSnapshot, SettingsResult } from "./registry.ts";
 export { plugin as consolePlugin } from "./ui/plugin.ts";
+export { listEnrichmentWork, intakeEnrichment, readEnrichment, reconcileEnrichment } from "./enrichment.ts";
+export type { EnrichmentWorkRequest, EnrichmentIntakeRequest } from "./enrichment.ts";
+export { hybridSearch, similarNotes } from "./enrichment-query.ts";
+export type { QueryVector } from "./enrichment-query.ts";
+export type { EnrichmentKind, EnrichmentProducer } from "./enrichment-store.ts";

@@ -16,7 +16,7 @@ const CONFIDENCE = new Set(["proven", "likely", "experimental"]);
 const STATUS = new Set(["active", "superseded", "archived"]);
 const CATEGORY = new Set(["gap", "prompt", "workflow"]);
 const KEYS = new Set([
-  "description", "type", "domain", "topics", "source", "confidence", "status",
+  "description", "type", "domain", "topics", "source", "confidence", "status", "inferred_links",
   "methodology", "evidence_strength", "project", "alternatives", "superseded_by", "supersedes", "stakeholders",
   "course", "semester", "student_level", "institution", "policy_area", "role", "affiliation", "last_contact",
   "tool", "category", "resolution_status", "aliases", "tags", "cssclasses", "title", "created", "updated", "received", "entities",
@@ -162,6 +162,7 @@ function schema(note: ParsedNote, vault: VaultSpec): SchemaIssue[] {
   for (const [key, allowed] of [["confidence", CONFIDENCE], ["status", STATUS], ["category", CATEGORY]] as const) {
     if (data[key] !== undefined && (typeof data[key] !== "string" || !allowed.has(data[key]))) add(key,`invalid ${key} enum`);
   }
+  if (data.inferred_links !== undefined && (!Array.isArray(data.inferred_links) || data.inferred_links.length > 1000 || data.inferred_links.some(value => typeof value !== "string" || !/^[a-z0-9][a-z0-9-]{0,190}$/.test(value)))) add("inferred_links", "inferred_links must be a list of at most 1000 lowercase kebab-case note stems");
   if(data.source!==undefined)try{sourceReferences(data.source);}catch{add("source","source must contain workspace-relative paths, mem ids or URLs");}
   if(data.evidence!==undefined){const problem=evidenceProblem(data.evidence,data.source);if(problem)add("evidence",problem,["evidence","source"]);}
   if (data.type === "reference") {

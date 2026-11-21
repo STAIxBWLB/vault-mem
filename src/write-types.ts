@@ -10,6 +10,7 @@ export type WriteOp =
   | { op: "create"; path: string; frontmatter: Record<string, unknown>; body?: string }
   /** One `oldString`/`newString` pair or `edits` (1..32 pairs), never both; edits apply all-or-nothing against the original text. */
   | { op: "patch"; path: string; oldString?: string; newString?: string; edits?: PatchEdit[]; expectedSha?: string }
+  | { op: "infer-link"; path: string; target: string; expectedSha: string }
   | { op: "append"; path: string; section: string; markdown: string; expectedSha?: string }
   | { op: "frontmatter"; path: string; set: Record<string, unknown>; unset?: string[]; expectedSha?: string }
   | { op: "link"; from: string; to: string; relation: "supports" | "contradicts" | "extends" | "applies-to" | "context-for"; context?: string; bidirectional?: boolean }
