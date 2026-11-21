@@ -27,7 +27,7 @@ export function checkProposalRpcSize(request: unknown): void {
 }
 /** Create, exact-replacement patch and inferred-link proposals have one canonical flat note target. */
 export function parseProposalOperation(value: unknown): ProposalOperation {
-  if (!object(value) || typeof value.path !== "string") throw new Error("proposal: expected one create or patch operation and note target");
+  if (!object(value) || typeof value.path !== "string") throw new Error("proposal: operation or note target is missing; supply a create, patch or infer-link operation with a path");
   if (jsonBytes(value) > MAX_PROPOSAL_RECORD_BYTES) throw new Error("proposal: operation exceeds the 32 KiB record limit; shorten the payload");
   const path = notePath(value.path);
   if (value.op === "create") {
@@ -46,9 +46,9 @@ export function parseProposalOperation(value: unknown): ProposalOperation {
     return { op: "patch", path, edits, expectedSha: value.expectedSha };
   }
   if (value.op === "infer-link") {
-    if (!exactKeys(value, ["op", "path", "target", "expectedSha"]) || typeof value.target !== "string" || typeof value.expectedSha !== "string" || !/^[a-f0-9]{64}$/.test(value.expectedSha)) throw new Error("proposal: infer-link requires a target and base SHA; correct the operation");
+    if (!exactKeys(value, ["op", "path", "target", "expectedSha"]) || typeof value.target !== "string" || typeof value.expectedSha !== "string" || !/^[a-f0-9]{64}$/.test(value.expectedSha)) throw new Error("proposal: infer-link requires a target and base SHA; select a target and reread the source for its current SHA-256");
     const target = notePath(value.target).slice(6, -3);
-    if (path === `notes/${target}.md`) throw new Error("proposal: infer-link endpoints must differ");
+    if (path === `notes/${target}.md`) throw new Error("proposal: infer-link endpoints must differ; select another target note");
     return { op: "infer-link", path, target, expectedSha: value.expectedSha };
   }
   throw new Error("proposal: unsupported operation; choose create, patch or infer-link");

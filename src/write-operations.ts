@@ -386,8 +386,8 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
     }
     case "infer-link": {
       const from = existing(operation.path), to = existing(operation.target), stem = to.path.slice(6, -3);
-      if (from.path === to.path) refuse("V01", "inferred link endpoints must differ", from.path);
-      if (typeof operation.expectedSha !== "string" || !/^[a-f0-9]{64}$/.test(operation.expectedSha)) refuse("V09", "inferred link requires the source note's current SHA-256", from.path);
+      if (from.path === to.path) refuse("V01", "inferred link endpoints must differ; select another target note", from.path);
+      if (typeof operation.expectedSha !== "string" || !/^[a-f0-9]{64}$/.test(operation.expectedSha)) refuse("V09", "inferred link requires the source note's current SHA-256; reread the source before retrying", from.path);
       const doc = document(from.source, from.path), links = doc.data.inferred_links;
       if (links !== undefined && (!Array.isArray(links) || links.some(value => typeof value !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(value)))) refuse("V01", "inferred_links must be a list of note stems; repair it before adding a link", from.path);
       if (bodyAlreadyLinks(notes, from.path, to.path)) refuse("V08", "the target is already linked in the body; inspect the note", from.path);
