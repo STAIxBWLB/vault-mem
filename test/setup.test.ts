@@ -306,7 +306,7 @@ test("skill conflicts are reported without blocking a successful MCP install", (
   const result = run(["setup", "codex", "--apply", "--json"], f.env), report = JSON.parse(result.text);
   expect(result.code).toBe(0);
   expect(report.actions[0]).toMatchObject({ change: "add" });
-  expect(report.skills[0].report.actions.find((a: { name: string }) => a.name === "vault-connect")).toMatchObject({ change: "foreign" });
+  expect(report.skills[0].report.actions.find((a: { name: string }) => a.name === "vault-connect")).toMatchObject({ change: "foreign", reason: expect.stringContaining("vmem setup codex --apply") });
   expect(readFileSync(join(foreign, "keep"), "utf8")).toBe("user data");
 });
 
@@ -327,4 +327,16 @@ test("hosts without automatic skill roots report the export path", () => {
     expect(skill?.reason ?? "").toContain("vmem skills export <dir>");
     expect(skill?.reason ?? "").toContain("not installed");
   }
+});
+
+test("modified skill reports the actual host repair command", () => {
+  const f = fixture();
+  f.setup("kimi", "apply");
+  const file = join(f.home, ".kimi-code", "skills", "vault-connect", "SKILL.md");
+  writeFileSync(file, "local edit");
+  const report = f.setup("kimi", "apply");
+  const action = report.skills?.find(item => item.target === "kimi")?.report?.actions.find(item => item.name === "vault-connect");
+  expect(action?.change).toBe("modified");
+  expect(action?.reason).toContain("vmem setup kimi --apply");
+  expect(readFileSync(file, "utf8")).toBe("local edit");
 });

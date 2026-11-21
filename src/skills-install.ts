@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import { version } from "../package.json";
 import type { SetupMode, SetupTarget } from "./setup.ts";
+import { shellWord } from "./text-output.ts";
 
 export const SKILL_NAMES = ["vault-connect", "vault-extract", "vault-graph", "vault-learn", "vault-lint", "vault-refactor", "vault-remember", "vault-rethink", "vault-stats", "vault-sync", "vault-update", "vmem-status", "skill-mine"] as const;
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -121,7 +122,7 @@ function existingRoot(path: string): string | undefined {
   }
 }
 /** Plan or install one complete skill tree per name. `root` must be an absolute target directory. */
-export function installSkills(root: string, mode: SetupMode, packageRoot = PACKAGE_ROOT, packageVersion = version): SkillInstallReport {
+export function installSkills(root: string, mode: SetupMode, packageRoot = PACKAGE_ROOT, packageVersion = version, retryCommand = ["vmem", "skills", "export", root].map(shellWord).join(" ")): SkillInstallReport {
   if (!isAbsolute(root)) throw new Error("skills: target must be absolute; provide an absolute skill root");
   if (mode !== "undo" && (typeof packageVersion !== "string" || !packageVersion.trim() || Buffer.byteLength(packageVersion) > 128 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(packageVersion))) throw new Error("skills: package version is invalid; reinstall a valid vmem package");
   const requested = resolve(root), actions: SkillAction[] = [];
@@ -133,13 +134,13 @@ export function installSkills(root: string, mode: SetupMode, packageRoot = PACKA
     try {
       let before: Stats | undefined;
       try { before = lstatSync(target); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      if (before && (!before.isDirectory() || before.isSymbolicLink())) { action.change = "foreign"; action.reason = "not a vmem-owned real directory; left untouched"; continue; }
+      if (before && (!before.isDirectory() || before.isSymbolicLink())) { action.change = "foreign"; action.reason = `not a vmem-owned real directory; left untouched. Remove or relocate it and rerun ${retryCommand} to let vmem manage it, or keep it`; continue; }
       const own = before ? marker(target) : undefined;
-      if (before && !own) { action.change = "foreign"; action.reason = "ownership marker missing or invalid; left untouched"; continue; }
+      if (before && !own) { action.change = "foreign"; action.reason = `ownership marker missing or invalid; left untouched. Remove or relocate it and rerun ${retryCommand} to let vmem manage it, or keep it`; continue; }
       if (before && own) {
         let current: string;
-        try { current = digest(walk(target)); } catch { action.change = "modified"; action.reason = "contents cannot be safely verified; left untouched"; continue; }
-        if (current !== own.sha256) { action.change = "modified"; action.reason = "contents differ from ownership marker; left untouched"; continue; }
+        try { current = digest(walk(target)); } catch { action.change = "modified"; action.reason = `contents cannot be safely verified; left untouched. Inspect or remove it and rerun ${retryCommand}, or keep it`; continue; }
+        if (current !== own.sha256) { action.change = "modified"; action.reason = `contents differ from the ownership marker; left untouched. Restore or remove it and rerun ${retryCommand}, or keep the local edit`; continue; }
       }
       if (mode === "undo") {
         if (!before) continue;

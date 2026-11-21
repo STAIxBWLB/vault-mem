@@ -31,12 +31,12 @@ test("foreign and modified skills survive apply and undo", () => {
     writeFileSync(join(f.target, "vault-learn"), "foreign file");
     mkdirSync(join(f.target, "vault-lint")); writeFileSync(join(f.target, "vault-lint", "keep"), "foreign directory");
     const first = installSkills(f.target, "apply");
-    expect(first.actions.find(a => a.name === "vault-connect")?.change).toBe("foreign");
+    expect(first.actions.find(a => a.name === "vault-connect")).toMatchObject({ change: "foreign", reason: expect.stringContaining("vmem skills export") });
     expect(first.actions.find(a => a.name === "vault-learn")?.change).toBe("foreign");
     expect(first.actions.find(a => a.name === "vault-lint")?.change).toBe("foreign");
     writeFileSync(join(f.target, "vault-extract", "SKILL.md"), "local edit");
     const next = installSkills(f.target, "apply");
-    expect(next.actions.find(a => a.name === "vault-extract")?.change).toBe("modified");
+    expect(next.actions.find(a => a.name === "vault-extract")).toMatchObject({ change: "modified", reason: expect.stringContaining("vmem skills export") });
     const undone = installSkills(f.target, "undo");
     expect(undone.actions.find(a => a.name === "vault-connect")?.change).toBe("foreign");
     expect(undone.actions.find(a => a.name === "vault-extract")?.change).toBe("modified");
@@ -93,5 +93,36 @@ test("replacement and undo restore the original when post-rename inspection fail
     try { result = installSkills(f.target, "undo"); } finally { spy2.mockRestore(); }
     expect(result.actions.find(a => a.name === "vault-connect")?.change).toBe("refused");
     expect(readFileSync(join(f.target, "vault-connect", "SKILL.md"), "utf8")).toBe(old);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+
+test("export uses a human table by default and keeps JSON and color modes", async () => {
+  const { runAsync } = await import("../src/cli.ts");
+  const { stripTerminal } = await import("../src/text-output.ts");
+  const f = fixture();
+  try {
+    const target = join(f.root, "export space");
+    const text = await runAsync(["skills", "export", target, "--color=never"], {});
+    expect(text.code).toBe(0);
+    expect(text.text).toContain("skills export:");
+    for (const field of ["NAME", "CHANGE", "PATH", "REASON", "vault-connect"]) expect(text.text).toContain(field);
+    expect(text.text.trimStart().startsWith("{")).toBe(false);
+    const json = await runAsync(["skills", "export", target, "--json"], {});
+    expect(JSON.parse(json.text).actions).toHaveLength(13);
+    const colored = await runAsync(["skills", "export", target, "--color=always"], {});
+    expect(stripTerminal(colored.text)).not.toBe(colored.text);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("export conflicts give an executable command for a path with spaces", () => {
+  const f = fixture();
+  try {
+    const target = join(f.root, "export space"); mkdirSync(target);
+    writeFileSync(join(target, "vault-connect"), "foreign file");
+    const report = exportSkills(target), action = report.actions.find(item => item.name === "vault-connect")!;
+    expect(action.change).toBe("foreign");
+    expect(action.reason).toContain(`vmem skills export '${target}'`);
+    expect(readFileSync(join(target, "vault-connect"), "utf8")).toBe("foreign file");
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });

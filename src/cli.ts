@@ -22,7 +22,7 @@ import { changeSettings, settingsSnapshot, addVault, addSpec, removeSpec, specSt
 import { piiPolicy } from "./pii.ts";
 import { vaultStats } from "./vault-stats.ts";
 import { PLAIN, UsageError, errorLine, shellWord, takeColorFlag, textOptions, type TextOptions } from "./text-output.ts";
-import { renderDoctor, renderManifest, renderRecover, renderRemove, renderSetup, renderSpecAdd, renderSpecsList, renderStats, renderStatus, renderVaultAdd, renderVaultPii, renderVaultsList, type StatusResult } from "./cli-output.ts";
+import { renderDoctor, renderManifest, renderRecover, renderSkillsExport, renderRemove, renderSetup, renderSpecAdd, renderSpecsList, renderStats, renderStatus, renderVaultAdd, renderVaultPii, renderVaultsList, type StatusResult } from "./cli-output.ts";
 function parse(args: string[], allowed: string[], values: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -252,7 +252,7 @@ export async function runAsync(argv: string[], env: NodeJS.ProcessEnv = process.
     const report = exportSkills(positional[0]!);
     const failed = report.actions.some(a => ["refused", "foreign", "modified"].includes(a.change));
     const changed = report.actions.some(a => ["install", "replace"].includes(a.change));
-    return { text: flags["--json"] ? JSON.stringify(report) : JSON.stringify(report, null, 2), code: failed && !changed ? 1 : 0 };
+    return { text: flags["--json"] ? JSON.stringify(report) : renderSkillsExport(report, text), code: failed && !changed ? 1 : 0 };
   }
   if (args[0] === "skills") {
     const { runSkillsCommand } = await import("./skills-mine.ts");

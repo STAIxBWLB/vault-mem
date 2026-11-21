@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { shellWord } from "./text-output.ts";
 import { installSkills, skillRoot, type SkillInstallReport } from "./skills-install.ts";
 import { fileURLToPath } from "node:url";
 
@@ -303,7 +304,7 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
     try {
       const path = skillRoot(name, env);
       if (!path) { report.skills!.push({ target: name, reason: "skills are not installed for this host; use vmem skills export <dir>" }); continue; }
-      report.skills!.push({ target: name, report: installSkills(path, mode, root?.path, root?.version) });
+      report.skills!.push({ target: name, report: installSkills(path, mode, root?.path, root?.version, ["vmem", "setup", name, ...(root ? ["--root", root.path] : []), "--apply"].map(shellWord).join(" ")) });
     } catch (error) { report.skills!.push({ target: name, refused: true, reason: error instanceof Error ? error.message : "skill setup failed; inspect the host configuration" }); }
   }
   report.console = consoleManifest(mode, env, root?.path);

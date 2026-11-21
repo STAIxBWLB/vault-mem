@@ -7,6 +7,7 @@ import type { ResolvedHome } from "./home.ts";
 import type { PiiMatrix, PiiRow } from "./pii.ts";
 import { effectivePii, type RecoveryReport } from "./registry.ts";
 import type { SetupReport } from "./setup.ts";
+import type { SkillInstallReport } from "./skills-install.ts";
 import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paragraph as formatParagraph, plural, shellWord, status, table, tone, type CellInput, type TextOptions, type Tone } from "./text-output.ts";
 import { MAX_RATIO_NOTES } from "./vault-index.ts";
 import type { VaultStats } from "./vault-stats.ts";
@@ -157,4 +158,10 @@ export function renderSetup(r: SetupReport, o: TextOptions, apply?: string): str
     r.notes.map(note => paragraph(note, o)).join("\n"),
     refused ? paragraph(`${plural(refused, "host")} refused; see REASON.`, o, "fail") : undefined,
     r.mode === "dry-run" && pending && apply ? nextCommand("apply", apply, o) : undefined);
+}
+
+/** Human-readable summary for an exported skill tree. */
+export function renderSkillsExport(report: SkillInstallReport, o: TextOptions): string {
+  const color = (change: string): Tone => ["foreign", "modified", "refused"].includes(change) ? "fail" : ["unchanged", "absent"].includes(change) ? "muted" : "info";
+  return blocks(heading(`skills export: ${clean(report.root)}`, o), table(["NAME", "CHANGE", "PATH", "REASON"], report.actions.map(action => [action.name, tone(action.change, color(action.change)), action.path, action.reason]), o));
 }
