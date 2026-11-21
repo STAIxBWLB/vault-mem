@@ -31,6 +31,9 @@ function fixture() {
   writeFileSync(join(root, "docs", "same.md"), "v1\n");
   writeFileSync(join(root, ".gitignore"), "vault/\nstate/\ndocs/untracked.md\ndocs/old.md\n");
   git(root, "2026-01-01T12:00:00", "init", "-q", "-b", "main");
+  // No background maintenance or auto gc: their transient files (.git/objects/maintenance.lock) would race the A3 unchanged-tree check.
+  git(root, "2026-01-01T12:00:00", "config", "maintenance.auto", "false");
+  git(root, "2026-01-01T12:00:00", "config", "gc.auto", "0");
   git(root, "2026-01-01T12:00:00", "add", ".");
   git(root, "2026-01-01T12:00:00", "commit", "-qm", "init");
   writeFileSync(join(root, "docs", "changed.md"), "v2\n");
