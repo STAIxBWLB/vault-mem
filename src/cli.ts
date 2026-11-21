@@ -22,7 +22,7 @@ import { changeSettings, settingsSnapshot, addVault, addSpec, removeSpec, specSt
 import { piiPolicy } from "./pii.ts";
 import { vaultStats } from "./vault-stats.ts";
 import { PLAIN, UsageError, errorLine, shellWord, takeColorFlag, textOptions, type TextOptions } from "./text-output.ts";
-import { renderDoctor, renderManifest, renderRecover, renderRemove, renderSetup, renderSpecAdd, renderSpecsList, renderStats, renderStatus, renderVaultAdd, renderVaultPii, renderVaultsList, type StatusResult } from "./cli-output.ts";
+import { renderDoctor, renderManifest, renderRecover, renderSkillsExport, renderRemove, renderSetup, renderSpecAdd, renderSpecsList, renderStats, renderStatus, renderVaultAdd, renderVaultPii, renderVaultsList, type StatusResult } from "./cli-output.ts";
 function parse(args: string[], allowed: string[], values: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -78,7 +78,9 @@ function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLA
     const mode: SetupMode = flags["--apply"] ? "apply" : flags["--undo"] ? "undo" : "dry-run";
     const report = runSetup(positional[0]!, mode, { home: resolveHome(env).home, env, ...(typeof flags["--root"] === "string" ? { root: flags["--root"] } : {}) });
     const apply = ["vmem", "setup", positional[0]!, "--apply", ...(typeof flags["--root"] === "string" ? ["--root", flags["--root"]] : [])].map(shellWord).join(" ");
-    return { text: flags["--json"] ? JSON.stringify(report) : renderSetup(report, text, apply), code: [...report.actions, report.console].some(a => a?.change === "refused") ? 1 : 0 };
+    const failed = [...report.actions, report.console].some(a => a?.change === "refused") || (report.skills ?? []).some(s => s.refused || s.report?.actions.some(a => ["refused", "foreign", "modified"].includes(a.change)));
+    const progress = report.applied || (mode === "dry-run" && (report.actions.some(a => ["add", "replace"].includes(a.change)) || (report.skills ?? []).some(s => s.report?.actions.some(a => ["install", "replace"].includes(a.change)))));
+    return { text: flags["--json"] ? JSON.stringify(report) : renderSetup(report, text, apply), code: failed && !progress ? 1 : 0 };
   }
   if (args[0] === "completion") {
     if (args.length !== 2) throw new UsageError("completion: requires bash, zsh or fish");
@@ -243,6 +245,15 @@ export async function runAsync(argv: string[], env: NodeJS.ProcessEnv = process.
   const taken = takeColorFlag(argv), args = taken.args, text = textOptions(taken.color, env, io.stdout ?? {});
   const usage = commandHelp(args, text);
   if (usage) return { text: usage, code: 0 };
+  if (args[0] === "skills" && args[1] === "export") {
+    const { flags, positional } = parse(args.slice(2), ["--json"], []);
+    if (positional.length !== 1) throw new UsageError("skills export: provide one destination directory; use vmem skills export <dir>");
+    const { exportSkills } = await import("./skills-install.ts");
+    const report = exportSkills(positional[0]!);
+    const failed = report.actions.some(a => ["refused", "foreign", "modified"].includes(a.change));
+    const changed = report.actions.some(a => ["install", "replace"].includes(a.change));
+    return { text: flags["--json"] ? JSON.stringify(report) : renderSkillsExport(report, text), code: failed && !changed ? 1 : 0 };
+  }
   if (args[0] === "skills") {
     const { runSkillsCommand } = await import("./skills-mine.ts");
     return runSkillsCommand(args.slice(1), resolveHome(env).home, env, text);

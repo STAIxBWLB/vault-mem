@@ -103,7 +103,7 @@ test("all covers user hosts, malformed and linked configs are refused without wr
   expect(() => f.setup("cursor", "apply")).toThrow("unknown target");
 });
 
-test("CLI setup is non-TTY, dry-run by default, exits 1 on refusal", () => {
+test("CLI setup is non-TTY, dry-run by default, and reports partial refusal", () => {
   const f = fixture();
   const inheritedEnv = { ...process.env };
   for (const key of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIMI_CODE_HOME", "PI_CODING_AGENT_DIR", "QWEN_HOME", "JCODE_HOME"]) delete inheritedEnv[key];
@@ -113,7 +113,9 @@ test("CLI setup is non-TTY, dry-run by default, exits 1 on refusal", () => {
   expect(existsSync(f.files.jcode!)).toBe(false);
   expect(() => run(["setup", "jcode", "--apply", "--undo"], f.env)).toThrow();
   mkdirSync(join(f.files.jcode!, ".."), { recursive: true }); writeFileSync(f.files.jcode!, "nope");
-  expect(run(["setup", "jcode", "--apply"], f.env).code).toBe(1);
+  const partial = run(["setup", "jcode", "--apply"], f.env);
+  expect(partial.code).toBe(0); // The console manifest was installed even though the host file was refused.
+  expect(partial.text).toContain("refused");
 });
 
 test("help and completion share one command table", () => {
@@ -295,4 +297,52 @@ test("inline-table advice applies only to a root mcp_servers value, not one unde
   const reason = f.setup("codex", "dry-run").actions[0]!.reason!;
   expect(reason).toContain("rewrite the vmem entry by hand");
   expect(reason).not.toContain("convert the inline");
+});
+
+test("skill conflicts are reported without blocking a successful MCP install", () => {
+  const f = fixture(), skills = join(f.home, ".codex", "skills"), foreign = join(f.root, "foreign");
+  mkdirSync(skills, { recursive: true }); mkdirSync(foreign); writeFileSync(join(foreign, "keep"), "user data");
+  symlinkSync(foreign, join(skills, "vault-connect"));
+  const result = run(["setup", "codex", "--apply", "--json"], f.env), report = JSON.parse(result.text);
+  expect(result.code).toBe(0);
+  expect(report.actions[0]).toMatchObject({ change: "add" });
+  expect(report.skills[0].report.actions.find((a: { name: string }) => a.name === "vault-connect")).toMatchObject({ change: "foreign", reason: expect.stringContaining("vmem setup codex --apply") });
+  expect(readFileSync(join(foreign, "keep"), "utf8")).toBe("user data");
+});
+
+test("a refused skill root exits nonzero when setup changes nothing", () => {
+  const f = fixture();
+  run(["setup", "codex", "--apply"], f.env);
+  const root = join(f.home, ".codex", "skills"), other = join(f.root, "other");
+  rmSync(root, { recursive: true }); mkdirSync(other); symlinkSync(other, root);
+  const result = run(["setup", "codex", "--apply", "--json"], f.env), report = JSON.parse(result.text);
+  expect(result.code).toBe(1);
+  expect(report.skills[0]).toMatchObject({ target: "codex", refused: true });
+});
+
+test("hosts without automatic skill roots report the export path", () => {
+  for (const target of ["pi", "jcode", "agy"]) {
+    const f = fixture(), report = f.setup(target, "dry-run");
+    const skill = report.skills?.find(entry => entry.target === target);
+    expect(skill?.reason ?? "").toContain("vmem skills export <dir>");
+    expect(skill?.reason ?? "").toContain("not installed");
+  }
+});
+
+test("modified skill reports the actual host repair command", () => {
+  const f = fixture();
+  f.setup("kimi", "apply");
+  const file = join(f.home, ".kimi-code", "skills", "vault-connect", "SKILL.md");
+  writeFileSync(file, "local edit");
+  const report = f.setup("kimi", "apply");
+  const action = report.skills?.find(item => item.target === "kimi")?.report?.actions.find(item => item.name === "vault-connect");
+  expect(action?.change).toBe("modified");
+  expect(action?.reason).toContain("vmem setup kimi --apply");
+  expect(readFileSync(file, "utf8")).toBe("local edit");
+  const undo = f.setup("kimi", "undo");
+  const undoAction = undo.skills?.find(item => item.target === "kimi")?.report?.actions.find(item => item.name === "vault-connect");
+  expect(undoAction?.change).toBe("modified");
+  expect(undoAction?.reason).toContain("Remove it by hand, or restore it and rerun vmem setup kimi --undo");
+  expect(undoAction?.reason).not.toContain("--apply");
+  expect(readFileSync(file, "utf8")).toBe("local edit");
 });

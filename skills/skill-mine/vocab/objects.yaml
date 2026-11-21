@@ -1,0 +1,123 @@
+# Object vocabulary — Korean + English noun surface forms mapped to canonical object keys.
+# Used by materialize.py to create [[object:<canon>]] wiki-links.
+
+objects:
+  - canon: inbox
+    surface: [inbox, 수신함, incoming, downloads]
+
+  - canon: meeting-notes
+    surface: [회의록, 미팅노트, meeting, meetings, meeting-notes]
+
+  - canon: task
+    surface: [태스크, 할일, todo, tasks, task]
+
+  - canon: email
+    surface: [이메일, 메일, email, gmail, outlook]
+
+  - canon: document
+    surface: [문서, 보고서, 자료, document, doc, docs, report]
+
+  - canon: skill
+    surface: [스킬, skill, skills, SKILL]
+
+  - canon: commit
+    surface: [커밋, commit, git-commit]
+
+  - canon: prompt
+    surface: [프롬프트, prompt, prompts]
+
+  - canon: vault
+    surface: [vault, 볼트, 노트, note, notes]
+
+  - canon: schedule
+    surface: [일정, 캘린더, calendar, schedule, event]
+
+  - canon: kakao
+    surface: [카톡, 카카오톡, kakao, kakaotalk]
+
+  - canon: telegram
+    surface: [텔레그램, telegram]
+
+  - canon: slide
+    surface: [슬라이드, 발표자료, 프레젠테이션, slide, slides, presentation, pptx]
+
+  - canon: spreadsheet
+    surface: [엑셀, 스프레드시트, excel, xlsx, spreadsheet]
+
+  - canon: pdf
+    surface: [pdf, PDF]
+
+  - canon: hwp
+    surface: [hwp, HWP, hwpx, HWPX, 한글]
+
+  - canon: word
+    surface: [word, docx, DOCX, 워드]
+
+  - canon: website
+    surface: [웹사이트, 홈페이지, website, site, web]
+
+  - canon: blog-post
+    surface: [블로그, blog, post]
+
+  - canon: linkedin-post
+    surface: [linkedin, 링크드인]
+
+  - canon: proposal
+    surface: [제안서, 사업계획서, 사업계획, 지원서, proposal, application]
+
+  - canon: plan
+    surface: [계획서, 기획서, plan]
+
+  - canon: course
+    surface: [수업, 강의, 강의자료, course, lesson, class]
+
+  - canon: student
+    surface: [학생, 수강생, student, students, cohort]
+
+  - canon: cv
+    surface: [cv, CV, 이력서, 약력, bio, resume]
+
+  - canon: repo
+    surface: [레포, repo, repository, 저장소]
+
+  - canon: branch
+    surface: [브랜치, branch]
+
+  - canon: submodule
+    surface: [서브모듈, submodule]
+
+  - canon: config
+    surface: [설정, config, settings, configuration]
+
+  - canon: script
+    surface: [스크립트, script]
+
+  - canon: hook
+    surface: [훅, hook, hooks]
+
+  - canon: log
+    surface: [로그, log, logs]
+
+  - canon: chart
+    surface: [차트, 그래프, chart, graph, plot]
+
+  - canon: diagram
+    surface: [다이어그램, diagram]
+
+  - canon: seo
+    surface: [seo, SEO]
+
+  - canon: test
+    surface: [테스트, 시험, test, exam]
+
+  - canon: dataset
+    surface: [데이터셋, 데이터, dataset, data]
+
+  - canon: image
+    surface: [이미지, 사진, image, img, photo]
+
+  - canon: audio
+    surface: [오디오, 음성, audio, voice]
+
+  - canon: video
+    surface: [비디오, 영상, video]

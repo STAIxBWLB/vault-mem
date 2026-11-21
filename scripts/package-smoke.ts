@@ -11,20 +11,28 @@ function command(argv:string[],cwd:string,env:NodeJS.ProcessEnv):string {
 /** Pack the checkout, install in a fresh consumer, then use only that installed executable/provider. */
 export async function runPackageSmoke(archive = process.env.VMEM_SMOKE_TARBALL):Promise<void>{
   const root=realpathSync(mkdtempSync(join(tmpdir(),"vmem-package-smoke-"))),repo=resolve(import.meta.dir,"..");
-  const env={...process.env,PATH:dirname(process.execPath)+":"+process.env.PATH,VMEM_HOME:join(root,"home"),AMEM_HOME:join(root,"amem")};
+  const env={...process.env,PATH:dirname(process.execPath)+":"+process.env.PATH,HOME:join(root,"user"),CODEX_HOME:join(root,"codex"),AGENTHUB_HOME:join(root,"family"),VMEM_HOME:join(root,"home"),AMEM_HOME:join(root,"amem")};
   let rpc:ReturnType<typeof releaseRpc>|undefined;
   try {
     const tarball=archive ? resolve(archive) : join(root,"package.tgz"),consumer=join(root,"consumer"),vault=join(root,"vault"),notes=join(vault,"notes");
-    mkdirSync(consumer);mkdirSync(notes,{recursive:true});
+    mkdirSync(consumer);mkdirSync(notes,{recursive:true});mkdirSync(env.HOME,{recursive:true});
     if(!archive)command([process.execPath,"pm","pack","--ignore-scripts","--filename",tarball],repo,env);
     const entries=command(["tar","-tzf",tarball],repo,env).split("\n").filter(Boolean);
-    requireOk(entries.every(name=>/^package\/(?:package\.json|LICENSE|README\.md|CHANGELOG\.md|bin\/vmem\.js|src\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.ts|src\/ui\/panel\.(?:js|css))$/.test(name)),"unexpected package contents");
-    for(const required of ["package/package.json","package/bin/vmem.js","package/src/index.ts","package/src/ui/plugin.ts","package/src/ui/panel.js","package/src/ui/panel.css","package/CHANGELOG.md"])requireOk(entries.includes(required),"missing artifact "+required);
+    requireOk(entries.every(name=>/^package\/(?:package\.json|LICENSE|README\.md|CHANGELOG\.md|bin\/vmem\.js|src\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.ts|src\/ui\/panel\.(?:js|css)|skills\/(?:[a-z0-9_-]+\/)*[A-Za-z0-9_-]+\.(?:md|yaml))$/.test(name)),"unexpected package contents");
+    for(const required of ["package/package.json","package/bin/vmem.js","package/src/index.ts","package/src/ui/plugin.ts","package/src/ui/panel.js","package/src/ui/panel.css","package/CHANGELOG.md","package/skills/_shared/vault-adapter.md","package/skills/vault-connect/SKILL.md"])requireOk(entries.includes(required),"missing artifact "+required);
     writeFileSync(join(consumer,"package.json"),JSON.stringify({private:true,dependencies:{"@staix/vault-mem":"file:"+tarball}}));
     command([process.execPath,"install","--production","--ignore-scripts"],consumer,env);
     const installed=join(consumer,"node_modules","@staix","vault-mem"),bin=join(consumer,"node_modules",".bin","vmem");
     for(const name of entries){const relative=name.slice("package/".length);requireOk(readFileSync(join(installed,relative)).equals(readFileSync(join(repo,relative))),"installed content mismatch");}
     requireOk(command([bin,"--version"],consumer,env)===version,"version mismatch");
+    const exported=join(root,"exported"), exportResult=JSON.parse(command([bin,"skills","export",exported,"--json"],consumer,env));
+    requireOk(exportResult.actions.length===13 && exportResult.actions.every((a:{change:string})=>a.change==="install"),"installed package skill export failed");
+    requireOk(existsSync(join(exported,"vault-connect","references","vault-adapter.md")),"exported skill adapter missing");
+    const setup=JSON.parse(command([bin,"setup","codex","--apply","--json"],consumer,env));
+    requireOk(setup.skills[0].report.actions.every((a:{change:string})=>a.change==="install"),"installed package skill setup failed");
+    requireOk(existsSync(join(env.CODEX_HOME,"skills","vault-connect",".vmem-skill.json")),"installed skill marker missing");
+    command([bin,"setup","codex","--undo","--json"],consumer,env);
+    requireOk(!existsSync(join(env.CODEX_HOME,"skills","vault-connect")),"installed skill undo failed");
     const help=command([bin,"--help"],consumer,env);for(const name of ["graph build","promote-from-amem","setup"])requireOk(help.includes(name),"missing help command");
     writeFileSync(join(notes,"research.md"),'---\ntype: moc\ndescription: Synthetic installation fixture.\n---\n# Research\n');
     command([bin,"vaults","add","fixture",vault,"--kind","personal","--write","mcp"],consumer,env);

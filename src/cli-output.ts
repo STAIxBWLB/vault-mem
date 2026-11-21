@@ -7,6 +7,7 @@ import type { ResolvedHome } from "./home.ts";
 import type { PiiMatrix, PiiRow } from "./pii.ts";
 import { effectivePii, type RecoveryReport } from "./registry.ts";
 import type { SetupReport } from "./setup.ts";
+import type { SkillInstallReport } from "./skills-install.ts";
 import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paragraph as formatParagraph, plural, shellWord, status, table, tone, type CellInput, type TextOptions, type Tone } from "./text-output.ts";
 import { MAX_RATIO_NOTES } from "./vault-index.ts";
 import type { VaultStats } from "./vault-stats.ts";
@@ -147,14 +148,20 @@ export function renderManifest(m: Manifest, o: TextOptions): string {
 
 /** `apply` is the exact command that applies a dry run. */
 export function renderSetup(r: SetupReport, o: TextOptions, apply?: string): string {
-  const rows = [...r.actions.map(a => ({ host: a.target, ...a })), ...(r.console ? [{ host: "console", ...r.console }] : [])];
-  const reasons = rows.some(a => a.reason), refused = rows.filter(a => a.change === "refused").length, pending = rows.some(a => !["none", "unchanged", "refused"].includes(a.change));
+  const rows = [...r.actions.map(a => ({ host: a.target, ...a })), ...(r.console ? [{ host: "console", ...r.console }] : []), ...(r.skills ?? []).flatMap(s => s.report ? s.report.actions.map(a => ({ host: `${s.target} skill`, file: a.path, change: a.change, reason: a.reason })) : [{ host: `${s.target} skill`, file: "-", change: s.refused ? "refused" : "none", reason: s.reason }])];
+  const reasons = rows.some(a => a.reason), refused = rows.filter(a => a.change === "refused").length, pending = rows.some(a => !["none", "unchanged", "absent", "refused", "foreign", "modified"].includes(a.change));
   const title = r.mode === "dry-run" ? "dry run: nothing written" : r.applied ? (r.mode === "apply" ? "setup applied" : "setup undone") : "unchanged: nothing to do";
-  const changeTone = (change: string) => change === "refused" ? "fail" : ["none", "unchanged"].includes(change) ? "muted" : "info";
+  const changeTone = (change: string) => ["refused", "foreign", "modified"].includes(change) ? "fail" : ["none", "unchanged"].includes(change) ? "muted" : "info";
   return blocks(paragraph(title, o, r.applied ? "ok" : undefined),
     fields([["server", [r.entry.command, ...r.entry.args].map(shellWord).join(" ")], ["root", r.root ? `${r.root.path} (${r.root.version})` : undefined]], o),
     rows.length ? table(["HOST", "CHANGE", "PATH", ...(reasons ? ["REASON"] : [])], rows.map(a => [a.host, tone(a.change, changeTone(a.change)), a.file, a.reason]), o) : undefined,
     r.notes.map(note => paragraph(note, o)).join("\n"),
     refused ? paragraph(`${plural(refused, "host")} refused; see REASON.`, o, "fail") : undefined,
     r.mode === "dry-run" && pending && apply ? nextCommand("apply", apply, o) : undefined);
+}
+
+/** Human-readable summary for an exported skill tree. */
+export function renderSkillsExport(report: SkillInstallReport, o: TextOptions): string {
+  const color = (change: string): Tone => ["foreign", "modified", "refused"].includes(change) ? "fail" : ["unchanged", "absent"].includes(change) ? "muted" : "info";
+  return blocks(heading(`skills export: ${clean(report.root)}`, o), table(["NAME", "CHANGE", "PATH", "REASON"], report.actions.map(action => [action.name, tone(action.change, color(action.change)), action.path, action.reason]), o));
 }

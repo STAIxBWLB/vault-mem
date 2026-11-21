@@ -333,6 +333,7 @@ describe("follow-ups", () => {
     ];
     for (const [, files, expected, pkg] of cases) {
       const dir = root();
+      mkdirSync(join(dir, "skills"));
       writeFileSync(join(dir, "package.json"), pkg ?? pin);
       for (const [name, text] of Object.entries(files)) { mkdirSync(join(dir, name, ".."), { recursive: true }); writeFileSync(join(dir, name), text); }
       const result = Bun.spawnSync([process.execPath, "scripts/check-boundary.ts", dir], { stdout: "pipe", stderr: "pipe" });
