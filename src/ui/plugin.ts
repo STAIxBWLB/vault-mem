@@ -11,6 +11,8 @@ import { validArguments } from "../mcp.ts";
 import { listPromotionCandidates } from "../promote.ts";
 import { changeSettings, settingsSnapshot, loadRegistry } from "../registry.ts";
 import { createSnapshotRevision, createPromoteSnapshot, nextSnapshotCursor } from "./snapshot-cache.ts";
+import { assertionCoverageWarnings } from "./panel-types.ts";
+import type { AssertionsReadResult } from "../assertion-read.ts";
 import { createInboxSnapshot } from "./inbox.ts";
 import { lintVault } from "../vault-lint.ts";
 import { readLogSince } from "../vault-log.ts";
@@ -91,8 +93,11 @@ export const plugin: ConsolePlugin = {
       { id: "lint", title: "Lint", order: 5, maxAgeMs: REUSE_MS },
       { id: "log", title: "Log", order: 6, maxAgeMs: REUSE_MS },
       { id: "settings", title: "Settings", order: 7 },
+      { id: "proposals", title: "Proposals", order: 8, maxAgeMs: REUSE_MS },
+      { id: "assertions", title: "Assertions", order: 9 },
+      { id: "history", title: "History", order: 10 },
     ],
-    capabilities: { actions: ["delete", "move", "promote", "promote-from-amem", "settings"], confirm: true, inbox: true, inboxMaxAgeMs: REUSE_MS, search: true },
+    capabilities: { actions: ["delete", "move", "promote", "promote-from-amem", "settings", "proposal-apply", "proposal-reject"], confirm: true, inbox: true, inboxMaxAgeMs: REUSE_MS, search: true },
   },
   async open(ctx): Promise<ConsoleProvider> {
     const home = resolveHome().home;
@@ -169,6 +174,20 @@ export const plugin: ConsolePlugin = {
       return confirmedOutcome(done, describe(preview).verb);
     }
 
+    /**
+     * A read panel through the MCP handler: arguments are checked against the tool schema, and a thrown refusal
+     * (unknown vault, invalid cursor, missing proposal) becomes the snapshot's `error` text, which names cause and next step.
+     */
+    async function readTool(tool: string, args: Args, fixed: Args = {}): Promise<{ result: Args } | { error: string }> {
+      const checked = forward(tool, args, fixed);
+      if (typeof checked === "string") return { error: `${checked}; correct the panel parameters and reload` };
+      try {
+        const result = await call(tool, checked);
+        return result.refused ? { error: firstIssue(result) } : { result };
+      } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
+    }
+    const PROPOSAL_STATES = ["pending", "applied", "rejected", "apply_unknown"];
+
     return {
       async close() { await inbox.close(); },
       assets: { js: asset("./panel.js"), css: asset("./panel.css") },
@@ -244,6 +263,33 @@ export const plugin: ConsolePlugin = {
             const r = readLogSince(home, { vault: vault.id, limit: 100, ...(str(args.type) ? { type: str(args.type) } : {}), ...(str(args.since) ? { after: str(args.since) } : {}) });
             return { vault: vault.id, rows: r.lines.map(parseLogLine).reverse(), cursor: r.cursor, ...(r.reset ? { reset: true } : {}), ...(r.more ? { more: true } : {}), ...(r.ok ? {} : { error: firstIssue(r as unknown as Args) }) };
           }
+          case "proposals": {
+            const vault = vaultOf(args);
+            const state = PROPOSAL_STATES.includes(String(args.state)) ? String(args.state) : "pending";
+            if (!vault) return { vault: null, state, page: null, selected: null, ...(str(args.vault) ? { error: `unknown vault ${str(args.vault)}; pick a registered vault from Overview` } : {}) };
+            // The console owns the numeric `after`, so the proposal page cursor travels as `page`.
+            const list = await readTool("vmem_proposal_list", args, { vault: vault.id, state, after: str(args.page) });
+            const id = str(args.id);
+            const shown = id ? await readTool("vmem_proposal_show", args, { vault: vault.id, id }) : undefined;
+            const error = "error" in list ? list.error : shown && "error" in shown ? shown.error : undefined;
+            return { vault: vault.id, state, page: "result" in list ? list.result : null, selected: shown && "result" in shown ? shown.result : null, ...(error ? { error } : {}) };
+          }
+          case "assertions": {
+            const vault = vaultOf(args);
+            if (!vault) return { vault: null, result: null, warnings: [], ...(str(args.vault) ? { error: `unknown vault ${str(args.vault)}; pick a registered vault from Overview` } : {}) };
+            const r = await readTool("vmem_assertions", args, { vault: vault.id });
+            const result = "result" in r ? r.result : null;
+            return { vault: vault.id, result, warnings: assertionCoverageWarnings(result?.coverage as AssertionsReadResult["coverage"] | undefined), ...("error" in r ? { error: r.error } : {}) };
+          }
+          case "history": {
+            const vault = vaultOf(args), path = str(args.path), from = str(args.from), to = str(args.to);
+            if (!vault) return { vault: null, path: path ?? null, history: null, changes: null, ...(str(args.vault) ? { error: `unknown vault ${str(args.vault)}; pick a registered vault from Overview` } : {}) };
+            if ((from === undefined) !== (to === undefined)) return { vault: vault.id, path: path ?? null, history: null, changes: null, error: "changes need both from and to commit ids; pick two revisions from the history list" };
+            const history = path ? await readTool("vmem_history", args, { vault: vault.id, path }) : undefined;
+            const changes = from && to ? await readTool("vmem_changes", args, { vault: vault.id, from, to, cursor: str(args.changesCursor) }) : undefined;
+            const error = history && "error" in history ? history.error : changes && "error" in changes ? changes.error : undefined;
+            return { vault: vault.id, path: path ?? null, history: history && "result" in history ? history.result : null, changes: changes && "result" in changes ? changes.result : null, ...(error ? { error } : {}) };
+          }
           default: return { error: `unknown panel ${input.panel}` };
         }
       },
@@ -314,6 +360,30 @@ export const plugin: ConsolePlugin = {
                 warnings: dupes.length ? [`possible duplicates: ${dupes.slice(0, 5).join(", ")}`] : [] };
             });
           }
+          case "proposal-apply":
+          case "proposal-reject": {
+            const id = str(args.id), reason = str(args.reason), apply = input.action === "proposal-apply";
+            if (!id) return { ok: false, error: "a proposal id is required; select a proposal in the Proposals panel" };
+            if (!apply && !reason?.trim()) return { ok: false, error: "rejection needs a reason; enter one and reject again" };
+            const tool = apply ? "vmem_proposal_apply" : "vmem_proposal_reject";
+            const checked = forward(tool, args, { id, ...(apply ? {} : { reason }) });
+            if (typeof checked === "string") return { ok: false, error: `${checked}; ${apply ? "select the proposal again from the Proposals panel" : "shorten the reason to at most 4096 bytes and reject again"}` };
+            try {
+              if (apply) return await twoStep(tool, checked, confirmed, fingerprint, p => ({ verb: "Apply proposal", preview: [`apply proposal ${id}`], changes: changesOf(p), warnings: (Array.isArray(p.issues) ? p.issues as { message?: string }[] : []).map(i => String(i.message ?? "")).filter(Boolean) }));
+              // Rejection answers `rejected`, not `applied`, so its confirm step reads that receipt field itself.
+              if (typeof checked === "string") return { ok: false, error: checked };
+              const preview = await call(tool, checked);
+              if (typeof preview.fingerprint !== "string") return { ok: false, error: firstIssue(preview) };
+              if (!confirmed || fingerprint !== preview.fingerprint)
+                return { ok: false, needsConfirm: true, fingerprint: preview.fingerprint, verb: "Reject proposal", preview: [`reject proposal ${id}`, `reason: ${String(preview.reason ?? reason)}`], changes: [{ op: "modify", target: `proposal ${id}`, note: "state → rejected; no note or log changes" }] };
+              const done = await call(tool, { ...checked, confirm: true, fingerprint });
+              if (done.rejected === true) { revision.invalidate(); inbox.invalidate(); return done.ok === true ? { ok: true, message: "Reject proposal: done" } : { ok: true, message: `Reject proposal: recorded, but ${firstIssue(done)}` }; }
+              return { ok: false, error: firstIssue(done) };
+            } catch (error) {
+              // The provider refuses by throwing (no longer pending, apply_unknown, binding drift); its message names the next step.
+              return { ok: false, error: error instanceof Error ? error.message : String(error) };
+            }
+          }
           default: return { ok: false, error: `unknown action ${input.action}` };
         }
       },
@@ -322,3 +392,5 @@ export const plugin: ConsolePlugin = {
 };
 
 export default plugin;
+export type { ProposalState, ProposalsSnapshot, AssertionsSnapshot, HistorySnapshot, CoverageWarning } from "./panel-types.ts";
+export { assertionCoverageWarnings } from "./panel-types.ts";
