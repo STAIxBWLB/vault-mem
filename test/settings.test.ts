@@ -40,14 +40,20 @@ test("console settings action previews and requires confirmation", async () => {
     process.env.VMEM_HOME = home;
     const provider = await plugin.open({ home: root, log: () => {} });
     try {
-      expect(await provider.snapshot({ panel: "settings", after: 0 })).toMatchObject({ vault: "mine", write: "none" });
-      const request = { action: "settings", changes: { write: "mcp" } };
+      expect(await provider.snapshot({ panel: "settings", after: 0 })).toMatchObject({ vault: "mine", write: "none", defaultVaultExplicit: false });
+      const request = { action: "settings", changes: { defaultVault: "mine", write: "mcp", piiPatterns: [], graphResolution: 1 } };
       const preview = await provider.action(request);
       expect(preview).toMatchObject({ ok: false, needsConfirm: true, preview: ['write: "mcp"'] });
       expect(settingsSnapshot(home, "mine").write).toBe("none");
       if (!("fingerprint" in preview) || typeof preview.fingerprint !== "string") throw new Error("missing settings preview fingerprint");
       expect(await provider.action({ ...request, confirmed: true, fingerprint: preview.fingerprint })).toMatchObject({ ok: true });
       expect(settingsSnapshot(home, "mine").write).toBe("mcp");
+      const config = JSON.parse(readFileSync(join(home, "vmem.config.json"), "utf8"));
+      expect(config).not.toHaveProperty("defaultVault");
+      expect(config).not.toHaveProperty("piiPatterns");
+      expect(config).not.toHaveProperty("version");
+      expect(config.vaults[0]).not.toHaveProperty("graph");
+      expect(() => changeSettings(home, { vault: "mine", changes: { write: "mcp" } })).toThrow(/no values changed/);
       expect(await provider.action({ action: "settings", changes: { graphResolution: 0 } })).toMatchObject({ ok: false });
     } finally { await provider.close?.(); }
   } finally { if (previous === undefined) delete process.env.VMEM_HOME; else process.env.VMEM_HOME = previous; rmSync(root, { recursive: true, force: true }); }

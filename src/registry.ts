@@ -269,7 +269,7 @@ export interface SettingsRequest { vault: string; changes: SettingsChanges; conf
 export function settingsSnapshot(home: string, id: string) {
   const config = loadRegistry(home), vault = config.vaults.find(v => v.id === id);
   if (!vault) throw new Error("settings: vault is not registered; choose an id from vmem vaults list");
-  return { home, vault: vault.id, defaultVault: config.vaults.find(v => v.id === config.defaultVault)?.id ?? (config.vaults.find(v => v.kind === "personal") ?? config.vaults[0])?.id ?? null, write: vault.write, piiPatterns: config.piiPatterns ?? [], graphResolution: vault.graph?.resolution ?? 1 };
+  return { home, vault: vault.id, defaultVaultExplicit: config.vaults.some(v => v.id === config.defaultVault), defaultVault: config.vaults.find(v => v.id === config.defaultVault)?.id ?? (config.vaults.find(v => v.kind === "personal") ?? config.vaults[0])?.id ?? null, write: vault.write, piiPatterns: config.piiPatterns ?? [], graphResolution: vault.graph?.resolution ?? 1 };
 }
 export function changeSettings(home: string, request: SettingsRequest) {
   if (!request || !request.changes || typeof request.changes !== "object" || Array.isArray(request.changes)) throw new Error("settings: changes must be an object; supply settings fields");
@@ -280,20 +280,32 @@ export function changeSettings(home: string, request: SettingsRequest) {
   const evaluate = (config: VmemConfig, apply: boolean) => {
     const vault = config.vaults.find(v => v.id === request.vault);
     if (!vault) throw new Error("settings: vault is not registered; choose an id from vmem vaults list");
-    const changes = request.changes;
+    const supplied = request.changes;
     const next = structuredClone(config), selected = next.vaults.find(v => v.id === request.vault)!;
-    if (changes.defaultVault !== undefined) {
-      if (!next.vaults.some(v => v.id === changes.defaultVault)) throw new Error("settings: default vault is not registered; choose an id from vmem vaults list");
-      next.defaultVault = changes.defaultVault;
+    if (supplied.defaultVault !== undefined) {
+      if (!next.vaults.some(v => v.id === supplied.defaultVault)) throw new Error("settings: default vault is not registered; choose an id from vmem vaults list");
+      next.defaultVault = supplied.defaultVault;
     }
-    if (changes.write !== undefined) selected.write = changes.write;
-    if (changes.piiPatterns !== undefined) next.piiPatterns = changes.piiPatterns;
-    if (changes.graphResolution !== undefined) selected.graph = { ...selected.graph, resolution: changes.graphResolution };
-    next.version = Math.max(next.version ?? 1, 5);
+    if (supplied.write !== undefined) selected.write = supplied.write;
+    if (supplied.piiPatterns !== undefined) next.piiPatterns = supplied.piiPatterns;
+    if (supplied.graphResolution !== undefined) selected.graph = { ...selected.graph, resolution: supplied.graphResolution };
     try { parseConfig(next); } catch (error) { throw new Error(`settings: invalid change (${message(error)}); correct the settings and preview again`); }
+    const effectiveDefault = config.vaults.find(v => v.id === config.defaultVault)?.id ?? (config.vaults.find(v => v.kind === "personal") ?? config.vaults[0])?.id;
+    const changes: SettingsChanges = {};
+    if (supplied.defaultVault !== undefined && supplied.defaultVault !== effectiveDefault) changes.defaultVault = supplied.defaultVault;
+    if (supplied.write !== undefined && supplied.write !== vault.write) changes.write = supplied.write;
+    if (supplied.piiPatterns !== undefined && JSON.stringify(supplied.piiPatterns) !== JSON.stringify(config.piiPatterns ?? [])) changes.piiPatterns = supplied.piiPatterns;
+    if (supplied.graphResolution !== undefined && supplied.graphResolution !== (vault.graph?.resolution ?? 1)) changes.graphResolution = supplied.graphResolution;
+    if (!Object.keys(changes).length) throw new Error("settings: no values changed; change a setting before previewing");
+    // Rebuild from the current config so unchanged effective defaults are not written explicitly.
+    const actual = structuredClone(config), target = actual.vaults.find(v => v.id === request.vault)!;
+    if (changes.defaultVault !== undefined) actual.defaultVault = changes.defaultVault;
+    if (changes.write !== undefined) target.write = changes.write;
+    if (changes.piiPatterns !== undefined) actual.piiPatterns = changes.piiPatterns;
+    if (changes.graphResolution !== undefined) target.graph = { ...target.graph, resolution: changes.graphResolution };
     const fingerprint = createHash("sha256").update(JSON.stringify([config, request.vault, changes])).digest("hex");
     if (apply && request.fingerprint !== fingerprint) throw new Error("settings: preview is stale or fingerprint is missing; run the preview again and confirm its fingerprint");
-    if (apply) Object.assign(config, next);
+    if (apply) Object.assign(config, actual);
     return { applied: apply, fingerprint, changes };
   };
   return request.confirm ? mutate(home, config => evaluate(config, true)) : evaluate(loadRegistry(home), false);

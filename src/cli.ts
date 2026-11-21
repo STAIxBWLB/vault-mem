@@ -96,7 +96,8 @@ function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLA
     try { changes = JSON.parse(String(value)); } catch { throw new UsageError("settings: invalid JSON; supply an object to --set"); }
     if (Boolean(flags["--confirm"]) !== Boolean(flags["--fingerprint"])) throw new UsageError("settings: --confirm and --fingerprint must be supplied together; preview first");
     const result = changeSettings(home, { vault: positional[0]!, changes: changes as import("./registry.ts").SettingsChanges, confirm: flags["--confirm"] === true, ...(typeof flags["--fingerprint"] === "string" ? { fingerprint: flags["--fingerprint"] } : {}) });
-    return { text: JSON.stringify(result, null, flags["--json"] ? undefined : 2), code: 0 };
+    const next = result.applied ? undefined : ["vmem", "settings", positional[0]!, "--set", String(value), "--confirm", "--fingerprint", result.fingerprint].map(shellWord).join(" ");
+    return { text: JSON.stringify({ ...result, ...(next ? { next } : {}) }, null, flags["--json"] ? undefined : 2), code: 0 };
   }
   if (args[0] === "spec") return runSpecCommand(args.slice(1), env, text);
   if (args[0] === "proposal") return runProposalCommand(args.slice(1), resolveHome(env).home, env, text);
