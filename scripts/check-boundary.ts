@@ -34,6 +34,16 @@ function inspect(dir: string) {
   }
 }
 inspect(join(root, "src"));
+// Packaged skills must be real files: symlinks can escape the package at install time.
+function inspectSkills(dir: string) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const file = join(dir, entry.name);
+    if (entry.isSymbolicLink()) errors.push(`${file}: symlink in skills tree`);
+    else if (entry.isDirectory()) inspectSkills(file);
+    else if (!entry.isFile()) errors.push(`${file}: unsupported skills entry`);
+  }
+}
+inspectSkills(join(root, "skills"));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 if (JSON.stringify(pkg.dependencies) !== JSON.stringify({ "@staix/agent-mem": ">=0.33.0 <1.0.0" })) errors.push("runtime dependency must be exactly @staix/agent-mem >=0.33.0 <1.0.0");
 if (errors.length) { console.error(errors.join("\n")); process.exit(1); }

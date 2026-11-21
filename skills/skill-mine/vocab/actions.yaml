@@ -1,0 +1,110 @@
+# Action vocabulary — Korean + English verb surface forms mapped to canonical action keys.
+# Used by materialize.py to create [[action:<canon>]] wiki-links when a prompt mentions any surface form.
+#
+# Schema:
+#   actions:
+#     - canon: <canonical_action_id>      # kebab-case English
+#       surface: [<ko1>, <ko2>, <en1>, ...]  # literal tokens to match (case-insensitive for en, exact for ko)
+
+actions:
+  - canon: organize
+    surface: [정리, 정리하라, 정리해, 정리해줘, 정돈, organize, cleanup, tidy]
+
+  - canon: extract
+    surface: [추출, 추출하라, 뽑아, 뽑아라, 뽑아줘, extract, pull, scrape]
+
+  - canon: classify
+    surface: [분류, 분류하라, 분류해, 라우팅, categorize, classify, route]
+
+  - canon: sync
+    surface: [동기화, 싱크, 동기, sync, synchronize]
+
+  - canon: summarize
+    surface: [요약, 요약하라, 요약해, 요약해줘, summarize, summarise, summary]
+
+  - canon: create
+    surface: [생성, 생성하라, 작성, 작성하라, 만들어, 만들어라, 만들라, create, generate, write, draft]
+
+  - canon: send
+    surface: [전송, 발송, 보내, 보내라, 보내줘, send, dispatch]
+
+  - canon: search
+    surface: [검색, 검색하라, 찾아, 찾아라, 찾아줘, search, find, lookup]
+
+  - canon: edit
+    surface: [편집, 수정, 수정하라, 변경, 바꿔, 바꿔라, edit, modify, update, change, rewrite]
+
+  - canon: delete
+    surface: [삭제, 삭제하라, 제거, 지워, 지워라, remove, delete, drop]
+
+  - canon: execute
+    surface: [실행, 실행하라, 돌려, 돌려라, 돌려줘, run, execute, invoke]
+
+  - canon: verify
+    surface: [확인, 확인하라, 검증, 검증하라, 점검, verify, check, validate]
+
+  - canon: explain
+    surface: [설명, 설명하라, 설명해, 설명해줘, explain, describe]
+
+  - canon: review
+    surface: [리뷰, 검토, 검토하라, review, audit]
+
+  - canon: commit
+    surface: [커밋, commit, git-commit]
+
+  - canon: push
+    surface: [푸시, push]
+
+  - canon: pull
+    surface: [풀, pull, fetch]
+
+  - canon: merge
+    surface: [병합, 머지, merge]
+
+  - canon: install
+    surface: [설치, 설치하라, install, setup]
+
+  - canon: migrate
+    surface: [이관, 마이그레이션, migrate, migration]
+
+  - canon: rename
+    surface: [이름변경, 이름 바꿔, 리네임, rename]
+
+  - canon: move
+    surface: [이동, 옮겨, 옮겨라, move, relocate]
+
+  - canon: copy
+    surface: [복사, copy, duplicate]
+
+  - canon: translate
+    surface: [번역, 번역하라, translate]
+
+  - canon: convert
+    surface: [변환, 전환, convert, transform]
+
+  - canon: register
+    surface: [등록, 등록하라, register, enroll]
+
+  - canon: schedule
+    surface: [예약, 예약하라, 스케줄, schedule]
+
+  - canon: report
+    surface: [보고, 보고하라, 리포트, report]
+
+  - canon: analyze
+    surface: [분석, 분석하라, analyze, analyse, inspect]
+
+  - canon: plan
+    surface: [계획, 계획하라, 기획, plan, design]
+
+  - canon: refactor
+    surface: [리팩토링, 리팩터링, refactor, cleanup-code]
+
+  - canon: test
+    surface: [테스트, 테스트하라, test, validate]
+
+  - canon: deploy
+    surface: [배포, deploy, release, ship]
+
+  - canon: fix
+    surface: [수정, 고쳐, 고쳐라, 픽스, fix, patch, repair]

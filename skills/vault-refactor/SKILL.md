@@ -1,0 +1,112 @@
+---
+name: vault-refactor
+trigger: /vault-refactor
+description: "Restructure notes: split, merge, rename with vault-wide link rewrite, reorganize MOCs, promote topic MOCs (with mandatory approval gate)"
+---
+
+# /vault-refactor [target]
+
+> Before the first vmem call, read `references/vault-adapter.md` §Runtime Discovery and select and bind the vmem vault id; pass it as `vault` on every vmem tool call and as the `<vault>` argument of every `vmem` CLI command.
+
+Restructure vault content for better organization. **Never auto-executes** — always presents a structured plan and waits for explicit user approval.
+
+## Operations
+
+- **split [note]**: Break a note into multiple atomic notes
+- **merge [note1] [note2]**: Combine related notes into the `keep` note — `vmem_merge` preview then confirm (body, source/topic union, inbound-link repointing, absorbed note superseded)
+- **rename [old] [new]**: Rename a note and update every reference (see §Rename). For a typo, acronym or scope change of the name; content changes use split or merge
+- **moc [domain]**: Reorganize a domain MOC
+- **promote [topic]**: Create topic MOC from tag cluster (20+ notes threshold)
+
+## Process
+
+1. Analyze target for refactoring opportunity
+2. **Present approval gate** (see format below)
+3. On explicit accept → execute
+4. Update all affected wiki links via `vmem_patch` (bidirectional). A merge does not need that pass: `vmem_merge(keep, absorb)` previews the merged body, the source/topic unions, the inbound-link rewrites and a fingerprint without writing, and the confirm (`confirm: true` with that fingerprint) writes the keep note, repoints every inbound link and marks the absorbed note superseded in one mutation-locked write. Use `vmem_supersede(old, next)` only when the two notes stay separate, and the two-step `vmem_delete` to retire a note with no successor. expect: vmem refuses a `vmem_merge` of different types, of a person or MOC note, of an oversized result, and an edit or delete that would newly break an inbound link or MOC topic
+5. Run `/vault-lint note=<path>` on each affected note; `--note` is CLI-only, so an MCP-only run finishes with one vault-wide `vmem_lint` instead
+6. `EXTRACT` events in `log` come from the vmem writes themselves, except a rename or merge: `vmem_move` records `ROUTE` and `vmem_merge` / `vmem_supersede` record `RETHINK` (`ingest-chain.md` §비표준 TYPE 처리)
+7. Commit the vault submodule, then bump the parent pointer
+
+## Approval Gate Format
+
+Before any write, present this block to the user:
+
+```
+REFACTOR PROPOSAL
+=================
+operation: split | merge | rename | moc | promote
+target: <path or note name>
+
+plan:
+  - action 1: <describe — source path → dest path>
+  - action 2: <describe>
+  - ...
+
+affected notes: <count> (<list if ≤10>)
+affected wiki-links: <count>
+broken link risk: <low | medium | high>
+reversibility: <easy | hard — explain why>
+
+side effects:
+  - <MOC updates>
+  - <glossary mentions>
+  - <task file impacts>
+
+Accept: [y]es, [n]o, [d]etails, [m]odify
+```
+
+**Non-negotiable**: Do not write anything until the user explicitly says `y` or equivalent. `m` opens iteration — re-plan and re-present. `d` shows full affected list.
+
+## Rename
+
+Runs inside the approval gate and replaces Process steps 4-6 and §Log Append: its only log line is the ROUTE line `vmem_move` records, and quality is checked by step 6 below. `plan` lists the old and new stem, the referencing notes the move will rewrite, the plain-text mentions left over and any skill sources that name the old stem.
+
+1. **Pre-flight**: `vmem_read` the old stem (must exist) and the new stem (must not; vmem_move also refuses an existing destination). An existing destination with a merge intent is the merge operation.
+2. **Move**: `vmem_move(from, to)` returns the preview (every wiki, heading, block and embed link and frontmatter reference it rewrites) and a fingerprint; after accept, `vmem_move(from, to, confirm: true, fingerprint)`. vmem rewrites the links in the same write and records one ROUTE line. expect: vmem refuses a stale fingerprint, an existing destination and a non-kebab-case stem. On refusal stop; nothing else runs.
+3. **Renamed note**: re-read it for a fresh sha256, then change the H1 with `vmem_patch` and a `description` that names the old stem with `vmem_set_frontmatter` (frontmatter is not patchable text).
+4. **Plain-text mentions**: `vmem_search` the old stem (up to 50 results per call; repeat until a call returns none of the not-yet-handled notes); change the remaining non-link mentions in each note with one `vmem_patch` call using `edits[]`.
+5. **Outside the vault**: skill sources and work files that name the old stem are listed for the user. Skill text changes go by PR to the skills source repo, never by editing installed skill files. Meeting source filenames stay as they are unless the user decides otherwise.
+6. **Verify**: `vmem_search` the old stem again. Allowed leftovers: history lines in `log`, graph reports regenerated by the next `/vault-graph build` (recommend that build within 7 days). Report anything else.
+7. **Failure**: if a step after the move fails, keep what succeeded and report the completed and failed edits; do not roll back automatically (a partial rename is auditable, and `vmem_patch` cannot undo a move). Undoing the whole rename is a second `vmem_move` back, proposed through the approval gate.
+
+## Vault Access
+
+**Use vmem tools** through the adapter transport for all reads and writes:
+- `vmem_read` / `vmem_read_many`
+- `vmem_create` for new notes
+- `vmem_patch` for targeted edits (preferred for link updates), `vmem_append` for new section content
+- `vmem_move` for renames (rewrites vault-wide links itself; preview, then `confirm: true` with the fingerprint)
+- `vmem_merge` for merges (preview carries the merged body, source/topic unions, inbound rewrites and the fingerprint; confirm with that fingerprint)
+- `vmem_delete` for deletions (preview lists backlinks; then `confirm: true` with the fingerprint)
+
+Filesystem access (Read/Write/Edit/Bash) is forbidden on vault paths.
+
+## Log Append
+
+Every vmem write appends its own default `log` line. After the batch, add one summary line with `vmem_log_append(type: "RETHINK", project: "-", source: "refactor:<operation>", note: "<summary> (N notes, M links)")` whose TYPE matches the operation — `RETHINK` for merge, `EXTRACT` for split, moc or promote (no direct log-file append):
+
+```
+YYYY-MM-DD HH:MM  RETHINK  -  refactor:merge  — <summary> (N notes, M links)
+```
+
+- `<type>`: `RETHINK` for merge | `EXTRACT` for split, moc, promote
+- `<operation>`: split | merge | moc | promote (a rename adds no summary line: its ROUTE line is the whole record)
+- `<summary>`: one-line describing the change
+
+vmem records one default line per write plus this one summary line.
+
+## Guards
+
+- **NEVER auto-execute** — approval gate is mandatory
+- All wiki links must be updated (no broken links after)
+- Bidirectional links maintained
+- MOC references updated
+- If any step fails (except rename, see §Rename step 7), attempt rollback via `vmem_patch` reverse edits; if rollback fails, record `failed: <reason>` with `vmem_log_append` and stop
+
+## Output
+
+- Proposed changes with reasoning (approval gate block)
+- On accept: execution report (per-note status)
+- `/vault-lint note=` results for all affected notes, or the final vault-wide `vmem_lint` result when only MCP is available
+- log append confirmation

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { installSkills, skillRoot, type SkillInstallReport } from "./skills-install.ts";
 import { fileURLToPath } from "node:url";
 
 /** Hosts whose MCP configuration `vmem setup` can register; `all` covers every user-level host (not agy). */
@@ -15,7 +16,7 @@ export interface McpEntry { command: string; args: string[] }
 interface HostFile { target: SetupTarget; file: string; format: "json" | "toml"; key: string }
 export interface SetupAction { target: SetupTarget; file: string; change: "add" | "replace" | "unchanged" | "restore" | "remove" | "refused" | "none"; reason?: string }
 export interface ConsoleAction { file: string; module: string; change: "add" | "replace" | "unchanged" | "remove" | "none" | "refused"; reason?: string }
-export interface SetupReport { mode: SetupMode; applied: boolean; entry: McpEntry; root?: InstallRoot; actions: SetupAction[]; console?: ConsoleAction; notes: string[] }
+export interface SetupReport { mode: SetupMode; applied: boolean; entry: McpEntry; root?: InstallRoot; actions: SetupAction[]; console?: ConsoleAction; skills?: { target: SetupTarget; report?: SkillInstallReport; reason?: string; refused?: boolean }[]; notes: string[] }
 export interface InstallRoot { path: string; version: string }
 interface Receipt { version: 1; target: SetupTarget; file: string; existed: boolean; keyExisted?: boolean; prior: unknown; priorToml?: string[]; installed: McpEntry }
 
@@ -251,7 +252,7 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
   if (!isAbsolute(entry.command) || entry.args.some(arg => arg.includes("\0"))) throw new Error("setup: MCP command must be absolute");
   const table = hosts(env, options.cwd ?? process.cwd());
   const targets = target === "all" ? SETUP_TARGETS.filter(t => t !== "agy") : [target as SetupTarget];
-  const report: SetupReport = { mode, applied: false, entry, ...(root ? { root } : {}), actions: [], notes: [
+  const report: SetupReport = { mode, applied: false, entry, ...(root ? { root } : {}), actions: [], skills: [], notes: [
     "Registers the stdio server `vmem mcp`; restart the host session to load it.",
     "Writes the acon console plugin manifest ($AGENTHUB_HOME/console/plugins/vmem.json); re-run setup after upgrading vmem.",
   ] };
@@ -298,8 +299,15 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
       action.change = "refused"; action.reason = error instanceof Error ? error.message : "setup failed";
     }
   }
+  for (const name of targets) {
+    try {
+      const path = skillRoot(name, env);
+      if (!path) { report.skills!.push({ target: name, reason: "skills are not installed for this host; use vmem skills export <dir>" }); continue; }
+      report.skills!.push({ target: name, report: installSkills(path, mode, root?.path, root?.version) });
+    } catch (error) { report.skills!.push({ target: name, refused: true, reason: error instanceof Error ? error.message : "skill setup failed; inspect the host configuration" }); }
+  }
   report.console = consoleManifest(mode, env, root?.path);
-  report.applied = mode !== "dry-run" && [...report.actions, report.console].some(a => !["none", "unchanged", "refused"].includes(a.change));
+  report.applied = mode !== "dry-run" && ([...report.actions, report.console].some(a => !["none", "unchanged", "refused"].includes(a.change)) || report.skills!.some(s => s.report?.actions.some(a => ["install", "replace", "remove"].includes(a.change))));
   return report;
 }
 

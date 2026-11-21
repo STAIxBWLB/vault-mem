@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Ship the 13 vmem skills and install or undo them with `vmem setup` for Claude, Codex, Kimi and Qwen. `vmem skills export` prepares self-contained directories for other hosts; ownership markers protect locally modified and foreign skills. The runtime digest changes and needs a new performance measurement before release.
+
 - Add opt-in, hash-bound offline enrichment intake, work and read tools, local Float32 embedding sidecars (128 MiB, 50,000 records), similar-note and hybrid search, and enabled-only vector lint. Inferred links are reviewed as proposals and tagged using unverified `inferred_links` frontmatter declarations; facts retain unverified producer metadata in the assertion journal. N-1 for 0.10.x and 0.11.x: the note index is unchanged; config format 6 adds the per-vault opt-in and older versions preserve unknown keys but ignore it; their CLI lacks this setting and older MCP servers lack the new tools and vector arguments. Older readers ignore the local sidecar, may label inferred links as extracted, do not expose assertion origin metadata, and do not accept the new `infer-link` proposal operation; older writers treat retained `inferred_links` as unknown metadata and refuse newly introduced changes to it. Sidecars are local to the home and excluded from vault Git sync; new embeddings, summaries and community labels replace older hashes for the same note. The runtime digest changes and needs a new performance measurement before release.
 
 - Preserve stacks for unexpected CLI load failures while keeping host API refusals concise. This changes the runtime digest; a new performance measurement is required before the next release.

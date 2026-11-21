@@ -147,10 +147,10 @@ export function renderManifest(m: Manifest, o: TextOptions): string {
 
 /** `apply` is the exact command that applies a dry run. */
 export function renderSetup(r: SetupReport, o: TextOptions, apply?: string): string {
-  const rows = [...r.actions.map(a => ({ host: a.target, ...a })), ...(r.console ? [{ host: "console", ...r.console }] : [])];
-  const reasons = rows.some(a => a.reason), refused = rows.filter(a => a.change === "refused").length, pending = rows.some(a => !["none", "unchanged", "refused"].includes(a.change));
+  const rows = [...r.actions.map(a => ({ host: a.target, ...a })), ...(r.console ? [{ host: "console", ...r.console }] : []), ...(r.skills ?? []).flatMap(s => s.report ? s.report.actions.map(a => ({ host: `${s.target} skill`, file: a.path, change: a.change, reason: a.reason })) : [{ host: `${s.target} skill`, file: "-", change: s.refused ? "refused" : "none", reason: s.reason }])];
+  const reasons = rows.some(a => a.reason), refused = rows.filter(a => a.change === "refused").length, pending = rows.some(a => !["none", "unchanged", "absent", "refused", "foreign", "modified"].includes(a.change));
   const title = r.mode === "dry-run" ? "dry run: nothing written" : r.applied ? (r.mode === "apply" ? "setup applied" : "setup undone") : "unchanged: nothing to do";
-  const changeTone = (change: string) => change === "refused" ? "fail" : ["none", "unchanged"].includes(change) ? "muted" : "info";
+  const changeTone = (change: string) => ["refused", "foreign", "modified"].includes(change) ? "fail" : ["none", "unchanged"].includes(change) ? "muted" : "info";
   return blocks(paragraph(title, o, r.applied ? "ok" : undefined),
     fields([["server", [r.entry.command, ...r.entry.args].map(shellWord).join(" ")], ["root", r.root ? `${r.root.path} (${r.root.version})` : undefined]], o),
     rows.length ? table(["HOST", "CHANGE", "PATH", ...(reasons ? ["REASON"] : [])], rows.map(a => [a.host, tone(a.change, changeTone(a.change)), a.file, a.reason]), o) : undefined,

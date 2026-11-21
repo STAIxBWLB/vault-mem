@@ -103,7 +103,7 @@ test("all covers user hosts, malformed and linked configs are refused without wr
   expect(() => f.setup("cursor", "apply")).toThrow("unknown target");
 });
 
-test("CLI setup is non-TTY, dry-run by default, exits 1 on refusal", () => {
+test("CLI setup is non-TTY, dry-run by default, and reports partial refusal", () => {
   const f = fixture();
   const inheritedEnv = { ...process.env };
   for (const key of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIMI_CODE_HOME", "PI_CODING_AGENT_DIR", "QWEN_HOME", "JCODE_HOME"]) delete inheritedEnv[key];
@@ -113,7 +113,9 @@ test("CLI setup is non-TTY, dry-run by default, exits 1 on refusal", () => {
   expect(existsSync(f.files.jcode!)).toBe(false);
   expect(() => run(["setup", "jcode", "--apply", "--undo"], f.env)).toThrow();
   mkdirSync(join(f.files.jcode!, ".."), { recursive: true }); writeFileSync(f.files.jcode!, "nope");
-  expect(run(["setup", "jcode", "--apply"], f.env).code).toBe(1);
+  const partial = run(["setup", "jcode", "--apply"], f.env);
+  expect(partial.code).toBe(0); // The console manifest was installed even though the host file was refused.
+  expect(partial.text).toContain("refused");
 });
 
 test("help and completion share one command table", () => {
@@ -295,4 +297,25 @@ test("inline-table advice applies only to a root mcp_servers value, not one unde
   const reason = f.setup("codex", "dry-run").actions[0]!.reason!;
   expect(reason).toContain("rewrite the vmem entry by hand");
   expect(reason).not.toContain("convert the inline");
+});
+
+test("skill conflicts are reported without blocking a successful MCP install", () => {
+  const f = fixture(), skills = join(f.home, ".codex", "skills"), foreign = join(f.root, "foreign");
+  mkdirSync(skills, { recursive: true }); mkdirSync(foreign); writeFileSync(join(foreign, "keep"), "user data");
+  symlinkSync(foreign, join(skills, "vault-connect"));
+  const result = run(["setup", "codex", "--apply", "--json"], f.env), report = JSON.parse(result.text);
+  expect(result.code).toBe(0);
+  expect(report.actions[0]).toMatchObject({ change: "add" });
+  expect(report.skills[0].report.actions.find((a: { name: string }) => a.name === "vault-connect")).toMatchObject({ change: "foreign" });
+  expect(readFileSync(join(foreign, "keep"), "utf8")).toBe("user data");
+});
+
+test("a refused skill root exits nonzero when setup changes nothing", () => {
+  const f = fixture();
+  run(["setup", "codex", "--apply"], f.env);
+  const root = join(f.home, ".codex", "skills"), other = join(f.root, "other");
+  rmSync(root, { recursive: true }); mkdirSync(other); symlinkSync(other, root);
+  const result = run(["setup", "codex", "--apply", "--json"], f.env), report = JSON.parse(result.text);
+  expect(result.code).toBe(1);
+  expect(report.skills[0]).toMatchObject({ target: "codex", refused: true });
 });
