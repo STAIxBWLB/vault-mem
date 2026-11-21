@@ -9,7 +9,7 @@ import { version } from "../package.json";
 import type { SetupMode, SetupTarget } from "./setup.ts";
 import { shellWord } from "./text-output.ts";
 
-export const SKILL_NAMES = ["vault-connect", "vault-extract", "vault-graph", "vault-learn", "vault-lint", "vault-refactor", "vault-remember", "vault-rethink", "vault-stats", "vault-sync", "vault-update", "vmem-status", "skill-mine"] as const;
+export const SKILL_NAMES = ["vault-connect", "vault-enrich", "vault-extract", "vault-graph", "vault-learn", "vault-lint", "vault-refactor", "vault-remember", "vault-rethink", "vault-stats", "vault-sync", "vault-update", "vmem-status", "skill-mine"] as const;
 const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const MARKER = ".vmem-skill.json", MAX_FILE = 2 * 1024 * 1024, MAX_BYTES = 16 * 1024 * 1024, MAX_FILES = 512;
 export interface SkillAction { name: string; path: string; change: "install" | "replace" | "remove" | "unchanged" | "absent" | "modified" | "foreign" | "refused"; reason?: string }

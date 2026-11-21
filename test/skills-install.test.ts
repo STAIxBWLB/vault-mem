@@ -157,7 +157,7 @@ test("export uses a human table by default and keeps JSON and color modes", asyn
     for (const field of ["NAME", "CHANGE", "PATH", "REASON", "vault-connect"]) expect(text.text).toContain(field);
     expect(text.text.trimStart().startsWith("{")).toBe(false);
     const json = await runAsync(["skills", "export", target, "--json"], {});
-    expect(JSON.parse(json.text).actions).toHaveLength(13);
+    expect(JSON.parse(json.text).actions).toHaveLength(14);
     const colored = await runAsync(["skills", "export", target, "--color=always"], {});
     expect(stripTerminal(colored.text)).not.toBe(colored.text);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
