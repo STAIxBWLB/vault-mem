@@ -134,13 +134,13 @@ export function installSkills(root: string, mode: SetupMode, packageRoot = PACKA
     try {
       let before: Stats | undefined;
       try { before = lstatSync(target); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      if (before && (!before.isDirectory() || before.isSymbolicLink())) { action.change = "foreign"; action.reason = `not a vmem-owned real directory; left untouched. Remove or relocate it and rerun ${retryCommand} to let vmem manage it, or keep it`; continue; }
+      if (before && (!before.isDirectory() || before.isSymbolicLink())) { action.change = "foreign"; action.reason = mode === "undo" ? `not a vmem-owned real directory; left untouched. Remove it by hand or keep it` : `not a vmem-owned real directory; left untouched. Remove or relocate it and rerun ${retryCommand} to let vmem manage it, or keep it`; continue; }
       const own = before ? marker(target) : undefined;
-      if (before && !own) { action.change = "foreign"; action.reason = `ownership marker missing or invalid; left untouched. Remove or relocate it and rerun ${retryCommand} to let vmem manage it, or keep it`; continue; }
+      if (before && !own) { action.change = "foreign"; action.reason = mode === "undo" ? `ownership marker missing or invalid; left untouched. Remove it by hand or keep it` : `ownership marker missing or invalid; left untouched. Remove or relocate it and rerun ${retryCommand} to let vmem manage it, or keep it`; continue; }
       if (before && own) {
         let current: string;
-        try { current = digest(walk(target)); } catch { action.change = "modified"; action.reason = `contents cannot be safely verified; left untouched. Inspect or remove it and rerun ${retryCommand}, or keep it`; continue; }
-        if (current !== own.sha256) { action.change = "modified"; action.reason = `contents differ from the ownership marker; left untouched. Restore or remove it and rerun ${retryCommand}, or keep the local edit`; continue; }
+        try { current = digest(walk(target)); } catch { action.change = "modified"; action.reason = mode === "undo" ? `contents cannot be safely verified; left untouched. Remove it by hand, or restore it and rerun ${retryCommand}` : `contents cannot be safely verified; left untouched. Inspect or remove it and rerun ${retryCommand}, or keep it`; continue; }
+        if (current !== own.sha256) { action.change = "modified"; action.reason = mode === "undo" ? `contents differ from the ownership marker; left untouched. Remove it by hand, or restore it and rerun ${retryCommand}` : `contents differ from the ownership marker; left untouched. Restore or remove it and rerun ${retryCommand}, or keep the local edit`; continue; }
       }
       if (mode === "undo") {
         if (!before) continue;

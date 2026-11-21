@@ -339,4 +339,10 @@ test("modified skill reports the actual host repair command", () => {
   expect(action?.change).toBe("modified");
   expect(action?.reason).toContain("vmem setup kimi --apply");
   expect(readFileSync(file, "utf8")).toBe("local edit");
+  const undo = f.setup("kimi", "undo");
+  const undoAction = undo.skills?.find(item => item.target === "kimi")?.report?.actions.find(item => item.name === "vault-connect");
+  expect(undoAction?.change).toBe("modified");
+  expect(undoAction?.reason).toContain("Remove it by hand, or restore it and rerun vmem setup kimi --undo");
+  expect(undoAction?.reason).not.toContain("--apply");
+  expect(readFileSync(file, "utf8")).toBe("local edit");
 });

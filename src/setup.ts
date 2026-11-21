@@ -304,7 +304,7 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
     try {
       const path = skillRoot(name, env);
       if (!path) { report.skills!.push({ target: name, reason: "skills are not installed for this host; use vmem skills export <dir>" }); continue; }
-      report.skills!.push({ target: name, report: installSkills(path, mode, root?.path, root?.version, ["vmem", "setup", name, ...(root ? ["--root", root.path] : []), "--apply"].map(shellWord).join(" ")) });
+      report.skills!.push({ target: name, report: installSkills(path, mode, root?.path, root?.version, ["vmem", "setup", name, ...(root ? ["--root", root.path] : []), mode === "undo" ? "--undo" : "--apply"].map(shellWord).join(" ")) });
     } catch (error) { report.skills!.push({ target: name, refused: true, reason: error instanceof Error ? error.message : "skill setup failed; inspect the host configuration" }); }
   }
   report.console = consoleManifest(mode, env, root?.path);
