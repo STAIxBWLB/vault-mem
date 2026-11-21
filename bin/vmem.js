@@ -6,7 +6,11 @@ if (!version || Number(version[1]) < 1 || (Number(version[1]) === 1 && (Number(v
 }
 let cli;
 try { cli = await import("../src/cli.ts"); }
-catch (error) { console.error(`vmem: ${error instanceof Error ? error.message : "failed to load"}`); process.exit(1); }
+catch (error) {
+  if (error instanceof Error && error.code === "VMEM_HOST_API_INCOMPATIBLE") console.error(`vmem: ${error.message}`);
+  else console.error(error);
+  process.exit(1);
+}
 const { main, mainAsync, reportError, runMcp } = cli;
 const { resolveColor, takeColorFlag } = await import("../src/text-output.ts");
 const argv = process.argv.slice(2);

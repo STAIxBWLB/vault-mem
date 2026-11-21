@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Preserve stacks for unexpected CLI load failures while keeping host API refusals concise. This changes the runtime digest; a new performance measurement is required before the next release.
+
 ## [0.11.0] - 2026-11-21
 
 - N-1: 0.10.x pins agent-mem 0.32.0 while 0.11.0 accepts `>=0.33.0 <1.0.0` when its host API includes version 1. Both share the same vault index, configuration, CLI and MCP contracts; 0.11.0 status and doctor additionally report the loaded agent-mem version and host API. Neither release raises agent-mem format floors or changes placement writer attestation.

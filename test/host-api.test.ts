@@ -36,11 +36,33 @@ describe("agent-mem host API", () => {
       }
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+  test("bootstrap keeps stacks except for host API refusals", () => {
+    const root = mkdtempSync(join(tmpdir(), "vmem-bootstrap-"));
+    try {
+      mkdirSync(join(root, "bin"), { recursive: true });
+      mkdirSync(join(root, "src/amem"), { recursive: true });
+      copyFileSync("bin/vmem.js", join(root, "bin/vmem.js"));
+      copyFileSync("src/amem/host-api.ts", join(root, "src/amem/host-api.ts"));
+      const cli = join(root, "src/cli.ts");
+      writeFileSync(cli, 'import { checkHostApi } from "./amem/host-api.ts"; checkHostApi({}, "0.99.0");');
+      const refused = Bun.spawnSync([process.execPath, join(root, "bin/vmem.js")], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr.toString()).toMatch(/^vmem: agent-mem 0.99.0: host API .* update .*\n$/);
+      writeFileSync(cli, 'throw new Error("synthetic load failure");');
+      const failed = Bun.spawnSync([process.execPath, join(root, "bin/vmem.js")], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      expect(failed.exitCode).toBe(1);
+      expect(failed.stderr.toString()).toContain("synthetic load failure");
+      expect(failed.stderr.toString()).toMatch(/\s+at .*cli\.ts/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("status and doctor expose the loaded version and API", () => {
-    for (const command of ["status", "doctor"]) {
-      const output = JSON.parse(run([command, "--json"], { VMEM_HOME: "/tmp/vmem-host-api-no-home" }).text);
-      expect(output.agentMem).toEqual(agentMemInfo);
-      expect(run([command], { VMEM_HOME: "/tmp/vmem-host-api-no-home" }).text).toContain(`agent-mem ${agentMemInfo.version} (host API ${agentMemInfo.hostApi})`);
-    }
+    const home = mkdtempSync(join(tmpdir(), "vmem-host-api-home-"));
+    try {
+      for (const command of ["status", "doctor"]) {
+        const output = JSON.parse(run([command, "--json"], { VMEM_HOME: home }).text);
+        expect(output.agentMem).toEqual(agentMemInfo);
+        expect(run([command], { VMEM_HOME: home }).text).toContain(`agent-mem ${agentMemInfo.version} (host API ${agentMemInfo.hostApi})`);
+      }
+    } finally { rmSync(home, { recursive: true, force: true }); }
   });
 });
