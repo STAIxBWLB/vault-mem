@@ -18,7 +18,7 @@ function fixture() {
   writeFileSync(join(notes, "research.md"), "---\ntype: moc\ndescription: Synthetic directory.\n---\n# Research\n");
   writeFileSync(join(notes, "target.md"), "---\ntype: insight\ndomain: research\ndescription: Synthetic target.\ntopics: ['[[research]]']\n---\n# Target\n\nSynthetic.\n\n## Topics\n\n- [[research]]\n");
   addVault(home, { id: "test", path: vault, kind: "personal", write: "mcp" });
-  return { root, home, notes, operation: { op: "infer-link", path: "source", target: "target", expectedSha: sha256(source) } };
+  return { root, home, notes, operation: { op: "infer-link" as const, path: "source", target: "target", expectedSha: sha256(source) } };
 }
 test("inferred link proposal atomically adds a plain body link and target metadata", () => {
   const f = fixture();
