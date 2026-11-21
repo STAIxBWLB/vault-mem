@@ -17,6 +17,14 @@ function git(cwd: string, date: string, ...args: string[]) {
   const r = Bun.spawnSync(["git", "-C", cwd, ...args], { env: { ...gitEnv, GIT_AUTHOR_NAME: "F", GIT_AUTHOR_EMAIL: "f@example.invalid", GIT_COMMITTER_NAME: "F", GIT_COMMITTER_EMAIL: "f@example.invalid", GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date }, stdout: "pipe", stderr: "pipe" });
   if (r.exitCode !== 0) throw new Error(r.stderr.toString());
 }
+/** Every entry under root with its type, and for files outside .git also size, mtime and content, so any create, change or removal shows. Git's own .git internals are compared by name only. */
+function treeState(root: string) {
+  return (readdirSync(root, { recursive: true }) as string[]).sort().map(name => {
+    if (name === ".git" || name.startsWith(".git/")) return name;
+    const path = join(root, name), stat = fs.lstatSync(path);
+    return stat.isFile() ? `${name}\0${stat.size}\0${stat.mtimeMs}\0${fs.readFileSync(path, "base64")}` : `${name}\0${stat.isDirectory() ? "dir" : "other"}`;
+  });
+}
 const note = (stem: string, source: unknown, updated?: string) =>
   `---\ndescription: Synthetic note.\ntype: insight\ndomain: research\ntopics: ["[[research]]"]\nsource: ${JSON.stringify(source)}\n${updated ? `updated: ${updated}\n` : ""}---\n# ${stem}\n`;
 
@@ -31,6 +39,9 @@ function fixture() {
   writeFileSync(join(root, "docs", "same.md"), "v1\n");
   writeFileSync(join(root, ".gitignore"), "vault/\nstate/\ndocs/untracked.md\ndocs/old.md\n");
   git(root, "2026-01-01T12:00:00", "init", "-q", "-b", "main");
+  // No background maintenance or auto gc: their transient files (.git/objects/maintenance.lock) would race the A3 unchanged-tree check.
+  git(root, "2026-01-01T12:00:00", "config", "maintenance.auto", "false");
+  git(root, "2026-01-01T12:00:00", "config", "gc.auto", "0");
   git(root, "2026-01-01T12:00:00", "add", ".");
   git(root, "2026-01-01T12:00:00", "commit", "-qm", "init");
   writeFileSync(join(root, "docs", "changed.md"), "v2\n");
@@ -88,7 +99,7 @@ test("A2 the per-run path cap counts skipped sources instead of checking them", 
 test("A3 metadata only: no source file is opened for reading and nothing is written; CLI JSON and MCP carry L17", async () => {
   const f = fixture();
   writeFileSync(join(f.notes, "a.md"), note("a", "docs/changed.md", "2026-02-01"));
-  const before = readdirSync(f.root, { recursive: true }).sort();
+  const before = treeState(f.root);
   const opened: string[] = [], openSpy = spyOn(fs, "openSync"), readSpy = spyOn(fs, "readFileSync");
   try {
     const snapshot = analysisInput(f.home, "mine").snapshot;
@@ -102,7 +113,7 @@ test("A3 metadata only: no source file is opened for reading and nothing is writ
   expect(json.findings.L17).toHaveLength(1);
   const mcp = createVaultMcp(f.home, f.env);
   expect(((await mcp.handlers.vmem_lint!({ vault: "mine" })) as { findings: { L17: string[] } }).findings.L17).toEqual(json.findings.L17);
-  expect(readdirSync(f.root, { recursive: true }).sort()).toEqual(before);
+  expect(treeState(f.root)).toEqual(before);
 });
 
 test("control characters and pathspec magic never reach git as expressions", () => {
