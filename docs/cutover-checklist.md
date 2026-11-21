@@ -15,7 +15,7 @@
   - Require two consecutive lint/graph finding/node/edge zero-diff comparisons against the unchanged reference tools; retain source hashes and snapshot hash.
   - Repeat on the authorized private corpus and store only private evidence in its approved location. Public evidence must contain no real note bodies.
   - Keep every reference implementation until the separate retirement gate is accepted. Fixture-only results do not retire a tool.
-- Run `remote_dev.py run --cgroup <worktree> -- 'bun run bench:release --output <evidence.json>'` serially on dgx02; writable `REMOTE_DEV_CGROUP` memory delegation is required.
+- Run `dot remote run --cgroup <worktree> -- 'export REMOTE_DEV_CGROUP="$DOT_REMOTE_CGROUP"; bun run bench:release --output <evidence.json>'` serially on dgx02; writable memory delegation is required.
   - Require 5000 synthetic notes, MCP idle RSS <100 MB and search p95 <50 ms. Both MCP cgroup `memory.peak` and sampled VmRSS/VmHWM maximum must be <200 MB; cgroup charged memory is not an upper bound of RSS.
   - Preserve environment, CPU/memory quotas, raw samples, warmup policy and nearest-rank method. Failed or missing telemetry cannot pass.
   - Measure the authorized representative-vault write p95 separately and require <150 ms. The synthetic write diagnostic is not this acceptance result.
@@ -46,7 +46,7 @@
   - Review each vault id, canonical path, kind, write policy, effective PII policy, registry path and optional remote.
   - Use `vmem vaults add` only in an explicitly authorized registration step. `vmem vaults remove --confirm` unregisters only and preserves all vault files.
   - Resolve live log project ids against the approved registry mapping; do not silently normalize old history.
-- With the host closed, inspect `vmem setup <host>` dry-run and its exact entry/receipt paths.
+- With the host closed, inspect `vmem setup <host>` dry-run, its exact entry/receipt paths and any bundled skill changes.
   - Apply only after that host registration is authorized; verify saved bytes and preserve unrelated host entries.
   - Restart the client because MCP vault enums/defaults are fixed at startup. Read tools/list, default vault and effective policies back.
 - Run one authorized canary against the intended vault/channel.
