@@ -9,7 +9,7 @@ import { resolveHome } from "../home.ts";
 import { createVaultMcp } from "../mcp-vault.ts";
 import { validArguments } from "../mcp.ts";
 import { listPromotionCandidates } from "../promote.ts";
-import { loadRegistry } from "../registry.ts";
+import { changeSettings, settingsSnapshot, loadRegistry } from "../registry.ts";
 import { createSnapshotRevision, createPromoteSnapshot, nextSnapshotCursor } from "./snapshot-cache.ts";
 import { createInboxSnapshot } from "./inbox.ts";
 import { lintVault } from "../vault-lint.ts";
@@ -90,8 +90,9 @@ export const plugin: ConsolePlugin = {
       { id: "promote", title: "Promote", order: 4, maxAgeMs: REUSE_MS },
       { id: "lint", title: "Lint", order: 5, maxAgeMs: REUSE_MS },
       { id: "log", title: "Log", order: 6, maxAgeMs: REUSE_MS },
+      { id: "settings", title: "Settings", order: 7 },
     ],
-    capabilities: { actions: ["delete", "move", "promote", "promote-from-amem"], confirm: true, inbox: true, inboxMaxAgeMs: REUSE_MS, search: true },
+    capabilities: { actions: ["delete", "move", "promote", "promote-from-amem", "settings"], confirm: true, inbox: true, inboxMaxAgeMs: REUSE_MS, search: true },
   },
   async open(ctx): Promise<ConsoleProvider> {
     const home = resolveHome().home;
@@ -100,6 +101,7 @@ export const plugin: ConsolePlugin = {
     // The shell's tabs navigate without params, so the vault chosen on one panel is kept for the others.
     // ponytail: one choice per provider; fine for H0's single person, per session once H1 serves several.
     let chosen: string | undefined;
+    const promotionSource = mcp.vaults.find(v => v.id === mcp.defaultVault && v.kind === "personal") ?? mcp.vaults.find(v => v.kind === "personal");
     // An explicit vault must exist (undefined otherwise, like MCP's own check); only an omitted one falls back.
     const vaultOf = (args: Args) => {
       const asked = str(args.vault);
@@ -173,6 +175,11 @@ export const plugin: ConsolePlugin = {
       async snapshot(input) {
         const args = input as Args;
         switch (input.panel) {
+          case "settings": {
+            const vault = vaultOf(args);
+            if (!vault) return { error: "settings: no selected vault; select a registered vault" };
+            return settingsSnapshot(home, vault.id);
+          }
           case "inbox": {
             const result = await inbox.snapshot();
             return args.after === result.cursor ? { changed: false, cursor: result.cursor } : result;
@@ -205,8 +212,8 @@ export const plugin: ConsolePlugin = {
             const note = await call("vmem_read", { path, ...pass(args) });
             if (note.refused) return { note: null, error: firstIssue(note) };
             const links = await call("vmem_links", { path, ...pass(args) });
-            // vmem_promote always reads from the default personal vault, so offer it only there.
-            const promotable = vaultOf(args)?.id === mcp.defaultVault && vaultOf(args)?.kind === "personal";
+            // vmem_promote reads from the preferred personal vault, so offer it only there.
+            const promotable = vaultOf(args)?.id === promotionSource?.id && promotionSource !== undefined;
             return { note, links, orgVaults: promotable ? mcp.vaults.filter(v => v.kind === "org").map(v => v.id) : [] };
           }
           case "promote": {
@@ -243,6 +250,17 @@ export const plugin: ConsolePlugin = {
       async action(input) {
         const args = input as Args, confirmed = input.confirmed === true, fingerprint = str(input.fingerprint);
         switch (input.action) {
+          case "settings": {
+            const vault = vaultOf(args);
+            if (!vault) return { ok: false, error: "settings: no selected vault; select a registered vault" };
+            try {
+              const changes = args.changes as import("../registry.ts").SettingsChanges;
+              const preview = changeSettings(home, { vault: vault.id, changes });
+              if (!confirmed || fingerprint !== preview.fingerprint) return { ok: false, needsConfirm: true, fingerprint: preview.fingerprint, verb: "Change settings", preview: Object.entries(preview.changes).map(([key, value]) => `${key}: ${JSON.stringify(value)}`), changes: [{ op: "modify", target: "vmem.config.json" }] };
+              changeSettings(home, { vault: vault.id, changes, confirm: true, fingerprint });
+              return { ok: true, message: "Settings updated; restart the console and MCP server to apply the default vault and permission changes" };
+            } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "settings: change failed; inspect the configuration and retry" }; }
+          }
           case "delete": {
             const path = str(args.path) ?? str(args.id);
             if (!path) return { ok: false, error: "path is required" };
@@ -260,7 +278,7 @@ export const plugin: ConsolePlugin = {
           case "promote": {
             const path = str(args.path), to = str(args.to);
             if (!path || !to) return { ok: false, error: "path and to are required" };
-            if (vaultOf(args)?.id !== mcp.defaultVault) return { ok: false, error: `promotion to an org vault reads from ${mcp.defaultVault}; open the note there` };
+            if (vaultOf(args)?.id !== promotionSource?.id || !promotionSource) return { ok: false, error: promotionSource ? `promotion to an org vault reads from ${promotionSource.id}; open the note there` : "promotion needs a personal vault; register one with vmem vaults add" };
             return twoStep("vmem_promote", forward("vmem_promote", args), confirmed, fingerprint, p => {
               const screen = rec(p.screen), dropped = Array.isArray(p.droppedLinks) ? p.droppedLinks as string[] : [];
               const target = String(p.target ?? `${to}:${path}`);

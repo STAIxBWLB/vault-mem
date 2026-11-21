@@ -40,6 +40,7 @@ export const COMMANDS = [
   { name: "history", usage: "history <vault> <note> [--limit 1..100] [--cursor C] [--json]", mutates: false, section: "Read", description: "list one note path's Git snapshot revisions newest first, pinned to the HEAD the page started from" },
   { name: "changes", usage: "changes <vault> --from OID --to OID [--limit 1..500] [--cursor C] [--json]", mutates: false, section: "Read", description: "compare two pinned Git snapshots over notes/ with before/after blob ids and status" },
   { name: "status", usage: "status [--json]", mutates: false, section: "Registry", description: "show the home, registered vaults and spec sources, and vault health" },
+  { name: "settings", usage: "settings <vault> [--set JSON] [--confirm --fingerprint SHA] [--json]", mutates: "confirm", section: "Registry", description: "read settings or preview and confirm a settings change" },
   { name: "doctor", usage: "doctor [--json]", mutates: false, section: "Registry", description: "check vault paths, remotes, project registries, pending tidy and spec sources; exits 1 when unhealthy" },
   { name: "recover", usage: "recover [--confirm] [--json]", mutates: "confirm", section: "Registry", description: "preview, then remove with --confirm, a stale registry lock and leftover temporary files" },
   { name: "vaults list", usage: "vaults list [--json]", mutates: false, section: "Registry", description: "list registered vaults with kind, write policy and effective PII policy" },

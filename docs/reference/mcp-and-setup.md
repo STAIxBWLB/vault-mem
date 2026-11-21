@@ -84,6 +84,8 @@ Apply is idempotent and touches only the `vmem` entry: other servers and setting
 
 ## Console plugin
 
+The Settings panel reads the selected vault and home settings. Its action previews changes to the default vault, write mode, PII patterns and graph resolution before fingerprint-bound confirmation. `vmem settings <vault> --set JSON` uses the same path; add `--confirm --fingerprint SHA` from the preview to apply. Restart the console and MCP server after changing the default vault or write mode.
+
 `vmem setup <target> --apply` also writes `$AGENTHUB_HOME/console/plugins/vmem.json` (default `~/.agenthub`; directory 0700, file 0600) with the absolute path and sha256 of `src/ui/plugin.ts`. `acon ui` then shows a Vault area. The panel needs agent-console 0.1.0 or later, the first release with the `host.ui` panel kit and `ui.button`. An older acon still loads the plugin, but the panel then fails with a TypeError on `host.ui`; upgrade agent-console to fix it. Re-run setup after upgrading vmem: acon refuses a module whose hash changed.
 
 - Panels: Overview (vaults, maps, recent log), Search, Note (body, links, actions), Promote (agent-mem candidates), Lint (typed findings linked to notes) and Log (parsed rows).

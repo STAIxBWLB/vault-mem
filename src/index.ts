@@ -66,3 +66,7 @@ export { validateSpecs, introducedSpecErrors, validateSpecRepo } from "./spec-va
 export type { SpecValidationIssue, SpecValidationOptions, SpecValidationReport, SpecRepoValidationOptions, SpecRepoValidation } from "./spec-validate.ts";
 export { specFreshness, specsCoveringPath } from "./spec-freshness.ts";
 export type { SpecFreshnessEntry, SpecFreshnessReport, SpecFreshnessOptions } from "./spec-freshness.ts";
+
+export { settingsSnapshot, changeSettings } from "./registry.ts";
+export type { SettingsChanges, SettingsRequest, SettingsSnapshot, SettingsResult } from "./registry.ts";
+export { plugin as consolePlugin } from "./ui/plugin.ts";

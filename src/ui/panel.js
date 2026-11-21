@@ -16,6 +16,25 @@ export default (host) => {
   };
 
   const views = {
+    settings(s) {
+      if (s.error) return [ui.notice(s.error, "err")];
+      const defaultVault = h("input", { type: "text", name: "defaultVault", value: s.defaultVault ?? "", class: "vmem-input", "aria-label": "Default vault" });
+      const write = h("select", { name: "write", class: "vmem-input", "aria-label": "Write mode" }, ...["none", "cli", "mcp"].map(v => h("option", { value: v, text: v, ...(v === s.write ? { selected: true } : {}) })));
+      const patterns = h("input", { type: "text", name: "piiPatterns", value: JSON.stringify(s.piiPatterns ?? []), class: "vmem-input", "aria-label": "PII patterns as JSON array", oninput: (e) => e.target.setCustomValidity("") });
+      const resolution = h("input", { type: "number", name: "resolution", value: String(s.graphResolution), min: "0.01", max: "100", step: "any", class: "vmem-input", "aria-label": "Graph resolution" });
+      return [h("p", { text: `Settings for ${s.vault}${s.defaultVaultExplicit ? "" : " (default vault uses fallback)"}` }), h("form", { class: "vmem-bar", onsubmit: e => {
+        e.preventDefault();
+        let piiPatterns;
+        try { piiPatterns = JSON.parse(patterns.value); } catch { patterns.setCustomValidity("Use a JSON array of patterns"); patterns.reportValidity(); return; }
+        patterns.setCustomValidity("");
+        const changes = {};
+        if (defaultVault.value !== (s.defaultVault ?? "")) changes.defaultVault = defaultVault.value;
+        if (write.value !== s.write) changes.write = write.value;
+        if (JSON.stringify(piiPatterns) !== JSON.stringify(s.piiPatterns ?? [])) changes.piiPatterns = piiPatterns;
+        if (Number(resolution.value) !== s.graphResolution) changes.graphResolution = Number(resolution.value);
+        host.action({ action: "settings", ...vaultParam(), changes });
+      } }, defaultVault, write, patterns, resolution, h("button", { type: "submit", class: "btn", text: "Review settings" }))];
+    },
     overview(s) {
       const vaults = s.status?.vaults ?? [];
       if (!vaults.length) return [ui.empty("No vault registered", "Run `vmem vaults add <id> <path>` to register one.")];

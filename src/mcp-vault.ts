@@ -164,7 +164,7 @@ export function exposureReply(reply: ExposureReceipt & { refused?: true }): unkn
 export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.env): { tools: McpTool[]; handlers: Record<string, McpHandler>; vaults: VaultSpec[]; defaultVault: string | undefined; instructions: string } {
   const startup = loadRegistry(home), vaults = startup.vaults, ids = vaults.map(v => v.id);
   const proposalBindings = new Map(vaults.map(v => { try { return [v.id, logBinding(v, startup)] as const; } catch { return [v.id, null] as const; } }));
-  const defaultVault = (vaults.find(v => v.kind === "personal") ?? vaults[0])?.id;
+  const defaultVault = vaults.find(v => v.id === startup.defaultVault)?.id ?? (vaults.find(v => v.kind === "personal") ?? vaults[0])?.id;
   const pick = (args: Record<string, unknown>): VaultSpec => {
     const id = str(args.vault) ?? defaultVault;
     const spec = vaults.find(v => v.id === id);
@@ -197,7 +197,7 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_brief: args => vaultBrief(home, { vault: pick(args).id, intent: args.intent as string, paths: args.paths as string[] | undefined, bytes: args.bytes as number | undefined }, pick(args)),
     vmem_promote: async args => {
       const { promoteToOrg } = await import("./org-promote.ts");
-      const source = vaults.find(v => v.id === defaultVault && v.kind === "personal");
+      const source = vaults.find(v => v.id === defaultVault && v.kind === "personal") ?? vaults.find(v => v.kind === "personal");
       if (!source) return refusal("POLICY", "no personal vault registered");
       const result = promoteToOrg(home, { from: source.id, note: str(args.path)!, to: str(args.to)!, channel: "mcp", again: args.again === true, confirm: args.confirm === true,
         ...(Array.isArray(args.topics) ? { topics: args.topics as string[] } : {}), ...(str(args.fingerprint) ? { fingerprint: str(args.fingerprint) } : {}) }, { env });

@@ -120,9 +120,9 @@ function adjacency(graph: Pick<VaultGraph, "nodes" | "edges">): Map<string, Set<
   return neighbors;
 }
 /** Leiden over the graph's own nodes and edges, with MOC/bu hubs excluded; writes `community` and the method metadata. */
-function communities(graph: VaultGraph): void {
+function communities(graph: VaultGraph, resolution: number): void {
   const exclude = new Set(graph.nodes.filter(node => HUB_TYPES.has(node.type)).map(node => node.id));
-  const result = leidenCommunities(graph.nodes.map(node => node.id), graph.edges.map(edge => [edge.source, edge.target] as const), { exclude });
+  const result = leidenCommunities(graph.nodes.map(node => node.id), graph.edges.map(edge => [edge.source, edge.target] as const), { exclude, resolution });
   for (const node of graph.nodes) node.community = result.membership.get(node.id) ?? null;
   graph.graph = { partitioner: "leiden", resolution: result.resolution, modularity: result.modularity, iterations: result.levels, max_iterations: MAX_ITERATIONS };
 }
@@ -385,7 +385,7 @@ export function buildGraph(snapshot: AnalysisSnapshot): VaultGraph {
     edges: [...edges.values()].sort((a, b) => compare(a.source, b.source) || compare(a.target, b.target)) };
   const neighbors = adjacency(graph);
   for (const node of nodes) node.degree = neighbors.get(node.id)!.size + Number(neighbors.get(node.id)!.has(node.id));
-  communities(graph);
+  communities(graph, snapshot.graphResolution ?? LEIDEN_RESOLUTION);
   return graph;
 }
 /** An edge's link relation: its typed `rel`, else the edge relation (`wiki_link` for a plain link). */
@@ -497,6 +497,6 @@ export function graphReport(graph: VaultGraph, today: string): string {
 export function finalizeGraph(graph: VaultGraph): VaultGraph {
   const neighbors = adjacency(graph);
   for (const node of graph.nodes) node.degree = neighbors.get(node.id)!.size + Number(neighbors.get(node.id)!.has(node.id));
-  communities(graph);
+  communities(graph, graph.graph.resolution);
   return graph;
 }

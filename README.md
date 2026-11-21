@@ -56,6 +56,8 @@ Output: every command prints text for people by default, following agent-hub's C
 
 `vmem help <command>` prints one command's syntax; `vmem manifest --json` lists the commands and MCP tools for scripts. [docs/README.md](docs/README.md) says which document to open for which task.
 
+`vmem settings <vault>` reads effective settings; `--set JSON` previews changes and `--confirm --fingerprint SHA` applies them. The console Settings panel uses the same preview and confirmation. Graph community resolution defaults to 1.
+
 ## Not implemented
 
 - Live cutover of an existing vault writer: outside this repository (see Status).
@@ -64,7 +66,6 @@ Output: every command prints text for people by default, following agent-hub's C
 - Evidence verification of sources outside the same vault's `notes/` (other files, other vaults, URLs, memory ids): those entries are stored and reported `unverified_external` or `unsupported`, never fetched.
 - Scheduled or automatic sync and push.
 - Rewriting assertion bytes out of Git history, other clones or remotes: `vmem assertions purge` removes a payload from the journal in the working tree, and complete erasure needs a history rewrite outside vmem.
-- A resolution setting for graph communities.
 - An event-filtered capture read for skill mining.
 - A console bin: vault-mem ships only the plugin module for the `acon` console of [agent-console](https://github.com/STAIxBWLB/agent-console).
 
@@ -106,6 +107,8 @@ The only runtime dependency is the first-party range <!-- facts:amem-pin -->`@st
 - `src/spec-graph.ts`: `buildSpecGraph`, `specSlice`, `SPEC_EDGE_KINDS`, `MAX_SPEC_INPUTS`, `MAX_SPEC_EDGES`
 - `src/spec-validate.ts`: `validateSpecs`, `introducedSpecErrors`, `validateSpecRepo`
 - `src/spec-freshness.ts`: `specFreshness`, `specsCoveringPath`
+- `src/registry.ts`: `settingsSnapshot`, `changeSettings`
+- `src/ui/plugin.ts`: `plugin as consolePlugin`
 
 <!-- /facts:exports -->
 
