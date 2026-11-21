@@ -26,7 +26,7 @@ export async function runPackageSmoke(archive = process.env.VMEM_SMOKE_TARBALL):
     for(const name of entries){const relative=name.slice("package/".length);requireOk(readFileSync(join(installed,relative)).equals(readFileSync(join(repo,relative))),"installed content mismatch");}
     requireOk(command([bin,"--version"],consumer,env)===version,"version mismatch");
     const exported=join(root,"exported"), exportResult=JSON.parse(command([bin,"skills","export",exported,"--json"],consumer,env));
-    requireOk(exportResult.actions.length===13 && exportResult.actions.every((a:{change:string})=>a.change==="install"),"installed package skill export failed");
+    requireOk(exportResult.actions.length===14 && exportResult.actions.every((a:{change:string})=>a.change==="install"),"installed package skill export failed");
     requireOk(existsSync(join(exported,"vault-connect","references","vault-adapter.md")),"exported skill adapter missing");
     const setup=JSON.parse(command([bin,"setup","codex","--apply","--json"],consumer,env));
     requireOk(setup.skills[0].report.actions.every((a:{change:string})=>a.change==="install"),"installed package skill setup failed");

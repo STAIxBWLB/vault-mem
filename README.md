@@ -62,7 +62,7 @@ Enrichment is opt-in per vault through `vmem settings` or the Settings panel. A 
 
 ## Skills
 
-The package includes `vault-connect`, `vault-extract`, `vault-graph`, `vault-learn`, `vault-lint`, `vault-refactor`, `vault-remember`, `vault-rethink`, `vault-stats`, `vault-sync`, `vault-update`, `vmem-status` and `skill-mine`. They run with vmem alone; workspace-specific steps are optional.
+The package includes `vault-connect`, `vault-enrich`, `vault-extract`, `vault-graph`, `vault-learn`, `vault-lint`, `vault-refactor`, `vault-remember`, `vault-rethink`, `vault-stats`, `vault-sync`, `vault-update`, `vmem-status` and `skill-mine`. They run with vmem alone; workspace-specific steps are optional.
 
 `vmem setup claude|codex|kimi|qwen --apply` installs the skills alongside the MCP entry. `--undo` removes only unmodified vmem-owned skills. Pi, jcode and agy do not have an automatic skill root; use `vmem skills export <dir>` to prepare self-contained directories for another host.
 

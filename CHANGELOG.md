@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add the bundled `vault-enrich` skill for hash-bound offline enrichment intake, review and reconciliation.
+
 ## [0.12.0] - 2026-11-22
 
 - N-1: 0.11.0 shares the note and spec index files; 0.11.0 supports config format 4; format 5 adds default vault and graph options, and format 6 adds per-vault enrichment. Older readers preserve but ignore new keys in newer formats. The older CLI lacks settings and enrichment options; its MCP server lacks the enrichment tools and vector arguments. Older readers ignore local sidecars, may treat inferred links as extracted and do not expose assertion origin metadata; older writers refuse newly introduced `inferred_links` metadata and the `infer-link` proposal operation. Bundled skills and their setup and export commands are new in 0.12.0; 0.11.0 leaves those installed skill directories alone.

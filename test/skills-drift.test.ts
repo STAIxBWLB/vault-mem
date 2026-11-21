@@ -58,7 +58,7 @@ describe("bundled skill drift", () => {
       expect({ exitCode: run.exitCode, stderr: run.stderr.toString() }).toEqual({ exitCode: 0, stderr: "" });
       const names = readdirSync(skillRoot, { withFileTypes: true }).filter(e => e.isDirectory() && !e.name.startsWith("_")).map(e => e.name).sort();
       expect(names).toEqual([...SKILL_NAMES].sort());
-      expect(SKILL_NAMES).toHaveLength(13);
+      expect(SKILL_NAMES).toHaveLength(14);
       const report = JSON.parse(run.stdout.toString()) as { actions: { name: string; change: string }[] };
       expect(report.actions.map(action => [action.name, action.change]).sort()).toEqual(names.map(name => [name, "install"]).sort());
       expect(readdirSync(target).sort()).toEqual(names);
