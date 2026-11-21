@@ -20,7 +20,7 @@ export default (host) => {
       if (s.error) return [ui.notice(s.error, "err")];
       const defaultVault = h("input", { type: "text", name: "defaultVault", value: s.defaultVault ?? "", class: "vmem-input", "aria-label": "Default vault" });
       const write = h("select", { name: "write", class: "vmem-input", "aria-label": "Write mode" }, ...["none", "cli", "mcp"].map(v => h("option", { value: v, text: v, ...(v === s.write ? { selected: true } : {}) })));
-      const patterns = h("input", { type: "text", name: "piiPatterns", value: JSON.stringify(s.piiPatterns ?? []), class: "vmem-input", "aria-label": "PII patterns as JSON array" });
+      const patterns = h("input", { type: "text", name: "piiPatterns", value: JSON.stringify(s.piiPatterns ?? []), class: "vmem-input", "aria-label": "PII patterns as JSON array", oninput: (e) => e.target.setCustomValidity("") });
       const resolution = h("input", { type: "number", name: "resolution", value: String(s.graphResolution), min: "0.01", max: "100", step: "any", class: "vmem-input", "aria-label": "Graph resolution" });
       return [h("p", { text: `Settings for ${s.vault}${s.defaultVaultExplicit ? "" : " (default vault uses fallback)"}` }), h("form", { class: "vmem-bar", onsubmit: e => {
         e.preventDefault();

@@ -101,6 +101,7 @@ export const plugin: ConsolePlugin = {
     // The shell's tabs navigate without params, so the vault chosen on one panel is kept for the others.
     // ponytail: one choice per provider; fine for H0's single person, per session once H1 serves several.
     let chosen: string | undefined;
+    const promotionSource = mcp.vaults.find(v => v.id === mcp.defaultVault && v.kind === "personal") ?? mcp.vaults.find(v => v.kind === "personal");
     // An explicit vault must exist (undefined otherwise, like MCP's own check); only an omitted one falls back.
     const vaultOf = (args: Args) => {
       const asked = str(args.vault);
@@ -211,8 +212,8 @@ export const plugin: ConsolePlugin = {
             const note = await call("vmem_read", { path, ...pass(args) });
             if (note.refused) return { note: null, error: firstIssue(note) };
             const links = await call("vmem_links", { path, ...pass(args) });
-            // vmem_promote always reads from the default personal vault, so offer it only there.
-            const promotable = vaultOf(args)?.id === mcp.defaultVault && vaultOf(args)?.kind === "personal";
+            // vmem_promote reads from the preferred personal vault, so offer it only there.
+            const promotable = vaultOf(args)?.id === promotionSource?.id && promotionSource !== undefined;
             return { note, links, orgVaults: promotable ? mcp.vaults.filter(v => v.kind === "org").map(v => v.id) : [] };
           }
           case "promote": {
@@ -277,7 +278,7 @@ export const plugin: ConsolePlugin = {
           case "promote": {
             const path = str(args.path), to = str(args.to);
             if (!path || !to) return { ok: false, error: "path and to are required" };
-            if (vaultOf(args)?.id !== mcp.defaultVault) return { ok: false, error: `promotion to an org vault reads from ${mcp.defaultVault}; open the note there` };
+            if (vaultOf(args)?.id !== promotionSource?.id || !promotionSource) return { ok: false, error: promotionSource ? `promotion to an org vault reads from ${promotionSource.id}; open the note there` : "promotion needs a personal vault; register one with vmem vaults add" };
             return twoStep("vmem_promote", forward("vmem_promote", args), confirmed, fingerprint, p => {
               const screen = rec(p.screen), dropped = Array.isArray(p.droppedLinks) ? p.droppedLinks as string[] : [];
               const target = String(p.target ?? `${to}:${path}`);

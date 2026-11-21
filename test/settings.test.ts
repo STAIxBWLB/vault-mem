@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { addVault, changeSettings, settingsSnapshot } from "../src/registry.ts";
@@ -57,4 +57,33 @@ test("console settings action previews and requires confirmation", async () => {
       expect(await provider.action({ action: "settings", changes: { graphResolution: 0 } })).toMatchObject({ ok: false });
     } finally { await provider.close?.(); }
   } finally { if (previous === undefined) delete process.env.VMEM_HOME; else process.env.VMEM_HOME = previous; rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an org default keeps promotion available from a personal vault", async () => {
+  const { plugin } = await import("../src/ui/plugin.ts");
+  const { createVaultMcp } = await import("../src/mcp-vault.ts");
+  const { writeFileSync } = await import("node:fs");
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-settings-promote-"))), prior = process.env.VMEM_HOME;
+  try {
+    const home = join(root, "home"), personal = join(root, "personal"), org = join(root, "org");
+    for (const vault of [personal, org]) {
+      mkdirSync(join(vault, "notes"), { recursive: true });
+      writeFileSync(join(vault, "notes", "research.md"), "---\ntype: moc\ndescription: Research.\n---\n# Research\n");
+    }
+    writeFileSync(join(personal, "notes", "alpha.md"), "---\ntype: insight\ndomain: research\ndescription: Synthetic finding.\ntopics: ['[[research]]']\n---\n# Alpha\n\nSynthetic.\n\n## Topics\n\n- [[research]]\n");
+    addVault(home, { id: "mine", path: personal, kind: "personal", write: "mcp" });
+    addVault(home, { id: "team", path: org, kind: "org", write: "mcp" });
+    const request = { vault: "mine", changes: { defaultVault: "team" } };
+    const preview = changeSettings(home, request);
+    changeSettings(home, { ...request, confirm: true, fingerprint: preview.fingerprint });
+    const mcp = createVaultMcp(home, { VMEM_HOME: home });
+    const result = await mcp.handlers.vmem_promote!({ path: "alpha", to: "team" }) as { fingerprint?: string; issues?: { message: string }[] };
+    expect(result.fingerprint).toBeString();
+    process.env.VMEM_HOME = home;
+    const provider = await plugin.open({ home: root, log: () => {} });
+    try {
+      expect(await provider.snapshot({ panel: "note", after: 0, vault: "mine", path: "alpha" })).toMatchObject({ orgVaults: ["team"] });
+      expect(await provider.action({ action: "promote", vault: "mine", path: "alpha", to: "team" })).toMatchObject({ needsConfirm: true });
+    } finally { await provider.close?.(); }
+  } finally { if (prior === undefined) delete process.env.VMEM_HOME; else process.env.VMEM_HOME = prior; rmSync(root, { recursive: true, force: true }); }
 });
