@@ -15,8 +15,8 @@ vmem --version
 
 ```sh
 vmem vaults add personal /absolute/vault --kind personal --write mcp   # the directory must contain notes/
-vmem status                     # home, registered vaults and health
-vmem doctor                     # path, remote, registry, pending-tidy and spec-source checks; exits 1 when unhealthy
+vmem status                     # home, agent-mem version, registered vaults and health
+vmem doctor                     # agent-mem version, path, remote, registry, pending-tidy and spec-source checks; exits 1 when unhealthy
 vmem setup claude               # dry run: the MCP entry it would add
 vmem setup claude --apply       # register `vmem mcp` in the host, then restart the host session
 vmem search personal "project discovery"
@@ -117,4 +117,4 @@ bun bin/vmem.js --help          # run from a checkout
 bun run check
 ```
 
-`bun run check` needs Bun, git and tar: strict types, import boundaries, README facts, documentation freshness, tests, a package dry-run and a clean installed CLI/MCP smoke (the tarball install needs network access to resolve the pinned dependency). Node/npm are used only by the release workflow. CI runs on Ubuntu for pull requests (macOS too when the `ci:macos` label is added), and on Ubuntu and macOS for pushes to `main` and releases. Generated facts blocks in README.md and docs/reference change only through `bun scripts/readme-facts.ts --write`. Contributor rules are in [AGENTS.md](AGENTS.md) and [REVIEW.md](REVIEW.md); release gates in [docs/release-readiness.md](docs/release-readiness.md).
+`bun run check` needs Bun, git and tar: strict types, import boundaries, README facts, documentation freshness, tests, a package dry-run and a clean installed CLI/MCP smoke (the tarball install needs network access to resolve the dependency range). Node/npm are used only by the release workflow. CI runs on Ubuntu for pull requests (macOS too when the `ci:macos` label is added), and on Ubuntu and macOS for pushes to `main` and releases. Generated facts blocks in README.md and docs/reference change only through `bun scripts/readme-facts.ts --write`. Contributor rules are in [AGENTS.md](AGENTS.md) and [REVIEW.md](REVIEW.md); release gates in [docs/release-readiness.md](docs/release-readiness.md).
