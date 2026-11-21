@@ -16,6 +16,7 @@ export interface VaultSpec {
   domains?: string[];
   canonTables?: CanonTableSpec[];
   graph?: { resolution?: number };
+  enrichment?: { enabled: boolean };
 }
 /** Advisory canonical tables do not participate in mutation identity or policy. */
 export function mutationVault(vault: VaultSpec): Omit<VaultSpec, "canonTables"> {
@@ -45,9 +46,9 @@ export interface PiiSpec { email?: PiiCell; phone?: PiiCell; custom?: PiiCell; p
  * The config format this build writes. A build that adds a key bumps it. A config whose `version` is newer
  * than this build is read tolerantly: unknown keys are kept as they are and written back unchanged, so an
  * older vmem can share a config with a newer one. At or below this version unknown keys stay errors (typos).
- * An absent `version` means 1. Registry writes add format 2 for `specs`, 3 for vault `domains`, 4 for vault `canonTables`, and 5 for default vault or graph options; otherwise they keep the existing version field.
+ * An absent `version` means 1. Registry writes add format 2 for `specs`, 3 for vault `domains`, 4 for vault `canonTables`, and 5 for default vault or graph options, and 6 for enrichment; otherwise they keep the existing version field.
  */
-export const CONFIG_VERSION = 5;
+export const CONFIG_VERSION = 6;
 export interface SpecSourceSpec { id: string; path: string; write: "mcp" | "cli" | "none"; pii: "allow" | "deny" }
 export interface VmemConfig { version?: number; home?: string; vaults: VaultSpec[]; specs?: SpecSourceSpec[]; denyPaths?: string[]; piiPatterns?: string[]; defaultVault?: string }
 const controls = /[\x00-\x1f\x7f]/;
@@ -156,7 +157,7 @@ function parseCanonTables(value: unknown, tolerant: boolean): CanonTableSpec[] {
   }
 }
 export function parseVault(value: unknown, tolerant = false): VaultSpec {
-  const keys = ["id", "path", "kind", "write", "pii", "remote", "registry", "domains", "canonTables", "graph"], v = object(value, keys, "vault", tolerant);
+  const keys = ["id", "path", "kind", "write", "pii", "remote", "registry", "domains", "canonTables", "graph", "enrichment"], v = object(value, keys, "vault", tolerant);
   const id = string(v.id, "vault.id");
   if (!/^[a-z][a-z0-9-]{0,31}$/.test(id)) throw new Error("vault.id: invalid id");
   if (v.kind !== "personal" && v.kind !== "org") throw new Error("vault.kind: expected personal or org");
@@ -172,6 +173,11 @@ export function parseVault(value: unknown, tolerant = false): VaultSpec {
     result.domains = [...v.domains];
   }
   if (v.canonTables !== undefined) result.canonTables = parseCanonTables(v.canonTables, tolerant);
+  if (v.enrichment !== undefined) {
+    const enrichment = object(v.enrichment, ["enabled"], "vault.enrichment", tolerant);
+    if (typeof enrichment.enabled !== "boolean") throw new Error("vault.enrichment.enabled: expected true or false; correct the vault setting");
+    result.enrichment = { ...unknown(enrichment, ["enabled"], tolerant), enabled: enrichment.enabled };
+  }
   if (v.graph !== undefined) {
     const graph = object(v.graph, ["resolution"], "vault.graph", tolerant);
     if (graph.resolution !== undefined && (typeof graph.resolution !== "number" || !Number.isFinite(graph.resolution) || graph.resolution <= 0 || graph.resolution > 100)) throw new Error("vault.graph.resolution: expected a number above 0 and at most 100; set a valid graph resolution");

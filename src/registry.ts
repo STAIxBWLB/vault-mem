@@ -47,6 +47,7 @@ function mutate<T>(home: string, update: (config: VmemConfig) => T): T {
     if (config.vaults.some(vault => vault.domains !== undefined)) config.version = Math.max(config.version ?? 1, 3);
     if (config.vaults.some(vault => vault.canonTables !== undefined)) config.version = Math.max(config.version ?? 1, 4);
     if (config.defaultVault !== undefined || config.vaults.some(vault => vault.graph !== undefined)) config.version = Math.max(config.version ?? 1, 5);
+    if (config.vaults.some(vault => vault.enrichment !== undefined)) config.version = Math.max(config.version ?? 1, 6);
     parseConfig(config);
     const text = JSON.stringify(config, null, 2) + "\n";
     if (Buffer.byteLength(text) > MAX_CONFIG_BYTES) throw new Error(`${join(home, CONFIG_FILE)}: serialized config exceeds 64 KiB`);
@@ -264,19 +265,19 @@ export function specStatus(home: string, env: NodeJS.ProcessEnv = process.env) {
   });
 }
 
-export interface SettingsChanges { defaultVault?: string; write?: VaultSpec["write"]; piiPatterns?: string[]; graphResolution?: number }
+export interface SettingsChanges { defaultVault?: string; write?: VaultSpec["write"]; piiPatterns?: string[]; graphResolution?: number; enrichmentEnabled?: boolean }
 export interface SettingsRequest { vault: string; changes: SettingsChanges; confirm?: boolean; fingerprint?: string }
 export function settingsSnapshot(home: string, id: string) {
   const config = loadRegistry(home), vault = config.vaults.find(v => v.id === id);
   if (!vault) throw new Error("settings: vault is not registered; choose an id from vmem vaults list");
-  return { home, vault: vault.id, defaultVaultExplicit: config.vaults.some(v => v.id === config.defaultVault), defaultVault: config.vaults.find(v => v.id === config.defaultVault)?.id ?? (config.vaults.find(v => v.kind === "personal") ?? config.vaults[0])?.id ?? null, write: vault.write, piiPatterns: config.piiPatterns ?? [], graphResolution: vault.graph?.resolution ?? 1 };
+  return { home, vault: vault.id, defaultVaultExplicit: config.vaults.some(v => v.id === config.defaultVault), defaultVault: config.vaults.find(v => v.id === config.defaultVault)?.id ?? (config.vaults.find(v => v.kind === "personal") ?? config.vaults[0])?.id ?? null, write: vault.write, piiPatterns: config.piiPatterns ?? [], graphResolution: vault.graph?.resolution ?? 1, enrichmentEnabled: vault.enrichment?.enabled ?? false };
 }
 export function changeSettings(home: string, request: SettingsRequest) {
   if (!request || !request.changes || typeof request.changes !== "object" || Array.isArray(request.changes)) throw new Error("settings: changes must be an object; supply settings fields");
   if (typeof request.vault !== "string" || !request.vault) throw new Error("settings: vault id is missing; select a registered vault");
   const keys = Object.keys(request.changes);
   if (keys.some(k => (request.changes as unknown as Record<string, unknown>)[k] === undefined)) throw new Error("settings: undefined values are invalid; supply a value for each setting");
-  if (!keys.length || keys.some(k => !["defaultVault", "write", "piiPatterns", "graphResolution"].includes(k))) throw new Error("settings: missing or unknown changes; use defaultVault, write, piiPatterns or graphResolution");
+  if (!keys.length || keys.some(k => !["defaultVault", "write", "piiPatterns", "graphResolution", "enrichmentEnabled"].includes(k))) throw new Error("settings: missing or unknown changes; use defaultVault, write, piiPatterns, graphResolution or enrichmentEnabled");
   const evaluate = (config: VmemConfig, apply: boolean) => {
     const vault = config.vaults.find(v => v.id === request.vault);
     if (!vault) throw new Error("settings: vault is not registered; choose an id from vmem vaults list");
@@ -289,6 +290,7 @@ export function changeSettings(home: string, request: SettingsRequest) {
     if (supplied.write !== undefined) selected.write = supplied.write;
     if (supplied.piiPatterns !== undefined) next.piiPatterns = supplied.piiPatterns;
     if (supplied.graphResolution !== undefined) selected.graph = { ...selected.graph, resolution: supplied.graphResolution };
+    if (supplied.enrichmentEnabled !== undefined) selected.enrichment = { ...selected.enrichment, enabled: supplied.enrichmentEnabled };
     try { parseConfig(next); } catch (error) { throw new Error(`settings: invalid change (${message(error)}); correct the settings and preview again`); }
     const effectiveDefault = config.vaults.find(v => v.id === config.defaultVault)?.id ?? (config.vaults.find(v => v.kind === "personal") ?? config.vaults[0])?.id;
     const changes: SettingsChanges = {};
@@ -296,6 +298,7 @@ export function changeSettings(home: string, request: SettingsRequest) {
     if (supplied.write !== undefined && supplied.write !== vault.write) changes.write = supplied.write;
     if (supplied.piiPatterns !== undefined && JSON.stringify(supplied.piiPatterns) !== JSON.stringify(config.piiPatterns ?? [])) changes.piiPatterns = supplied.piiPatterns;
     if (supplied.graphResolution !== undefined && supplied.graphResolution !== (vault.graph?.resolution ?? 1)) changes.graphResolution = supplied.graphResolution;
+    if (supplied.enrichmentEnabled !== undefined && supplied.enrichmentEnabled !== (vault.enrichment?.enabled ?? false)) changes.enrichmentEnabled = supplied.enrichmentEnabled;
     if (!Object.keys(changes).length) throw new Error("settings: no values changed; change a setting before previewing");
     // Rebuild from the current config so unchanged effective defaults are not written explicitly.
     const actual = structuredClone(config), target = actual.vaults.find(v => v.id === request.vault)!;
@@ -303,6 +306,7 @@ export function changeSettings(home: string, request: SettingsRequest) {
     if (changes.write !== undefined) target.write = changes.write;
     if (changes.piiPatterns !== undefined) actual.piiPatterns = changes.piiPatterns;
     if (changes.graphResolution !== undefined) target.graph = { ...target.graph, resolution: changes.graphResolution };
+    if (changes.enrichmentEnabled !== undefined) target.enrichment = { ...target.enrichment, enabled: changes.enrichmentEnabled };
     const fingerprint = createHash("sha256").update(JSON.stringify([config, request.vault, changes])).digest("hex");
     if (apply && request.fingerprint !== fingerprint) throw new Error("settings: preview is stale or fingerprint is missing; run the preview again and confirm its fingerprint");
     if (apply) Object.assign(config, actual);
