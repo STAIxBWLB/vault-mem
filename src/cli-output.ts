@@ -15,7 +15,7 @@ type Check = { ok: boolean; issue?: string };
 export type VaultRow = Omit<VaultSpec, "pii"> & { pii: string; healthy?: boolean; issue?: string; checks?: Record<string, Check>;
   tidy?: { pending: Record<string, number>; notes: number; unparsable: string[]; hint: string } };
 export type SpecRow = SpecSourceSpec & { healthy?: boolean; issue?: string };
-export interface StatusResult extends ResolvedHome { version: string; healthy: boolean; vaults: VaultRow[]; specs?: SpecRow[] }
+export interface StatusResult extends ResolvedHome { version: string; agentMem?: { version: string; hostApi: number; hostApiMin: number }; healthy: boolean; vaults: VaultRow[]; specs?: SpecRow[] }
 export interface Manifest { name: string; version: string; configVersion: number; mcp: { server: string; tools: (string | { name: string; readOnly: boolean })[] }; commands: string[] }
 
 const statuses = (o: TextOptions) => {
@@ -23,7 +23,7 @@ const statuses = (o: TextOptions) => {
   return { OK: tone(`${marker("ok", plain)} ok`, "ok"), WARN: tone(`${marker("warn", plain)} warn`, "warn"), FAIL: tone(`${marker("fail", plain)} fail`, "fail") };
 };
 const paragraph = (text: string, o: TextOptions, toneName?: Tone, indent = "") => formatParagraph(toneName === "ok" || toneName === "warn" || toneName === "fail" ? `${marker(toneName, { ...o, color: false })} ${text}` : text, o, toneName, indent);
-const homeLine = (r: StatusResult, o: TextOptions) => `${heading(`vmem ${r.version}`, o)}  home ${clean(r.home)} (${r.source})`;
+const homeLine = (r: StatusResult, o: TextOptions) => `${heading(`vmem ${r.version}`, o)}  home ${clean(r.home)} (${r.source})${r.agentMem ? `  agent-mem ${clean(r.agentMem.version)} (host API ${r.agentMem.hostApi})` : ""}`;
 const NO_VAULTS = "no vaults registered; add one with vmem vaults add <id> <absolute-path> --kind personal|org --write mcp|cli|none";
 
 export function renderStatus(r: StatusResult, o: TextOptions): string {

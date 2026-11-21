@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-21
+
+- N-1: 0.10.x pins agent-mem 0.32.0 while 0.11.0 accepts `>=0.33.0 <1.0.0` when its host API includes version 1. Both share the same vault index, configuration, CLI and MCP contracts; 0.11.0 status and doctor additionally report the loaded agent-mem version and host API. Neither release raises agent-mem format floors or changes placement writer attestation.
+- Check agent-mem host API compatibility before opening its stores. New compatible agent-mem minors are accepted when vmem is installed or updated; an existing installation retains its resolved version until updated.
+
 ## [0.10.2] - 2026-11-21
 
 - Raise the exact `@staix/agent-mem` runtime pin from 0.30.0 to 0.32.0. The 0.31.0 release adds an optional reader lease signature and a held placement outcome; 0.32.0 adds catalog and placement view exports and optional refusal details. Both releases are additive for library consumers, preserve shared storage formats and do not raise the home format floor.

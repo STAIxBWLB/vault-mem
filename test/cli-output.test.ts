@@ -1,3 +1,4 @@
+import { agentMemInfo } from "../src/platform.ts";
 import { effectiveDomains } from "../src/config.ts";
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -209,7 +210,7 @@ test("#114 AC1: stats prints field blocks, manifest marks read-only tools and se
 test("#114 AC1: --json keeps the previous compact JSON, default output is text, and --color=always adds ANSI codes", () => {
   const f = fixture();
   const status = run(["status", "--json"], f.env).text;
-  expect(status).toBe(JSON.stringify({ ...resolveHome(f.env), version, healthy: true, vaults: registryStatus(f.home).map(v => ({ ...v, checks: undefined })) }));
+  expect(status).toBe(JSON.stringify({ ...resolveHome(f.env), version, agentMem: agentMemInfo, healthy: true, vaults: registryStatus(f.home).map(v => ({ ...v, checks: undefined })) }));
   const vaults = loadRegistry(f.home).vaults.map(v => ({ ...v, domains: effectiveDomains(v), pii: effectivePii(v), piiPolicy: piiPolicy(v) }));
   expect(run(["vaults", "list", "--json"], f.env).text).toBe(JSON.stringify(vaults));
   expect(run(["vaults", "remove", "mine", "--json"], f.env).text).toBe(JSON.stringify({ applied: false, vault: loadRegistry(f.home).vaults[0] }));

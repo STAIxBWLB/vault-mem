@@ -4,6 +4,7 @@
  * is indexed or copied here: the seam lists candidates from amem's own selection and records amem's own vault link.
  */
 import type { MemoryStore, View } from "@staix/agent-mem";
+import { amemVersion, checkHostApi } from "./host-api.ts";
 
 export interface AmemCandidate { id: string; project: string; kind: string; title: string | null; text: string; about: string[]; at: string }
 export interface AmemSeam {
@@ -18,13 +19,18 @@ export interface AmemSeam {
 export interface AmemOptions { env?: NodeJS.ProcessEnv; project?: string; cwd?: string; piiPatterns?: string[] }
 const ID = /^[a-f0-9]{32}$/;
 /** Load the agent-mem root now. `vmem mcp` calls it at start; every other caller keeps the lazy load. */
-export async function preloadAmem(): Promise<void> { await import("@staix/agent-mem"); }
+async function loadAmem() {
+  const amem = await import("@staix/agent-mem");
+  checkHostApi(amem, amemVersion());
+  return amem;
+}
+export async function preloadAmem(): Promise<void> { await loadAmem(); }
 function view(value: View): AmemCandidate {
   return { id: value.id, project: value.project, kind: value.kind, title: value.title, text: value.text, about: value.about.map(node => String(node)), at: value.at };
 }
 /** Open the curated store of one project. Listing and linking both require the generation profile. */
 export async function openAmem(options: AmemOptions = {}): Promise<AmemSeam> {
-  const amem = await import("@staix/agent-mem");
+  const amem = await loadAmem();
   const env = options.env ?? process.env, base = amem.memoryHome(env);
   const project = options.project ?? amem.memoryProjectKey(options.cwd ?? process.cwd());
   if (!project.trim() || project.length > 400) throw new Error("amem: invalid project key");
@@ -60,7 +66,7 @@ const MINE_EVENTS = new Set(["UserPromptSubmit", "observation", "summary", "Reca
  * exist: an absent home, a capture-only shard or an unsplit home without curated logs yields no rows, never a new store.
  */
 export async function readAmemForMining(options: { env?: NodeJS.ProcessEnv; project?: string; since: string; piiPatterns?: string[]; maxCaptureRows?: number }): Promise<MineAmemRead> {
-  const amem = await import("@staix/agent-mem");
+  const amem = await loadAmem();
   const { existsSync } = await import("node:fs"), { basename, join } = await import("node:path");
   const base = amem.memoryHome(options.env ?? process.env), maxRows = options.maxCaptureRows ?? 20000;
   const out: MineAmemRead = { records: [], projects: [], screened: 0, truncatedCapture: 0, unreadable: 0, malformedRecord: 0, recordOutsideWindow: 0, recordOutsideCapped: 0, recordOutsideUnavailable: 0 };
@@ -125,7 +131,7 @@ export async function readAmemForMining(options: { env?: NodeJS.ProcessEnv; proj
 }
 /** Cross-project candidate table from amem's own selection, read-only. */
 export async function allProjectCandidates(options: { env?: NodeJS.ProcessEnv; limit?: number; piiPatterns?: string[] }): Promise<{ project: string; candidates: AmemCandidate[] }[]> {
-  const amem = await import("@staix/agent-mem");
+  const amem = await loadAmem();
   const policy = amem.createStandalonePolicy({ ...(options.piiPatterns?.length ? { piiPatterns: [...options.piiPatterns] } : {}) });
   const result = await amem.vaultCandidatesAll(amem.memoryHome(options.env ?? process.env), { policy, ...(options.limit !== undefined ? { limit: options.limit } : {}) });
   return result.projects.map(entry => ({ project: entry.project, candidates: entry.candidates.map(view) }));

@@ -314,15 +314,21 @@ describe("follow-ups", () => {
     expect(resolveHome({ VMEM_HOME: `${hub}/a/../b/` }).home).toBe(join(hub, "b"));
     expect(resolveHome({ AGENTHUB_HOME: `${hub}/./x/..` }).home).toBe(join(hub, "vmem"));
   });
+  test("agent-mem range admits newer minors and rejects out-of-range versions", () => {
+    for (const version of ["0.33.0", "0.34.0", "0.99.0"]) expect(Bun.semver.satisfies(version, ">=0.33.0 <1.0.0")).toBe(true);
+    for (const version of ["0.32.1", "1.0.0"]) expect(Bun.semver.satisfies(version, ">=0.33.0 <1.0.0")).toBe(false);
+  });
   test("boundary check rejects forbidden imports in negative fixtures", () => {
-    const pin = JSON.stringify({ dependencies: { "@staix/agent-mem": "0.32.0" } });
+    const pin = JSON.stringify({ dependencies: { "@staix/agent-mem": ">=0.33.0 <1.0.0" } });
     const cases: [string, Record<string, string>, string, string?][] = [
       ["third-party", { "src/a.ts": "import x from \"left-pad\";" }, "forbidden dependency left-pad"],
       ["platform outside seam", { "src/a.ts": "import \"@staix/agent-mem/platform\";" }, "forbidden dependency @staix/agent-mem/platform"],
       ["root outside seam", { "src/platform.ts": "export * from \"@staix/agent-mem\";" }, "forbidden dependency @staix/agent-mem"],
       ["dynamic nonliteral", { "src/a.ts": "const m = \"x\"; await import(m);" }, "nonliteral import"],
       ["require", { "src/a.ts": "require(\"fs-extra\");" }, "forbidden dependency fs-extra"],
-      ["dependency drift", { "src/a.ts": "" }, "exactly @staix/agent-mem 0.32.0", JSON.stringify({ dependencies: { "@staix/agent-mem": "^0.32.0" } })],
+      ["dependency drift", { "src/a.ts": "" }, "exactly @staix/agent-mem >=0.33.0 <1.0.0", JSON.stringify({ dependencies: { "@staix/agent-mem": "^0.33.0" } })],
+      ["unbounded range", { "src/a.ts": "" }, "exactly @staix/agent-mem >=0.33.0 <1.0.0", JSON.stringify({ dependencies: { "@staix/agent-mem": ">=0.33.0" } })],
+      ["second dependency", { "src/a.ts": "" }, "exactly @staix/agent-mem >=0.33.0 <1.0.0", JSON.stringify({ dependencies: { "@staix/agent-mem": ">=0.33.0 <1.0.0", other: "1.0.0" } })],
       ["allowed", { "src/platform.ts": "export * from \"@staix/agent-mem/platform\";", "src/amem/seam.ts": "export * from \"@staix/agent-mem\"; import \"node:fs\"; import \"./x.ts\";" }, "boundary: ok"],
     ];
     for (const [, files, expected, pkg] of cases) {
