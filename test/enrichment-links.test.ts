@@ -1,46 +1,48 @@
 import { expect, test } from "bun:test";
 import type { AnalysisSnapshot } from "../src/analysis-types.ts";
-import { buildGraph, malformedInferredAnnotation } from "../src/vault-graph.ts";
-import { parseProposalOperation, proposalPayloadDigest } from "../src/proposals.ts";
+import { buildGraph } from "../src/vault-graph.ts";
 import { validateWrite } from "../src/write-validation.ts";
 import { explainGraphPath } from "../src/graph-evidence.ts";
+import { lintVault } from "../src/vault-lint.ts";
 
-const note = (body: string) => `---\ntype: insight\ndomain: research\ndescription: synthetic\ntopics: []\n---\n${body}`;
-const snapshot = (a: string, b = ""): AnalysisSnapshot => ({ notes: [{ path: "a.md", source: note(a) }, { path: "b.md", source: note(b) }], today: "", logPath: "", log: null, registryIds: null, reports: {} });
-const tag = (a: string, b = "") => buildGraph(snapshot(a, b)).edges[0]?.confidence_tag;
+const note = (body: string, inferred = "[]") => `---\ntype: insight\ndomain: research\ndescription: synthetic\ntopics: []\ninferred_links: ${inferred}\n---\n${body}`;
+const snapshot = (a: string, b = note("")): AnalysisSnapshot => ({ notes: [{ path: "a.md", source: a }, { path: "b.md", source: b }], today: "2026-01-01", logPath: "log.md", log: "", registryIds: null, reports: {} });
+const tag = (a: string, b?: string) => buildGraph(snapshot(a, b)).edges[0]?.confidence_tag;
 
-test("inferred declarations survive graph rebuild and extracted occurrences take precedence", () => {
-  const line = "- [[b]] <!-- vmem:inferred -->";
-  expect(tag(line)).toBe("INFERRED");
-  expect(explainGraphPath(snapshot(line), "a", "b").hops[0]?.edge.confidence_tag).toBe("INFERRED");
-  expect(tag(line, "[[a]]")).toBe("EXTRACTED");
-  expect(tag(`${line}\n[[b]]`)).toBe("EXTRACTED");
-  expect(tag(`${line}\n\`\`\`\n${line}\n\`\`\``)).toBe("EXTRACTED");
-  expect(tag("[[b]]")).toBe("EXTRACTED");
+test("plain body links use their source's inferred list and inferred occurrences take precedence", () => {
+  const inferred = note("[[b]]", "[b]");
+  expect(tag(inferred)).toBe("INFERRED");
+  expect(explainGraphPath(snapshot(inferred), "a", "b").hops[0]?.edge.confidence_tag).toBe("INFERRED");
+  expect(tag(note("[[b]]"))).toBe("EXTRACTED");
+  expect(tag(note("```\n[[b]]\n```", "[b]"))).toBe("EXTRACTED");
+  expect(tag(note("`[[b]]`", "[b]"))).toBe("EXTRACTED");
+  expect(tag(inferred, note("[[a]]"))).toBe("INFERRED");
+  expect(tag(note("[[b]]\n`[[b]]`", "[b]"))).toBe("INFERRED");
+  expect(tag(note("[[b]]", "[B]"))).toBe("EXTRACTED");
+  expect(tag(note("[[b]]", '["[[b]]"]'))).toBe("EXTRACTED");
 });
 
-test("writer rejects malformed markers in prospective notes", () => {
+test("orphan inferred list entries are lint warnings, not write refusals", () => {
+  const after = note("no link", "[b]");
+  expect(lintVault(snapshot(after)).findings.L19).toHaveLength(1);
+  expect(lintVault(snapshot(note("[[b]]", "[b]"))).findings.L19).toHaveLength(0);
+  expect(lintVault(snapshot(note("```\n[[b]]\n```\n`[[b]]`", "[b]"))).findings.L19).toHaveLength(1);
   const vault = { id: "synthetic", path: "/synthetic", kind: "personal" as const, write: "mcp" as const };
-  const after = note("[[b]] <!-- vmem:inferred -->");
   const issues = validateWrite([{ path: "notes/a.md", before: null, after }], { vault, config: { vaults: [vault] }, notes: new Map(), operation: { op: "create", path: "notes/a.md", frontmatter: {} } });
-  expect(issues.some(issue => issue.code === "V01" && issue.message.includes("malformed inferred"))).toBe(true);
-  const before = after, context = { vault, config: { vaults: [vault] }, notes: new Map([["notes/a.md", before]]), operation: { op: "patch" as const, path: "notes/a.md", edits: [{ oldString: "synthetic", newString: "updated" }] } };
-  const retained = validateWrite([{ path: "notes/a.md", before, after: before.replace("synthetic", "updated") }], context).filter(issue => issue.message.includes("malformed inferred"));
-  expect(retained.map(issue => issue.severity)).toEqual(["warning"]);
-  const duplicate = validateWrite([{ path: "notes/a.md", before, after: `${before}\n[[b]] <!-- vmem:inferred -->` }], context).filter(issue => issue.message.includes("malformed inferred"));
-  expect(duplicate.map(issue => issue.severity)).toEqual(["warning", "error"]);
+  expect(issues.some(issue => issue.message.includes("inferred"))).toBe(false);
 });
 
-test("annotation accepts only one visible standalone canonical line", () => {
-  expect(malformedInferredAnnotation(note("- [[b]] <!-- vmem:inferred -->"))).toBe(false);
-  for (const body of ["[[b]] <!-- vmem:inferred -->", "- [[b|label]] <!-- vmem:inferred -->", "- [[b]] <!-- vmem:inferred --> extra", "- [[B]] <!-- vmem:inferred -->", "```\n- [[b]] <!-- vmem:inferred -->\n```", "`- [[b]] <!-- vmem:inferred -->`", "- [[b]] <!-- vmem:inferred --> <!-- vmem:inferred -->"]) {
-    expect(malformedInferredAnnotation(note(body))).toBe(true);
-  }
-  expect(malformedInferredAnnotation("---\ndescription: vmem:inferred\n---\n")).toBe(true);
+test("marker mentions in prose and code do not cause write refusals", () => {
+  const after = note("<!-- vmem:inferred -->\n```\n- [[B]] <!-- vmem:inferred -->\n```\n`<!-- vmem:inferred -->`");
+  const vault = { id: "synthetic", path: "/synthetic", kind: "personal" as const, write: "mcp" as const };
+  const issues = validateWrite([{ path: "notes/a.md", before: null, after }], { vault, config: { vaults: [vault] }, notes: new Map(), operation: { op: "create", path: "notes/a.md", frontmatter: {} } });
+  expect(issues.some(issue => issue.message.includes("inferred"))).toBe(false);
 });
 
-test("annotation remains bound to the existing exact patch proposal digest", () => {
-  const operation = parseProposalOperation({ op: "patch", path: "a", expectedSha: "a".repeat(64), edits: [{ oldString: "## Topics", newString: "- [[b]] <!-- vmem:inferred -->\n\n## Topics" }] });
-  expect(operation.path).toBe("notes/a.md");
-  expect(proposalPayloadDigest(operation)).not.toBe(proposalPayloadDigest(parseProposalOperation({ ...operation, edits: [{ oldString: "## Topics", newString: "- [[c]] <!-- vmem:inferred -->\n\n## Topics" }] })));
+test("inferred_links schema accepts bounded canonical stems", () => {
+  const vault = { id: "synthetic", path: "/synthetic", kind: "personal" as const, write: "mcp" as const };
+  const check = (after: string) => validateWrite([{ path: "notes/a.md", before: null, after }], { vault, config: { vaults: [vault] }, notes: new Map(), operation: { op: "create", path: "notes/a.md", frontmatter: {} } }).filter(issue => issue.code === "V01" && issue.message.includes("inferred_links"));
+  expect(check(note("", "[b]"))).toHaveLength(0);
+  for (const value of ["b", "[B]", '["[[b]]"]', `[${Array(1001).fill("b").join(", ")}]`]) expect(check(note("", value))).toHaveLength(1);
+  expect(Object.hasOwn(lintVault(snapshot(note("").replace("inferred_links: []\n", ""), note("").replace("inferred_links: []\n", ""))).findings, "L19")).toBe(false);
 });

@@ -362,7 +362,7 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
     }
     const twoStep = ["move", "delete", "tidy", "merge"].includes(request.operation.op);
     const preview = request.operation.op === "check" || request.dryRun === true || (twoStep && request.confirm !== true);
-    if (options.proposal && (preview || !options.binding || !["create", "patch"].includes(request.operation.op))) refuse("V01", "proposal confirmation requires one create or patch and a bound vault; request a new preview");
+    if (options.proposal && (preview || !options.binding || !["create", "patch", "infer-link"].includes(request.operation.op))) refuse("V01", "proposal confirmation requires one supported proposal operation and a bound vault; request a new preview");
     if (!preview) {
       lockFile = join(root, MUTATION_LOCK);
       try { lockFd = openSync(lockFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }

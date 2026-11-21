@@ -6,7 +6,7 @@ import type { PatchEdit, WriteOp } from "./write-types.ts";
 export const MAX_PROPOSAL_RECORD_BYTES = 32 * 1024;
 export const MAX_PROPOSAL_RPC_BYTES = 48 * 1024;
 export const MAX_PROPOSAL_EDITS = 32;
-export type ProposalOperation = Extract<WriteOp, { op: "create" | "patch" }>;
+export type ProposalOperation = Extract<WriteOp, { op: "create" | "patch" | "infer-link" }>;
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -25,7 +25,7 @@ export function proposalRpcBytes(request: unknown): number { return jsonBytes(re
 export function checkProposalRpcSize(request: unknown): void {
   if (proposalRpcBytes(request) > MAX_PROPOSAL_RPC_BYTES) throw new Error("proposal: encoded JSON-RPC request exceeds 48 KiB; shorten the proposal");
 }
-/** Only create and exact-replacement patch operations are admissible, with one canonical flat note target. */
+/** Create, exact-replacement patch and inferred-link proposals have one canonical flat note target. */
 export function parseProposalOperation(value: unknown): ProposalOperation {
   if (!object(value) || typeof value.path !== "string") throw new Error("proposal: expected one create or patch operation and note target");
   if (jsonBytes(value) > MAX_PROPOSAL_RECORD_BYTES) throw new Error("proposal: operation exceeds the 32 KiB record limit; shorten the payload");
@@ -45,7 +45,13 @@ export function parseProposalOperation(value: unknown): ProposalOperation {
     });
     return { op: "patch", path, edits, expectedSha: value.expectedSha };
   }
-  throw new Error("proposal: unsupported operation; choose create or patch");
+  if (value.op === "infer-link") {
+    if (!exactKeys(value, ["op", "path", "target", "expectedSha"]) || typeof value.target !== "string" || typeof value.expectedSha !== "string" || !/^[a-f0-9]{64}$/.test(value.expectedSha)) throw new Error("proposal: infer-link requires a target and base SHA; correct the operation");
+    const target = notePath(value.target).slice(6, -3);
+    if (path === `notes/${target}.md`) throw new Error("proposal: infer-link endpoints must differ");
+    return { op: "infer-link", path, target, expectedSha: value.expectedSha };
+  }
+  throw new Error("proposal: unsupported operation; choose create, patch or infer-link");
 }
 
 /** Durable record schema: version 1 is local state, not an index or a note. */

@@ -176,6 +176,10 @@ function referenceReplacement(notes: Map<string, string>, from: string, to: stri
     return candidates?.size === 1 && candidates.has(from) ? to.slice(6, -3) : undefined;
   };
 }
+const INFERRED_STEM = /^[a-z0-9][a-z0-9-]{0,190}$/;
+function authoredGraphTargets(body: string): Set<string> {
+  return new Set(extractLinks(body).filter(link => !link.heading && !link.block).map(link => link.target.trim().toLowerCase().replaceAll(" ", "-")));
+}
 /** Same metadata recursion and visible-body rewrite that move has always used. */
 function rewriteNoteReferences(source: string, path: string, replace: (target: string) => string | undefined, inbound?: MergeInboundLink[], preserve: ReadonlySet<string> = new Set()): string {
   const doc = document(source, path);
@@ -194,6 +198,18 @@ function rewriteNoteReferences(source: string, path: string, replace: (target: s
   };
   const changes: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(doc.data)) changes[key] = preserve.has(key) ? value : rewriteValue(value, key);
+  if (Array.isArray(doc.data.inferred_links)) {
+    const original = doc.data.inferred_links, beforeTargets = authoredGraphTargets(doc.body), afterBody = rewriteLinkTargets(doc.body, replace), afterTargets = authoredGraphTargets(afterBody);
+    const rewritten = original.map(value => typeof value === "string" && INFERRED_STEM.test(value) ? replace(value) ?? value : value);
+    for (const [i, value] of original.entries()) {
+      if (typeof value !== "string" || !INFERRED_STEM.test(value)) continue;
+      const next = rewritten[i];
+      if (typeof next !== "string" || !afterTargets.has(next)) continue;
+      const priorWitness = original.some(item => typeof item === "string" && INFERRED_STEM.test(item) && (replace(item) ?? item) === next && beforeTargets.has(item));
+      if (!priorWitness) refuse("V01", "rewrite would attach an orphan inferred_links declaration to a different body link; repair the declaration before retrying", path);
+    }
+    changes.inferred_links = rewritten;
+  }
   record(doc.body, "body", true);
   const frontmatter = emitFrontmatter(doc, changes).slice(0, -doc.body.length || undefined);
   return (doc.body.length ? frontmatter : emitFrontmatter(doc, changes)) + rewriteLinkTargets(doc.body, replace);
@@ -281,9 +297,16 @@ export function planMerge(operation: Extract<WriteOp, { op: "merge" }>, notes: M
   const removeLeadingTitle = /^ {0,3}#[ \t]+\S/.test(originalLeadingLine);
   const first = withoutMergeTopics(keepDoc.body, keepTopics, keep), second = demoteMergeHeadings(withoutMergeTopics(absorbDoc.body, absorbTopics, absorb), removeLeadingTitle);
   const body = mergeGap(mergeGap(first, newline) + `## Merged from [[${absorb.slice(6, -3)}]]${newline}${newline}` + second, newline) + `## Topics${newline}${newline}` + topics.map(topic => `- ${topic}${newline}`).join("");
+  const lists = [keepDoc.data.inferred_links, absorbDoc.data.inferred_links];
+  if (lists.some(value => value !== undefined && (!Array.isArray(value) || value.some(item => typeof item !== "string" || !INFERRED_STEM.test(item))))) refuse("V01", "merge requires valid inferred_links lists; repair them before retrying", keep);
+  const keepLinks = (lists[0] ?? []) as string[], absorbLinks = (lists[1] ?? []) as string[];
+  const keepTargets = authoredGraphTargets(keepDoc.body), absorbTargets = authoredGraphTargets(absorbDoc.body), mergedTargets = authoredGraphTargets(body);
+  for (const target of keepLinks) if (!keepTargets.has(target) && mergedTargets.has(target)) refuse("V01", "merge would attach an orphan inferred_links declaration to a different body link; repair it before retrying", keep);
+  const inferred = [...new Set([...keepLinks, ...absorbLinks.filter(target => absorbTargets.has(target) && mergedTargets.has(target))])];
+  if (inferred.length > 1000) refuse("V09", "merged inferred_links exceeds 1000 entries; trim the lists before retrying", keep);
   if (Buffer.byteLength(body) > MAX_WRITE_BYTES) refuse("V09", "merged body exceeds 256 KiB; shorten either note's content before retrying the merge", keep);
   try {
-    const metadata = emitFrontmatter(keepDoc, { source: sources.length ? sources : undefined, topics });
+    const metadata = emitFrontmatter(keepDoc, { source: sources.length ? sources : undefined, topics, ...(lists[0] !== undefined || inferred.length ? { inferred_links: inferred } : {}) });
     rewritten.set(keep, (parseFrontmatter(metadata).frontmatter ?? "") + body);
     rewritten.set(absorb, supersededNote(rewritten.get(absorb)!, absorb, keep));
   } catch { refuse("V01", "merge metadata cannot be edited losslessly; convert endpoint headers to editable block mappings and retry the merge", keep); }
@@ -359,6 +382,20 @@ export function planOperation(operation: WriteOp, notes: Map<string, string>, re
         after += source.slice(cursor, span.start) + span.text; cursor = span.end;
       }
       set(path, after + source.slice(cursor));
+      break;
+    }
+    case "infer-link": {
+      const from = existing(operation.path), to = existing(operation.target), stem = to.path.slice(6, -3);
+      if (from.path === to.path) refuse("V01", "inferred link endpoints must differ", from.path);
+      if (typeof operation.expectedSha !== "string" || !/^[a-f0-9]{64}$/.test(operation.expectedSha)) refuse("V09", "inferred link requires the source note's current SHA-256", from.path);
+      const doc = document(from.source, from.path), links = doc.data.inferred_links;
+      if (links !== undefined && (!Array.isArray(links) || links.some(value => typeof value !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(value)))) refuse("V01", "inferred_links must be a list of note stems; repair it before adding a link", from.path);
+      if (bodyAlreadyLinks(notes, from.path, to.path)) refuse("V08", "the target is already linked in the body; inspect the note", from.path);
+      try {
+        const current = links as string[] | undefined;
+        const metadata = current?.includes(stem) ? from.source : emitFrontmatter(doc, { inferred_links: [...(current ?? []), stem] });
+        set(from.path, appendSection(metadata, "Relevant Notes", `- [[${stem}]]`, from.path));
+      } catch (error) { if (error instanceof WriteRefusal) throw error; refuse("V01", "cannot update inferred_links without rewriting frontmatter; repair the header", from.path); }
       break;
     }
     case "append": { const { path, source } = existing(operation.path); set(path, appendSection(source, operation.section, operation.markdown, path)); break; }

@@ -1,5 +1,7 @@
 import { BUILTIN_DOMAINS } from "./config.ts";
 import { parseAnalysisYaml, scalarText, yamlTruthy, AnalysisYamlUnsupported } from "./analysis-yaml.ts";
+import { authoredLinkOffsets } from "./links.ts";
+import { inferredLinkTargets, legacyTarget, LEGACY_LINK } from "./vault-graph.ts";
 import type { AnalysisSnapshot, LintCode, LintReport } from "./analysis-types.ts";
 const TYPES = ["decision", "insight", "method", "moc", "observation", "person", "project", "reference"];
 const CONFIDENCE = ["experimental", "likely", "proven"], STATUS = ["active", "archived", "superseded"];
@@ -9,7 +11,7 @@ const LEGACY = new Set("CREATE UPDATE MIGRATE REFACTOR MERGE MOVE RELOCATE RENAM
 const CODE_TITLES: Record<LintCode, string> = {
   L01: "L01 — dead wiki-link", L02: "L02 — 필수 frontmatter / 허용값", L03: "L03 — orphan",
   L09: "L09 — 로그 포맷", L10: "L10 — project 값", L11: "L11 — graph report staleness", L12: "L12 — island community", L13: "L13 — filename", L14: "L14 — source paths",
-  L15: "L15 — proven confidence의 source", L16: "L16 — evidence drift", L17: "L17 — source changed after updated", L18: "L18 — enrichment vectors",
+  L15: "L15 — proven confidence의 source", L16: "L16 — evidence drift", L17: "L17 — source changed after updated", L18: "L18 — enrichment vectors", L19: "L19 — inferred link without body link",
 };
 const truth = yamlTruthy;
 const emptySource = (value: unknown) => !truth(value) || typeof value === "string" && !value.trim();
@@ -124,6 +126,7 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
   const findings: Record<LintCode,string[]> = {L01:[],L02:[],L03:[],L09:[],L10:[],L11:[],L12:[],L13:[],L14:[],L15:[],L16:[],L17:[]} as unknown as Record<LintCode, string[]>;
   if (snapshot.enrichmentWarnings !== undefined) findings.L18 = [];
   const notes = [...snapshot.notes].sort((a,b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map(n => ({...n,...legacyDocument(n.source),stem: n.path.replace(/^notes\//, "").slice(0,-3)}));
+  if (notes.some(note => note.fm && Object.hasOwn(note.fm, "inferred_links"))) findings.L19 = [];
   const stems = new Set(notes.map(n => n.stem)), inlinks = new Map(notes.map(n => [n.stem,0]));
   // A text the hint pass never reached was not looked up, so its line must not read as a title that merely did not match.
   const bound = snapshot.linkHintBound, attempted = bound ? new Set(bound.attempted) : undefined;
@@ -146,6 +149,9 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
         findings.L01.push(prefix + `\`[[${t}]]\` (${field}) → 대상 노트 없음` + suffix);
       }
     }
+    const authored = authoredLinkOffsets(note.body);
+    const bodyTargets = new Set([...note.body.matchAll(LEGACY_LINK)].filter(match => authored.has(match.index)).map(match => legacyTarget(match[1]!)));
+    for (const target of inferredLinkTargets(fm?.inferred_links)) if (!bodyTargets.has(target)) findings.L19!.push(prefix + `inferred_links \`${target}\` has no body link`);
     if (fm === null) { findings.L02.push(prefix + "frontmatter 없음/파싱 실패"); continue; }
     if (fm.status === "superseded") superseded++;
     if (!TYPES.includes(String(fm.type))) findings.L02.push(prefix + `\`type: ${py(fm.type)}\` 허용값 아님 (${TYPES.join(" | ")})`);
@@ -179,9 +185,9 @@ export function lintDetails(snapshot: AnalysisSnapshot, only?: string): { report
   }
   if (data > 20000) findings.L09.push(`log ${data} 라인 > 20000 — 수동 아카이브 권장`);
   const graph = graphChecks(snapshot); findings.L11 = graph.l11; findings.L12 = graph.l12;
-  if (only) for (const code of ["L01","L02","L03","L10","L13","L14","L15","L16","L17","L18"] as const) if (findings[code]) findings[code] = findings[code].filter(s => s.startsWith(`\`${only}\``));
+  if (only) for (const code of ["L01","L02","L03","L10","L13","L14","L15","L16","L17","L18","L19"] as const) if (findings[code]) findings[code] = findings[code].filter(s => s.startsWith(`\`${only}\``));
   const errors = findings.L01.length + findings.L02.length + findings.L13.length;
-  const warnings = findings.L03.length + findings.L09.length + findings.L10.length + findings.L11.length + findings.L12.length + findings.L14.length + findings.L15.length + findings.L16.length + findings.L17.length + (findings.L18?.length ?? 0);
+  const warnings = findings.L03.length + findings.L09.length + findings.L10.length + findings.L11.length + findings.L12.length + findings.L14.length + findings.L15.length + findings.L16.length + findings.L17.length + (findings.L18?.length ?? 0) + (findings.L19?.length ?? 0);
   const summary = `SUMMARY errors=${errors} warnings=${warnings}`;
   const extra: Partial<Record<LintCode,string>> = {
     L01: bound ? `정보: 힌트 상한 ${bound.cap}개 텍스트 초과 — ${bound.skipped}개 dead link 텍스트는 힌트 미계산 (미탐 아님)` : "",

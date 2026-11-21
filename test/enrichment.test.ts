@@ -32,6 +32,12 @@ test("work list and intake follow source content hashes", () => {
     expect(listEnrichmentWork(home, { vault: "mine", kind: "embedding" }).items).toHaveLength(1);
     expect(readEnrichment(home, { vault: "mine", path: "alpha", kind: "embedding" })).toMatchObject({ status: "stale" });
     expect(() => intakeEnrichment(home, request)).toThrow(/stale/);
+    const changedHash = createHash("sha256").update(`${note}\nchanged\n`).digest("hex");
+    expect(intakeEnrichment(home, { ...request, contentHash: changedHash })).toMatchObject({ ok: true, applied: true });
+    const { loadRegistry } = require("../src/registry.ts") as typeof import("../src/registry.ts");
+    const { readEnrichmentStore } = require("../src/enrichment-store.ts") as typeof import("../src/enrichment-store.ts");
+    const config = loadRegistry(home), stored = readEnrichmentStore(home, config.vaults[0]!, config.vaults, []);
+    expect(stored.records.filter(r => r.kind === "embedding" && r.path === "notes/alpha.md")).toHaveLength(1);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -171,7 +177,7 @@ test("reconciliation refuses not_published when its proposal ID exists", async (
     const spec = loadRegistry(home).vaults[0]!, hash = createHash("sha256").update(source).digest("hex"), token = "04000000-0000-4000-8000-000000000000", producer = { skill: "fixture", version: "1", model: "test" }, createdAt = "2026-11-21T00:00:00.000Z";
     writeEnrichmentRecord(home, spec, { path: "notes/alpha.md", contentHash: hash, kind: "inferred-link", producer, createdAt, value: { state: "pending", token } }, () => {});
     const request = { vault: "mine", path: "alpha", kind: "inferred-link" as const, resolution: "not_published" as const, channel: "mcp" as const }, preview = reconcileEnrichment(home, request);
-    const proposal = submitProposal(home, { vault: "mine", operation: { op: "patch", path: "alpha", expectedSha: hash, edits: [{ oldString: "## Topics", newString: "- [[beta]] <!-- vmem:inferred -->\n\n## Topics" }] }, agentLabel: `enrichment:${token}` }, { channel: "mcp", proposalId: token });
+    const proposal = submitProposal(home, { vault: "mine", operation: { op: "infer-link", path: "alpha", target: "beta", expectedSha: hash }, agentLabel: `enrichment:${token}` }, { channel: "mcp", proposalId: token });
     expect(proposal.stored).toBe(true);
     expect(() => reconcileEnrichment(home, { ...request, confirm: true, fingerprint: preview.fingerprint })).toThrow(/proposal was published/);
   } finally { rmSync(root, { recursive: true, force: true }); }

@@ -10,14 +10,13 @@ import type { PiiSurface } from "./config.ts";
 import { screenPii } from "./pii.ts";
 import { moveSourcePath } from "./write-operations.ts";
 import { evidenceProblem } from "./evidence.ts";
-import { malformedInferredAnnotations } from "./vault-graph.ts";
 
 const TYPES = new Set(["insight", "decision", "observation", "person", "project", "method", "moc", "reference"]);
 const CONFIDENCE = new Set(["proven", "likely", "experimental"]);
 const STATUS = new Set(["active", "superseded", "archived"]);
 const CATEGORY = new Set(["gap", "prompt", "workflow"]);
 const KEYS = new Set([
-  "description", "type", "domain", "topics", "source", "confidence", "status",
+  "description", "type", "domain", "topics", "source", "confidence", "status", "inferred_links",
   "methodology", "evidence_strength", "project", "alternatives", "superseded_by", "supersedes", "stakeholders",
   "course", "semester", "student_level", "institution", "policy_area", "role", "affiliation", "last_contact",
   "tool", "category", "resolution_status", "aliases", "tags", "cssclasses", "title", "created", "updated", "received", "entities",
@@ -163,6 +162,7 @@ function schema(note: ParsedNote, vault: VaultSpec): SchemaIssue[] {
   for (const [key, allowed] of [["confidence", CONFIDENCE], ["status", STATUS], ["category", CATEGORY]] as const) {
     if (data[key] !== undefined && (typeof data[key] !== "string" || !allowed.has(data[key]))) add(key,`invalid ${key} enum`);
   }
+  if (data.inferred_links !== undefined && (!Array.isArray(data.inferred_links) || data.inferred_links.length > 1000 || data.inferred_links.some(value => typeof value !== "string" || !/^[a-z0-9][a-z0-9-]{0,190}$/.test(value)))) add("inferred_links", "inferred_links must be a list of at most 1000 lowercase kebab-case note stems");
   if(data.source!==undefined)try{sourceReferences(data.source);}catch{add("source","source must contain workspace-relative paths, mem ids or URLs");}
   if(data.evidence!==undefined){const problem=evidenceProblem(data.evidence,data.source);if(problem)add("evidence",problem,["evidence","source"]);}
   if (data.type === "reference") {
@@ -237,18 +237,6 @@ function validateChanges(changes: PlannedChange[], context: ValidationContext, o
     if (change.after === null) final.delete(change.path);
     else if (change.path.startsWith("notes/")) final.set(change.path, change.after);
     if (change.after === null) continue;
-    if (!report) {
-      const prior = new Map<string, number>();
-      const before = change.before ?? (context.operation.op === "move" && noteKey(change.path) === noteKey(context.operation.to) ? context.notes.get(movedFrom(context.operation.from, context)) : undefined) ?? "";
-      for (const entry of malformedInferredAnnotations(before)) prior.set(entry, (prior.get(entry) ?? 0) + 1);
-      let retained = false, added = false;
-      for (const entry of malformedInferredAnnotations(change.after)) {
-        const count = prior.get(entry) ?? 0;
-        if (count) { prior.set(entry, count - 1); retained = true; } else added = true;
-      }
-      if (retained) issues.push(issue("V01", "existing malformed inferred link annotation retained; correct it when convenient", "warning", change.path));
-      if (added) issues.push(issue("V01", "malformed inferred link annotation; use a standalone - [[target]] <!-- vmem:inferred --> line", "error", change.path));
-    }
     if (Buffer.byteLength(change.after) > (report ? MAX_REPORT_BYTES : MAX_BYTES)) issues.push(issue("V09", report ? "prospective report exceeds 16 MiB" : "prospective file exceeds 256 KiB", "error", change.path));
     issues.push(...screenContent(change.after, context.vault, context.config, context.piiSurface).map(value => ({ ...value, path: change.path })));
     try{issues.push(...screenMetadata(parseFrontmatter(change.after).data,context,change.path));}catch{ /* Invalid note YAML is reported separately; reports remain schema-exempt. */ }

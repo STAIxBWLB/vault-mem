@@ -15,7 +15,6 @@ import { readEnrichmentStore, writeEnrichmentRecord, validateEnrichmentRecord, t
 import type { VaultSpec } from "./config.ts";
 import { appendAssertions, readJournal } from "./assertions.ts";
 import { submitProposal, showProposal } from "./proposal-provider.ts";
-import { visibleProseLines } from "./links.ts";
 
 const sha256 = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const kinds: readonly EnrichmentKind[] = ["embedding", "summary", "community-label", "inferred-link", "fact"];
@@ -121,13 +120,7 @@ export function intakeEnrichment(home: string, request: EnrichmentIntakeRequest,
       try { notePath(path); } catch { fail("proposal targets require a lowercase ASCII note name; rename the note before proposing a link"); }
       const target = request.value && typeof request.value === "object" && !Array.isArray(request.value) && Object.keys(request.value).join(",") === "target" ? (request.value as { target?: unknown }).target : undefined;
       if (typeof target !== "string" || !/^[a-z0-9][a-z0-9-]{0,190}$/.test(target) || `notes/${target}.md` === path) fail("inferred link target is invalid; provide a different flat note stem");
-      const bytes = noteBytes(vault, path, config.denyPaths ?? []), source = bytes.toString("utf8");
-      if (!Buffer.from(source).equals(bytes)) fail("source note is not UTF-8; correct the note before submitting an inferred link");
-      const lines = source.split("\n"), visible = visibleProseLines(source), headings = lines.flatMap((line, i) => line === "## Topics" && visible[i] === line ? [i] : []);
-      if (headings.length !== 1 || source.split("## Topics").length !== 2) fail("source needs one unambiguous Topics heading; repair the note before proposing a link");
-      const marker = `- [[${target}]] <!-- vmem:inferred -->`;
-      if (source.split("\n").includes(marker)) fail("inferred link is already declared; inspect the note before proposing it again");
-      operation = { op: "patch", path, expectedSha: request.contentHash, edits: [{ oldString: "## Topics", newString: `${marker}\n\n## Topics` }] };
+      operation = { op: "infer-link", path, target, expectedSha: request.contentHash };
       const dry = applyWrite(home, { vault: vault.id, operation: operation as import("./write-types.ts").WriteOp, channel: request.channel, dryRun: true }, { env: options.env });
       if (!dry.ok) { check(); return { ...bound, ok: false, applied: false, kind: request.kind, receipt: dry }; }
     }

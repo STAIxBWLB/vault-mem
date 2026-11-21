@@ -10,8 +10,8 @@ import { logBinding, matchesBinding } from "./vault-log.ts";
 import { capturePublicationPath, cleanupOwnedFile, publishFile } from "./write-files.ts";
 import type { VaultSpec } from "./config.ts";
 
-export const MAX_ENRICHMENT_STORE_BYTES = 8 * 1024 * 1024;
-export const MAX_ENRICHMENT_RECORDS = 10000;
+export const MAX_ENRICHMENT_STORE_BYTES = 128 * 1024 * 1024;
+export const MAX_ENRICHMENT_RECORDS = 50000;
 export const MAX_EMBEDDING_DIMENSION = 4096;
 export type EnrichmentKind = "embedding" | "summary" | "community-label" | "inferred-link" | "fact";
 export interface EnrichmentProducer { skill: string; version: string; model: string }
@@ -27,6 +27,28 @@ const text = (v: unknown, maximum: number) => typeof v === "string" && !!v.trim(
 function validVector(value: unknown, dimension: number): value is number[] {
   return Array.isArray(value) && value.length === dimension && value.every(n => typeof n === "number" && Number.isFinite(n)) && value.some(n => n !== 0);
 }
+/** Float32 encoding keeps a 1536-dimensional vector to exactly 8192 base64 bytes. */
+function encodeVector(value: unknown, dimension: number): { encoding: "float32le"; data: string } {
+  if (!validVector(value, dimension)) fail("embedding vector is invalid; supply finite nonzero values within the dimension limit");
+  const bytes = Buffer.alloc(dimension * 4); let nonzero = false;
+  for (let i = 0; i < dimension; i++) {
+    const rounded = Math.fround(value[i]!);
+    if (!Number.isFinite(rounded)) fail("embedding value overflows Float32; use finite Float32-range values");
+    if (rounded !== 0) nonzero = true;
+    bytes.writeFloatLE(rounded, i * 4);
+  }
+  if (!nonzero) fail("embedding becomes zero in Float32; provide a nonzero representable vector");
+  return { encoding: "float32le", data: bytes.toString("base64") };
+}
+function decodeVector(value: unknown, dimension: number): number[] {
+  if (Array.isArray(value)) { encodeVector(value, dimension); return value; } // unpublished v1 data
+  if (!object(value) || Object.keys(value).sort().join(",") !== "data,encoding" || value.encoding !== "float32le" || typeof value.data !== "string" || value.data.length !== Math.ceil(dimension * 4 / 3) * 4) fail("sidecar vector encoding is invalid; inspect the local enrichment store");
+  const bytes = Buffer.from(value.data, "base64");
+  if (bytes.length !== dimension * 4 || bytes.toString("base64") !== value.data) fail("sidecar vector encoding is invalid; inspect the local enrichment store");
+  const vector = Array.from({ length: dimension }, (_, i) => bytes.readFloatLE(i * 4));
+  if (!validVector(vector, dimension)) fail("sidecar vector is invalid; inspect the local enrichment store");
+  return vector;
+}
 function parseStore(value: unknown, binding: string): EnrichmentStore {
   if (!object(value) || Object.keys(value).some(k => !["schemaVersion", "binding", "model", "dimension", "records"].includes(k)) || value.schemaVersion !== 1 || value.binding !== binding || !Array.isArray(value.records) || value.records.length > MAX_ENRICHMENT_RECORDS) fail("sidecar metadata is invalid or bound to another vault; inspect the local enrichment store");
   if ((value.model === undefined) !== (value.dimension === undefined) || (value.model !== undefined && (!text(value.model, 256) || !Number.isSafeInteger(value.dimension) || (value.dimension as number) < 1 || (value.dimension as number) > MAX_EMBEDDING_DIMENSION))) fail("sidecar model metadata is invalid; inspect the local enrichment store");
@@ -36,7 +58,10 @@ function parseStore(value: unknown, binding: string): EnrichmentStore {
     const key = JSON.stringify([item.path, item.kind, item.contentHash]);
     if (seen.has(key)) fail("sidecar contains duplicate records; inspect the local enrichment store");
     seen.add(key);
-    if (item.kind === "embedding" && (item.producer.model !== value.model || typeof value.dimension !== "number" || !validVector(item.value, value.dimension))) fail("sidecar vector has a different model or dimension; inspect the local enrichment store");
+    if (item.kind === "embedding") {
+      if (item.producer.model !== value.model || typeof value.dimension !== "number") fail("sidecar vector has a different model or dimension; inspect the local enrichment store");
+      item.value = decodeVector(item.value, value.dimension);
+    }
   }
   return value as unknown as EnrichmentStore;
 }
@@ -92,6 +117,7 @@ export function validateEnrichmentRecord(record: EnrichmentRecord): void {
   const provisional: EnrichmentStore = { schemaVersion: 1, binding: "0".repeat(64), records: [record] };
   if (record.kind === "embedding") {
     if (!object(record.producer) || !Array.isArray(record.value) || !validVector(record.value, record.value.length) || record.value.length < 1 || record.value.length > MAX_EMBEDDING_DIMENSION) fail("embedding is invalid; supply a producer and a finite nonzero vector");
+    encodeVector(record.value, record.value.length);
     provisional.model = record.producer.model; provisional.dimension = record.value.length;
   }
   parseStore(provisional, provisional.binding);
@@ -135,10 +161,12 @@ export function writeEnrichmentRecord(home: string, vault: VaultSpec, record: En
       if (store.model !== undefined && (store.model !== record.producer.model || store.dimension !== record.value.length)) fail("embedding model or dimension differs from this vault's sidecar; use the recorded model and dimension");
       store.model = record.producer.model; store.dimension = record.value.length;
     }
-    store.records = store.records.filter(r => r.path !== record.path || r.kind !== record.kind || r.contentHash !== record.contentHash);
+    const replaceLatest = ["embedding", "summary", "community-label"].includes(record.kind);
+    store.records = store.records.filter(r => r.path !== record.path || r.kind !== record.kind || (!replaceLatest && r.contentHash !== record.contentHash));
     store.records.push(record);
     parseStore(store, loc.binding);
-    const bytes = Buffer.from(JSON.stringify(store));
+    const persisted = { ...store, records: store.records.map(r => r.kind === "embedding" ? { ...r, value: encodeVector(r.value, store.dimension!) } : r) };
+    const bytes = Buffer.from(JSON.stringify(persisted));
     if (bytes.length > MAX_ENRICHMENT_STORE_BYTES) fail("sidecar exceeds the aggregate byte limit; reduce stored records before retrying");
     validateCurrent(); verifyMutation();
     const captured = capturePublicationPath(loc.root, loc.file), temp = join(loc.dir, `.enrichment-${randomUUID()}.tmp`);
