@@ -16,7 +16,7 @@ Scan work/ for new or changed content and propose vault extractions. Nothing is 
 - Single work source: call `/vault-extract` directly. A work `inbox/` item is processed by `inbox-process` first and its summary is the target (the vault has no inbox).
 - Without a workspace, a single explicit source follows the same proposal and confirmation steps as a batch; invoke `/vault-extract` only after the user accepts its create proposal.
 
-Raw recordings and unreviewed transcripts are not scanned by `/vault-sync`. Only refined meeting notes under `work/meetings/YYYY/YYYY-MM/` are considered vault-worthy sources. Any transcript provider output must be processed through `meeting-notes` first.
+Raw recordings and unreviewed transcripts are not scanned by `/vault-sync`. In a workspace, only refined meeting notes under `work/meetings/YYYY/YYYY-MM/` are considered vault-worthy sources. Any transcript provider output must be processed through `meeting-notes` first. When the workspace or `meeting-notes` skill is unavailable, skip and report that workspace preprocessing step, ask for a reviewed meeting note or summary, and do not process the raw transcript.
 
 ## Process
 
