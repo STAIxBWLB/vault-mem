@@ -188,10 +188,14 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
   private readonly db: Database;
   readonly file: string;
   private readonly root: string;
+  private readonly rootIdentity: { dev: number; ino: number };
+  private hasScanned = false;
   private readonly adapter?: IndexSourceAdapter;
   constructor(home: string, readonly vault: Source, vaultRoots: string[] = [vault.path], options: IndexOptions = {}) {
     this.adapter = options.adapter;
     this.root = this.adapter ? realPath(vault.path) : realpathSync(vault.path);
+    const rootStat = lstatSync(this.root);
+    this.rootIdentity = { dev: rootStat.dev, ino: rootStat.ino };
     if (this.root !== vault.path) throw new Error(this.adapter ? "spec index: worktree path changed; resolve the source again with resolveSpecWorktree" : `vault ${vault.id}: registered path changed`);
     const notes = join(this.root, "notes");
     if (this.adapter) this.adapter.validate();
@@ -284,6 +288,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
   }
   /** Scan metadata each call; hash only new or metadata-changed files. Atomic cache update. */
   scan(rebuild = false, options: { skipInvalidFrontmatter?: boolean; captureInvalidFrontmatter?: boolean; denyPaths?: string[] } = {}): { notes: number; changed: number; removed: number; skipped?: string[] } {
+    this.hasScanned = false;
     if (rebuild && options.denyPaths?.length) throw new Error("index: rebuild cannot use denyPaths restrictions; use scan(false, { denyPaths }) for a restricted refresh or vmem rebuild <vault> for an unrestricted rebuild");
     // Discovery/binding Git calls must never hold a SQLite writer lock.
     let preparedPaths: string[] | undefined;
@@ -419,6 +424,7 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
       return { notes: live.size, changed, removed, ...(skipped.length ? { skipped } : {}) };
     }).immediate();
     this.adapter?.validate();
+    this.hasScanned = true;
     return result;
   }
   /** Consume cached note sources only. Auxiliary inputs are captured separately by analysisInput. */
@@ -449,6 +455,11 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
     return rows.filter(row => !snapshot || snapshot.get(row.path) === row.sourceHash)
       .slice(snapshot ? snapshotOffset : 0, (snapshot ? snapshotOffset : 0) + (snapshot && allSnapshotRows ? 10000 : limit))
       .map(({ sourceHash: _, ...row }) => ({ ...row, title: boundedText(row.title, 512).content, snippet: boundedText(row.snippet, 1024).content, type: boundedText(row.type, 256).content, domain: boundedText(row.domain, 256).content }));
+  }
+  /** True only while the source directory is the one this index was opened against. */
+  sourceIdentityCurrent(): boolean {
+    try { const stat = lstatSync(this.root); return this.hasScanned && stat.isDirectory() && !stat.isSymbolicLink() && stat.dev === this.rootIdentity.dev && stat.ino === this.rootIdentity.ino && realpathSync(this.root) === this.root; }
+    catch { return false; }
   }
   /** Bounded metadata and content hashes for a vector join; never returns note bodies. */
   enrichmentPointers(): (SearchResult & { hash: string })[] {

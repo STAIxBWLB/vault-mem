@@ -83,7 +83,7 @@ test("fact intake uses the assertion journal and inferred links require proposal
     changeSettings(home, { ...settings, confirm: true, fingerprint: preview.fingerprint });
     const base = { vault: "mine", path: "alpha", contentHash: createHash("sha256").update(note).digest("hex"), producer: { skill: "fixture", version: "1", model: "test" }, createdAt: "2026-11-21T00:00:00.000Z", channel: "mcp" as const };
     const fact = intakeEnrichment(home, { ...base, kind: "fact", value: [{ op: "declare", subject: "s:alpha" }, { op: "assert", subject: "s:alpha", relation: "status", value: "active", kind: "state", from: "2026", to: "open", source: ["mem:fixture"] }] });
-    expect(fact).toMatchObject({ applied: true, ok: true });
+    expect(fact).toMatchObject({ applied: true, ok: true, vault: "mine", path: "notes/alpha.md", contentHash: base.contentHash, producer: base.producer, createdAt: base.createdAt });
     expect(() => intakeEnrichment(home, { ...base, kind: "fact", value: [{ op: "assert", subject: "s:alpha", relation: "status", value: "active", kind: "state", from: "2026", to: "open", source: ["mem:fixture"] }] })).toThrow(/already has an intake record/);
     expect(evaluateAssertions(readJournal(vault), {}).items[0]?.origin).toMatchObject({ path: "notes/alpha.md", sha256: base.contentHash, status: "unverified" });
     const modified = `${note}\nOther content.\n`;
@@ -94,7 +94,7 @@ test("fact intake uses the assertion journal and inferred links require proposal
     writeFileSync(join(notes, "alpha.md"), note);
     expect(() => intakeEnrichment(home, { ...base, ...newFact })).toThrow(/already has an intake record/);
     const link = intakeEnrichment(home, { ...base, kind: "inferred-link", value: { target: "beta" } });
-    expect(link).toMatchObject({ applied: true, ok: true });
+    expect(link).toMatchObject({ applied: true, ok: true, path: "notes/alpha.md", contentHash: base.contentHash, producer: base.producer });
     if (!("receipt" in link) || !link.receipt || !("id" in link.receipt)) throw new Error("expected proposal receipt");
     const id = link.receipt.id;
     const proposal = previewProposalApply(home, { vault: "mine", id }, { channel: "mcp" });
@@ -118,6 +118,7 @@ test("uncertain reservations require fingerprint-bound reconciliation before ret
     const spec = loadRegistry(home).vaults[0]!, hash = createHash("sha256").update(source).digest("hex");
     writeEnrichmentRecord(home, spec, { path: "notes/alpha.md", contentHash: hash, kind: "fact", producer: { skill: "fixture", version: "1", model: "test" }, createdAt: "2026-11-21T00:00:00.000Z", value: { state: "pending", token: "test-token" } }, () => {});
     expect(listEnrichmentWork(home, { vault: "mine", kind: "fact" }).items).toMatchObject([{ status: "needs-reconciliation" }]);
+    expect(readEnrichment(home, { vault: "mine", path: "alpha", kind: "fact" })).toMatchObject({ status: "needs-reconciliation" });
     const request = { vault: "mine", path: "alpha", kind: "fact" as const, resolution: "not_published" as const, channel: "mcp" as const }, preview = reconcileEnrichment(home, request);
     expect(preview).toMatchObject({ applied: false, warning: expect.stringContaining("duplicate") });
     expect(() => reconcileEnrichment(home, { ...request, confirm: true, fingerprint: "bad" })).toThrow(/stale/);
@@ -173,5 +174,114 @@ test("reconciliation refuses not_published when its proposal ID exists", async (
     const proposal = submitProposal(home, { vault: "mine", operation: { op: "patch", path: "alpha", expectedSha: hash, edits: [{ oldString: "## Topics", newString: "- [[beta]] <!-- vmem:inferred -->\n\n## Topics" }] }, agentLabel: `enrichment:${token}` }, { channel: "mcp", proposalId: token });
     expect(proposal.stored).toBe(true);
     expect(() => reconcileEnrichment(home, { ...request, confirm: true, fingerprint: preview.fingerprint })).toThrow(/proposal was published/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("work-list discards results when registry policy changes during the scan", async () => {
+  const { spyOn } = await import("bun:test");
+  const { VaultIndex } = await import("../src/vault-index.ts");
+  const { readFileSync } = await import("node:fs");
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-enrichment-drift-")));
+  try {
+    const home = join(root, "home"), vault = join(root, "vault"), file = join(vault, "notes", "alpha.md"), configFile = join(home, "vmem.config.json");
+    mkdirSync(join(vault, "notes"), { recursive: true }); writeFileSync(file, "---\ntype: insight\ndescription: Fixture.\ndomain: research\n---\n# Alpha\n");
+    addVault(home, { id: "mine", path: vault, kind: "personal", write: "mcp" });
+    const setting = { vault: "mine", changes: { enrichmentEnabled: true } }, p = changeSettings(home, setting);
+    changeSettings(home, { ...setting, confirm: true, fingerprint: p.fingerprint });
+    const original = VaultIndex.prototype.analysisSnapshot;
+    const spy = spyOn(VaultIndex.prototype, "analysisSnapshot").mockImplementation(function (this: InstanceType<typeof VaultIndex>, inputs) {
+      const result = original.call(this, inputs);
+      const config = JSON.parse(readFileSync(configFile, "utf8")); config.denyPaths = [file]; writeFileSync(configFile, JSON.stringify(config));
+      return result;
+    });
+    try { expect(() => listEnrichmentWork(home, { vault: "mine", kind: "summary" })).toThrow(/policy changed during the read/); }
+    finally { spy.mockRestore(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("record and vector reads discard output if policy changes while reading", async () => {
+  const { spyOn } = await import("bun:test");
+  const fs = await import("node:fs");
+  const { VaultIndex } = await import("../src/vault-index.ts");
+  const { hybridSearch, similarNotes } = await import("../src/enrichment-query.ts");
+  const { loadRegistry } = await import("../src/registry.ts");
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-enrichment-read-drift-")));
+  try {
+    const home = join(root, "home"), vault = join(root, "vault"), configFile = join(home, "vmem.config.json"), notes = join(vault, "notes");
+    mkdirSync(notes, { recursive: true });
+    const source = "---\ntype: insight\ndescription: Lantern.\ndomain: research\n---\n# Alpha\nlantern\n";
+    writeFileSync(join(notes, "alpha.md"), source); writeFileSync(join(notes, "beta.md"), source.replace("Alpha", "Beta"));
+    addVault(home, { id: "mine", path: vault, kind: "personal", write: "mcp" });
+    const setting = { vault: "mine", changes: { enrichmentEnabled: true } }, p = changeSettings(home, setting);
+    changeSettings(home, { ...setting, confirm: true, fingerprint: p.fingerprint });
+    const base = { vault: "mine", contentHash: createHash("sha256").update(source).digest("hex"), producer: { skill: "fixture", version: "1", model: "test" }, createdAt: "2026-11-21T00:00:00.000Z", channel: "mcp" as const };
+    intakeEnrichment(home, { ...base, path: "alpha", kind: "embedding", value: [1, 0] });
+    const configText = fs.readFileSync(configFile, "utf8");
+    const mutate = () => { const data = JSON.parse(configText); data.denyPaths = [join(notes, "alpha.md")]; writeFileSync(configFile, JSON.stringify(data)); };
+    const config = loadRegistry(home), index = new VaultIndex(home, config.vaults[0]!, [vault], { memory: true }); index.scan();
+    try {
+      const original = VaultIndex.prototype.enrichmentPointers;
+      const spy = spyOn(VaultIndex.prototype, "enrichmentPointers").mockImplementation(function (this: InstanceType<typeof VaultIndex>) { const result = original.call(this); mutate(); return result; });
+      try { expect(() => hybridSearch(home, "mine", index, "lantern", {}, { model: "test", values: [1, 0] })).toThrow(/policy changed during the read/); }
+      finally { spy.mockRestore(); }
+      writeFileSync(configFile, configText);
+      const spy2 = spyOn(VaultIndex.prototype, "enrichmentPointers").mockImplementation(function (this: InstanceType<typeof VaultIndex>) { const result = original.call(this); mutate(); return result; });
+      try { expect(() => similarNotes(home, "mine", index, "alpha")).toThrow(/policy changed during the read/); }
+      finally { spy2.mockRestore(); }
+      writeFileSync(configFile, configText);
+      const originalStat = fs.fstatSync; let changed = false;
+      const spy3 = spyOn(fs, "fstatSync").mockImplementation(((...args: Parameters<typeof fs.fstatSync>) => {
+        const result = originalStat(...args); if (!changed && Number(result.size) === Buffer.byteLength(source)) { changed = true; mutate(); } return result;
+      }) as typeof fs.fstatSync);
+      try { expect(() => readEnrichment(home, { vault: "mine", path: "alpha", kind: "embedding" })).toThrow(/policy changed during the read/); }
+      finally { spy3.mockRestore(); }
+    } finally { index.close(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("direct vector queries reject an index from a replaced vault root", async () => {
+  const { renameSync } = await import("node:fs");
+  const { VaultIndex } = await import("../src/vault-index.ts");
+  const { hybridSearch, similarNotes } = await import("../src/enrichment-query.ts");
+  const { loadRegistry } = await import("../src/registry.ts");
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-enrichment-root-drift-")));
+  try {
+    const home = join(root, "home"), vault = join(root, "vault"); mkdirSync(join(vault, "notes"), { recursive: true });
+    writeFileSync(join(vault, "notes", "alpha.md"), "---\ntype: insight\ndescription: Old.\ndomain: research\n---\n# Old\nlantern\n");
+    addVault(home, { id: "mine", path: vault, kind: "personal", write: "mcp" });
+    const setting = { vault: "mine", changes: { enrichmentEnabled: true } }, p = changeSettings(home, setting);
+    changeSettings(home, { ...setting, confirm: true, fingerprint: p.fingerprint });
+    const config = loadRegistry(home), index = new VaultIndex(home, config.vaults[0]!, [vault], { memory: true }); index.scan();
+    try {
+      renameSync(vault, join(root, "old-vault")); mkdirSync(join(vault, "notes"), { recursive: true });
+      expect(() => hybridSearch(home, "mine", index, "lantern", {}, { model: "test", values: [1, 0] })).toThrow(/index is unscanned or belongs to another vault/);
+      expect(() => similarNotes(home, "mine", index, "alpha")).toThrow(/index is unscanned or belongs to another vault/);
+      const replacement = new VaultIndex(home, config.vaults[0]!, [vault], { memory: true });
+      try { expect(() => hybridSearch(home, "mine", replacement, "lantern", {}, { model: "test", values: [1, 0] })).toThrow(/index is unscanned/); }
+      finally { replacement.close(); }
+    } finally { index.close(); }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("hybrid fallback excludes a note denied after it was indexed", async () => {
+  const { VaultIndex } = await import("../src/vault-index.ts");
+  const { hybridSearch } = await import("../src/enrichment-query.ts");
+  const { loadRegistry } = await import("../src/registry.ts");
+  const { readFileSync } = await import("node:fs");
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-enrichment-denied-")));
+  try {
+    const home = join(root, "home"), vault = join(root, "vault"), file = join(vault, "notes", "alpha.md");
+    mkdirSync(join(vault, "notes"), { recursive: true }); writeFileSync(file, "---\ntype: insight\ndescription: Fixture.\ndomain: research\n---\n# Alpha\nuniquelantern\n");
+    addVault(home, { id: "mine", path: vault, kind: "personal", write: "mcp" });
+    const setting = { vault: "mine", changes: { enrichmentEnabled: true } }, p = changeSettings(home, setting);
+    changeSettings(home, { ...setting, confirm: true, fingerprint: p.fingerprint });
+    const config = loadRegistry(home), index = new VaultIndex(home, config.vaults[0]!, [vault], { memory: true }); index.scan();
+    try {
+      const configFile = join(home, "vmem.config.json"), changed = JSON.parse(readFileSync(configFile, "utf8")); changed.denyPaths = [file]; writeFileSync(configFile, JSON.stringify(changed));
+      index.scan(false, { denyPaths: [file] });
+      expect(index.search("uniquelantern")).toHaveLength(1);
+      expect(hybridSearch(home, "mine", index, "uniquelantern", {}, { model: "test", values: [1] })).toEqual([]);
+    } finally { index.close(); }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

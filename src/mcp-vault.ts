@@ -20,7 +20,7 @@ import { loadRegistry, registryStatus } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
 import { CHANGES_PAGE_LIMIT, HISTORY_PAGE_LIMIT, SNAPSHOT_CURSOR_CHARS, readChanges, readHistory, readRevision } from "./vault-history.ts";
 import { listVaultFiles, readVaultFile } from "./vault-files.ts";
-import { appendLog, logBinding, readLog } from "./vault-log.ts";
+import { appendLog, logBinding, matchesBinding, readLog } from "./vault-log.ts";
 import { STATS_MAX_DAYS, vaultStats } from "./vault-stats.ts";
 import { applyWrite } from "./writer.ts";
 import { notePath } from "./write-operations.ts";
@@ -59,8 +59,7 @@ const proposalOperation = object({ op: { type: "string", enum: ["create", "patch
   edits: { type: "array", minItems: 1, maxItems: 32, items: object({ oldString: string(8192), newString: string(8192, 0) }, ["oldString", "newString"]) } }, ["op", "path"]);
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
-export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_brief", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_history", "vmem_changes", "vmem_mocs", "vmem_check", "vmem_log_tail",
-  "vmem_enrichment_work", "vmem_enrichment_intake", "vmem_enrichment_get", "vmem_enrichment_reconcile", "vmem_similar",
+export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_enrichment_work", "vmem_enrichment_intake", "vmem_enrichment_get", "vmem_enrichment_reconcile", "vmem_similar", "vmem_brief", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_history", "vmem_changes", "vmem_mocs", "vmem_check", "vmem_log_tail",
   "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_graph_explain", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_evidence", "vmem_stats", "vmem_proposal_submit", "vmem_proposal_list", "vmem_proposal_show", "vmem_proposal_apply", "vmem_proposal_reject", "vmem_proposal_reconcile", "vmem_assert", "vmem_assertions", "vmem_assertions_purge", "vmem_assertions_exposure", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Server `initialize` instructions: purpose, navigation order and the write contract. Pinned by a test, under 400 bytes. */
@@ -193,6 +192,13 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     const current = loadRegistry(home).vaults.find(v => v.id === spec.id);
     if (!current || JSON.stringify(current) !== JSON.stringify(spec)) throw new Error("enrichment: vault binding changed since MCP startup; restart the MCP server");
   };
+  const enrichmentReadGuard = (spec: VaultSpec) => {
+    const config = loadRegistry(home), current = config.vaults.find(v => v.id === spec.id);
+    if (!current || JSON.stringify(current) !== JSON.stringify(spec)) throw new Error("enrichment: vault binding changed since MCP startup; restart the MCP server");
+    let binding: ReturnType<typeof logBinding>;
+    try { binding = logBinding(spec, config); } catch { throw new Error("enrichment: vault root is unavailable; restore the registered vault and retry"); }
+    return () => { if (!matchesBinding(loadRegistry(home), spec.id, binding)) throw new Error("enrichment: vault binding or policy changed during the read; restart the MCP server and retry"); };
+  };
   const write = (args: Record<string, unknown>, operation: WriteOp, extra: Partial<WriteRequest> = {}): WriteReceipt | ReturnType<typeof refusal> & Partial<WriteReceipt> => {
     const request: WriteRequest = { vault: pick(args).id, operation, channel: "mcp", ...extra, ...(args.log ? { log: args.log as LogEvent } : {}) };
     const receipt = applyWrite(home, request, { env });
@@ -248,16 +254,17 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
       const spec = pick(args), model = str(args.model), vector = args.vector;
       if ((model === undefined) !== (vector === undefined)) throw new Error("enrichment: model and vector must be supplied together; provide both or omit both");
       if (model !== undefined) {
-        assertStartupBinding(spec);
-        return read(args, index => ({ hits: hybridSearch(home, spec.id, index, str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }, { model, values: vector as number[] }) }));
+        const check = enrichmentReadGuard(spec);
+        const result = read(args, index => { check(); return { hits: hybridSearch(home, spec.id, index, str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }, { model, values: vector as number[] }) }; });
+        check(); return result;
       }
       return read(args, index => ({ hits: index.search(str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }) }));
     },
-    vmem_enrichment_work: args => { const spec = pick(args); assertStartupBinding(spec); return listEnrichmentWork(home, { vault: spec.id, kind: str(args.kind) as EnrichmentKind, ...(typeof args.limit === "number" ? { limit: args.limit } : {}), ...(str(args.after) ? { after: str(args.after)! } : {}) }); },
-    vmem_enrichment_intake: args => { const spec = pick(args); assertStartupBinding(spec); return intakeEnrichment(home, { vault: spec.id, path: str(args.path)!, contentHash: str(args.contentHash)!, kind: str(args.kind) as EnrichmentKind, producer: args.producer as { skill: string; version: string; model: string }, createdAt: str(args.createdAt)!, value: args.value, channel: "mcp" }, { env }); },
-    vmem_enrichment_get: args => { const spec = pick(args); assertStartupBinding(spec); return readEnrichment(home, { vault: spec.id, path: str(args.path)!, kind: str(args.kind) as EnrichmentKind }); },
-    vmem_enrichment_reconcile: args => { const spec = pick(args); assertStartupBinding(spec); return reconcileEnrichment(home, { vault: spec.id, path: str(args.path)!, kind: str(args.kind) as "fact" | "inferred-link", resolution: str(args.resolution) as "published" | "not_published", channel: "mcp", ...twoStep(args) }); },
-    vmem_similar: args => { const spec = pick(args); assertStartupBinding(spec); return read(args, index => ({ hits: similarNotes(home, spec.id, index, str(args.path)!, (args.limit as number | undefined) ?? 20) })); },
+    vmem_enrichment_work: args => { const spec = pick(args), check = enrichmentReadGuard(spec); const result = listEnrichmentWork(home, { vault: spec.id, kind: str(args.kind) as EnrichmentKind, ...(typeof args.limit === "number" ? { limit: args.limit } : {}), ...(str(args.after) ? { after: str(args.after)! } : {}) }); check(); return result; },
+    vmem_enrichment_intake: args => { const spec = pick(args); assertStartupBinding(spec); return intakeEnrichment(home, { vault: spec.id, path: str(args.path)!, contentHash: str(args.contentHash)!, kind: str(args.kind) as EnrichmentKind, producer: args.producer as { skill: string; version: string; model: string }, createdAt: str(args.createdAt)!, value: args.value, channel: "mcp" }, { env, expectedVault: spec }); },
+    vmem_enrichment_get: args => { const spec = pick(args), check = enrichmentReadGuard(spec); const result = readEnrichment(home, { vault: spec.id, path: str(args.path)!, kind: str(args.kind) as EnrichmentKind }); check(); return result; },
+    vmem_enrichment_reconcile: args => { const spec = pick(args); assertStartupBinding(spec); return reconcileEnrichment(home, { vault: spec.id, path: str(args.path)!, kind: str(args.kind) as "fact" | "inferred-link", resolution: str(args.resolution) as "published" | "not_published", channel: "mcp", ...twoStep(args) }, { expectedVault: spec }); },
+    vmem_similar: args => { const spec = pick(args), check = enrichmentReadGuard(spec); const result = read(args, index => { check(); return { hits: similarNotes(home, spec.id, index, str(args.path)!, (args.limit as number | undefined) ?? 20) }; }); check(); return result; },
     vmem_read: args => str(args.revision) === undefined
       ? read(args, index => { const r = index.show(str(args.path)!, (args.maxBytes as number | undefined) ?? 16384, str(args.section), args.offset as number | undefined); return document(r); })
       : readRevision({ vault: pick(args), home, env, denyPaths: loadRegistry(home).denyPaths ?? [], note: str(args.path)!, revision: str(args.revision)!,

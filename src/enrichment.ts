@@ -6,6 +6,7 @@ import { hostname } from "node:os";
 import { cleanupOwnedFile } from "./write-files.ts";
 import { applyWrite, MUTATION_LOCK } from "./writer.ts";
 import { loadRegistry } from "./registry.ts";
+import { logBinding, matchesBinding } from "./vault-log.ts";
 import { isDenied } from "./platform.ts";
 import { notePath } from "./write-operations.ts";
 import { screenMetadata } from "./write-validation.ts";
@@ -24,7 +25,14 @@ function context(home: string, id: string, channel?: "cli" | "mcp") {
   if (!vault) return fail("vault is not registered; choose an id from vmem vaults list");
   if (!vault.enrichment?.enabled) return fail("enrichment is disabled; enable it for this vault in settings");
   if (channel && (vault.write === "none" || (channel === "mcp" && vault.write !== "mcp"))) return fail("vault write policy refuses this channel; change the policy in settings or use an allowed channel");
-  return { config, vault };
+  let binding: ReturnType<typeof logBinding>;
+  try { binding = logBinding(vault, config); } catch { return fail("vault root is unavailable; inspect the registered vault and retry"); }
+  const check = () => {
+    let current: ReturnType<typeof loadRegistry>;
+    try { current = loadRegistry(home); } catch { return fail("registry is unavailable after the read; inspect the configuration and retry"); }
+    if (!matchesBinding(current, vault.id, binding)) fail("vault binding or policy changed during the read; retry with the current registry");
+  };
+  return { config, vault, check };
 }
 function sourcePath(path: string): string {
   if (typeof path !== "string") return fail("source path is missing; choose a note from vmem list");
@@ -47,7 +55,9 @@ function noteBytes(vault: VaultSpec, path: string, denied: string[]): Buffer {
     if (!before.isFile() || before.size > MAX_NOTE_BYTES) fail("source note is not a bounded regular file; inspect or split the note");
     const bytes = Buffer.alloc(before.size + 1); let length = 0;
     while (length < bytes.length) { const n = readSync(fd, bytes, length, bytes.length - length, null); if (!n) break; length += n; }
-    const after = fstatSync(fd), named = lstatSync(file);
+    const after = fstatSync(fd);
+    let named: ReturnType<typeof lstatSync>;
+    try { named = lstatSync(file); } catch { return fail("source note changed during read; reread it and retry"); }
     if (named.isSymbolicLink() || named.dev !== after.dev || named.ino !== after.ino || length !== before.size || before.size !== after.size || before.ino !== after.ino || before.dev !== after.dev || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) fail("source note changed while reading; reread it and retry");
     return bytes.subarray(0, length);
   } finally { closeSync(fd); }
@@ -68,7 +78,7 @@ export function listEnrichmentWork(home: string, request: EnrichmentWorkRequest)
   if (!kinds.includes(request.kind)) fail("unknown work kind; choose embedding, summary, community-label, inferred-link or fact");
   const limit = request.limit ?? 50;
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) fail("work limit is outside 1..100; choose a smaller page");
-  const { config, vault } = context(home, request.vault), store = readEnrichmentStore(home, vault, config.vaults, config.denyPaths ?? []);
+  const { config, vault, check } = context(home, request.vault), store = readEnrichmentStore(home, vault, config.vaults, config.denyPaths ?? []);
   const index = new VaultIndex(home, vault, config.vaults.map(v => v.path), { memory: true });
   try {
     index.scan(false, { captureInvalidFrontmatter: true, denyPaths: config.denyPaths });
@@ -84,26 +94,29 @@ export function listEnrichmentWork(home: string, request: EnrichmentWorkRequest)
       return { path, contentHash, current, ...(uncertain ? { status: "needs-reconciliation" as const } : {}) };
     }).filter(n => (n.status || !n.current) && (!request.after || n.path > request.after)).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map(({ current: _, ...item }) => item);
     const items = pending.slice(0, limit);
+    check();
     return { vault: vault.id, kind: request.kind, items, ...(pending.length > limit ? { next: items.at(-1)!.path } : {}) };
   } finally { index.close(); }
 }
 export interface EnrichmentIntakeRequest { vault: string; path: string; contentHash: string; kind: EnrichmentKind; producer: EnrichmentProducer; createdAt: string; value: unknown; channel: "cli" | "mcp" }
-export function intakeEnrichment(home: string, request: EnrichmentIntakeRequest, options: { env?: NodeJS.ProcessEnv } = {}) {
+export function intakeEnrichment(home: string, request: EnrichmentIntakeRequest, options: { env?: NodeJS.ProcessEnv; expectedVault?: VaultSpec } = {}) {
   if (!request || typeof request !== "object" || Object.keys(request).some(k => !["vault", "path", "contentHash", "kind", "producer", "createdAt", "value", "channel"].includes(k)) || !kinds.includes(request.kind) || (request.channel !== "cli" && request.channel !== "mcp") || typeof request.contentHash !== "string" || !/^[a-f0-9]{64}$/.test(request.contentHash)) fail("invalid intake request; supply a vault, source path, SHA-256, kind, producer, creation time and value");
-  const { config, vault } = context(home, request.vault, request.channel), path = sourcePath(request.path);
+  const { config, vault, check } = context(home, request.vault, request.channel), path = sourcePath(request.path);
+  if (options.expectedVault && JSON.stringify(options.expectedVault) !== JSON.stringify(vault)) fail("vault binding changed since MCP startup; restart the MCP server");
   const candidate: EnrichmentRecord = { path, contentHash: request.contentHash, kind: request.kind, producer: request.producer, createdAt: request.createdAt, value: request.value };
   validateEnrichmentRecord(candidate);
   const issues = screenMetadata({ producer: request.producer, ...(request.kind === "embedding" ? {} : { value: request.value }) }, { vault, config }, path);
   if (issues.some(issue => issue.severity === "error")) fail("intake text is refused by the secret or PII policy; remove prohibited content or correct the vault policy");
   if (sha256(noteBytes(vault, path, config.denyPaths ?? [])) !== request.contentHash) fail("source content hash is stale; reread the note and regenerate the result");
   if (request.kind === "fact" || request.kind === "inferred-link") {
+    const bound = { vault: vault.id, path, contentHash: request.contentHash, producer: request.producer, createdAt: request.createdAt };
     let operation: unknown;
     const origin = { path, sha256: request.contentHash, producer: request.producer, createdAt: request.createdAt };
     const checkSource = () => { if (sha256(noteBytes(vault, path, config.denyPaths ?? [])) !== request.contentHash) fail("source content hash is stale; reread the note and regenerate the result"); };
     if (request.kind === "fact") {
       if (!Array.isArray(request.value) || !request.value.some(op => op && typeof op === "object" && ["assert", "revise"].includes(String((op as { op?: unknown }).op)))) fail("fact intake requires assertion operations; include an assert or revise operation with evidence");
       const dry = appendAssertions(home, { vault: vault.id, ops: request.value, channel: request.channel, dryRun: true }, { env: options.env, origin });
-      if (!dry.ok) return { ok: false, applied: false, kind: request.kind, receipt: dry };
+      if (!dry.ok) { check(); return { ...bound, ok: false, applied: false, kind: request.kind, receipt: dry }; }
     } else {
       try { notePath(path); } catch { fail("proposal targets require a lowercase ASCII note name; rename the note before proposing a link"); }
       const target = request.value && typeof request.value === "object" && !Array.isArray(request.value) && Object.keys(request.value).join(",") === "target" ? (request.value as { target?: unknown }).target : undefined;
@@ -116,7 +129,7 @@ export function intakeEnrichment(home: string, request: EnrichmentIntakeRequest,
       if (source.split("\n").includes(marker)) fail("inferred link is already declared; inspect the note before proposing it again");
       operation = { op: "patch", path, expectedSha: request.contentHash, edits: [{ oldString: "## Topics", newString: `${marker}\n\n## Topics` }] };
       const dry = applyWrite(home, { vault: vault.id, operation: operation as import("./write-types.ts").WriteOp, channel: request.channel, dryRun: true }, { env: options.env });
-      if (!dry.ok) return { ok: false, applied: false, kind: request.kind, receipt: dry };
+      if (!dry.ok) { check(); return { ...bound, ok: false, applied: false, kind: request.kind, receipt: dry }; }
     }
     // Reserve a durable intent before calling a second store. A crash or lost response can never auto-replay it.
     const token = randomUUID(), pending: EnrichmentRecord = { path, contentHash: request.contentHash, kind: request.kind, producer: request.producer, createdAt: request.createdAt, value: { state: "pending", token } };
@@ -125,7 +138,7 @@ export function intakeEnrichment(home: string, request: EnrichmentIntakeRequest,
       if (previous.some(r => (r.value as { state?: unknown } | undefined)?.state === "pending")) fail("a prior intake has an unresolved outcome; inspect the journal or proposals and reconcile it before retrying");
       if (previous.some(r => r.contentHash === request.contentHash && (r.value as { state?: unknown } | undefined)?.state === "complete")) fail("this note version already has an intake record; inspect the existing result before retrying");
     });
-    if (reserved.issues.length) return { ok: false, applied: false, kind: request.kind, issues: reserved.issues, issue: "intake reservation needs inspection; inspect the sidecar before retrying" };
+    if (reserved.issues.length) return { ...bound, ok: false, applied: false, kind: request.kind, issues: reserved.issues, issue: "intake reservation needs inspection; inspect the sidecar before retrying" };
     const releaseReservation = () => {
       const released: EnrichmentRecord = { ...pending, value: { state: "released", token } };
       return writeEnrichmentRecord(home, vault, released, () => {}, store => {
@@ -145,7 +158,7 @@ export function intakeEnrichment(home: string, request: EnrichmentIntakeRequest,
         started = true;
         const receipt = request.kind === "fact"
           ? appendAssertions(home, { vault: vault.id, ops: request.value, channel: request.channel }, { env: options.env, origin: { ...origin, intakeId: token } })
-          : submitProposal(home, { vault: vault.id, operation, agentLabel: `enrichment:${token}` }, { channel: request.channel, env: options.env, proposalId: token, validateBeforeStore: () => { try { checkSource(); } catch (error) { sourceRefusal = error; throw error; } } });
+          : submitProposal(home, { vault: vault.id, operation, agentLabel: `enrichment:${token}` }, { channel: request.channel, env: options.env, expectedVault: options.expectedVault ?? vault, proposalId: token, validateBeforeStore: () => { try { checkSource(); } catch (error) { sourceRefusal = error; throw error; } } });
         const applied = "stored" in receipt ? receipt.stored === true : receipt.applied === true;
         if (!applied) return { receipt, applied: "stored" in receipt && receipt.stored === null ? null : false, trackingIssues: [] as string[] };
         const complete: EnrichmentRecord = { ...pending, value: { state: "complete", token, receipt } };
@@ -160,17 +173,17 @@ export function intakeEnrichment(home: string, request: EnrichmentIntakeRequest,
       const { receipt, applied, trackingIssues } = result;
       if (!applied) {
         if (applied === false) {
-          try { const released = releaseReservation(); if (!released.issues.length) return { ok: false, applied: false, kind: request.kind, receipt }; } catch { /* Keep the reservation when cleanup cannot be confirmed. */ }
+          try { const released = releaseReservation(); if (!released.issues.length) return { ...bound, ok: false, applied: false, kind: request.kind, receipt }; } catch { /* Keep the reservation when cleanup cannot be confirmed. */ }
         }
-        return { ok: false, applied, kind: request.kind, receipt, issue: "intake reservation remains unresolved; inspect the journal or proposals and reconcile before retrying" };
+        return { ...bound, ok: false, applied, kind: request.kind, receipt, issue: "intake reservation remains unresolved; inspect the journal or proposals and reconcile before retrying" };
       }
-      return { ok: receipt.ok && trackingIssues.length === 0, applied: true, kind: request.kind, receipt, ...(trackingIssues.length ? { issues: trackingIssues } : {}) };
+      return { ...bound, ok: receipt.ok && trackingIssues.length === 0, applied: true, kind: request.kind, receipt, ...(trackingIssues.length ? { issues: trackingIssues } : {}) };
     } catch (error) {
       if (!started || sourceRefusal) {
         try { const released = releaseReservation(); if (!released.issues.length) throw (sourceRefusal ?? error); } catch (cleanup) { if (cleanup === (sourceRefusal ?? error)) throw cleanup; }
-        return { ok: false, applied: false, kind: request.kind, issue: `${error instanceof Error ? error.message : "intake failed before publication; inspect the source and retry"}; reservation cleanup failed, inspect and reconcile it before retrying` };
+        return { ...bound, ok: false, applied: false, kind: request.kind, issue: `${error instanceof Error ? error.message : "intake failed before publication; inspect the source and retry"}; reservation cleanup failed, inspect and reconcile it before retrying` };
       }
-      return { ok: false, applied: null, kind: request.kind, issue: "intake outcome is uncertain; inspect the journal or proposals and reconcile before retrying" };
+      return { ...bound, ok: false, applied: null, kind: request.kind, issue: "intake outcome is uncertain; inspect the journal or proposals and reconcile before retrying" };
     }
   }
   if (request.kind !== "embedding" && (typeof request.value !== "string" || !request.value.trim() || Buffer.byteLength(request.value) > 8192)) fail("summary or community label must be nonempty text of at most 8192 bytes; shorten the result");
@@ -184,22 +197,26 @@ export function intakeEnrichment(home: string, request: EnrichmentIntakeRequest,
 /** Return one current record after rechecking path and disclosure policy. */
 export function readEnrichment(home: string, request: { vault: string; path: string; kind: EnrichmentKind }) {
   if (!request || typeof request !== "object" || Object.keys(request).some(k => !["vault", "path", "kind"].includes(k)) || !kinds.includes(request.kind)) fail("invalid record request; supply a vault, note path and enrichment kind");
-  const { config, vault } = context(home, request.vault), path = sourcePath(request.path);
+  const { config, vault, check } = context(home, request.vault), path = sourcePath(request.path);
   const current = sha256(noteBytes(vault, path, config.denyPaths ?? []));
   const store = readEnrichmentStore(home, vault, config.vaults, config.denyPaths ?? []);
   const candidates = store.records.filter(r => r.path === path && r.kind === request.kind);
+  const uncertain = candidates.find(r => (r.value as { state?: unknown } | undefined)?.state === "pending");
+  if (uncertain) { check(); return { vault: vault.id, path, kind: request.kind, status: "needs-reconciliation" as const }; }
   const record = candidates.find(r => r.contentHash === current) ?? candidates.at(-1);
-  if (!record) return { vault: vault.id, path, kind: request.kind, status: "missing" as const };
-  if (record.contentHash !== current) return { vault: vault.id, path, kind: request.kind, status: "stale" as const };
+  if (!record) { check(); return { vault: vault.id, path, kind: request.kind, status: "missing" as const }; }
+  if (record.contentHash !== current) { check(); return { vault: vault.id, path, kind: request.kind, status: "stale" as const }; }
   const issues = screenMetadata({ producer: record.producer, ...(record.kind === "embedding" ? {} : { value: record.value }) }, { vault, config }, path);
   if (issues.some(issue => issue.severity === "error")) fail("current secret or PII policy refuses the stored result; inspect the vault policy");
+  check();
   return { vault: vault.id, path, kind: request.kind, status: "current" as const, producer: record.producer, createdAt: record.createdAt, contentHash: record.contentHash, value: record.value };
 }
 
 /** Explicitly release an uncertain intake only after the caller has inspected its journal or proposal. */
-export function reconcileEnrichment(home: string, request: { vault: string; path: string; kind: "fact" | "inferred-link"; resolution: "published" | "not_published"; confirm?: boolean; fingerprint?: string; channel: "cli" | "mcp" }) {
+export function reconcileEnrichment(home: string, request: { vault: string; path: string; kind: "fact" | "inferred-link"; resolution: "published" | "not_published"; confirm?: boolean; fingerprint?: string; channel: "cli" | "mcp" }, options: { expectedVault?: VaultSpec } = {}) {
   if (!request || typeof request !== "object" || Object.keys(request).some(k => !["vault", "path", "kind", "resolution", "confirm", "fingerprint", "channel"].includes(k)) || !["fact", "inferred-link"].includes(request.kind) || !["published", "not_published"].includes(request.resolution) || !["cli", "mcp"].includes(request.channel) || (request.confirm !== undefined && typeof request.confirm !== "boolean")) fail("invalid reconciliation request; choose fact or inferred-link and preview first");
-  const { config, vault } = context(home, request.vault, request.channel), path = sourcePath(request.path);
+  const { config, vault, check } = context(home, request.vault, request.channel), path = sourcePath(request.path);
+  if (options.expectedVault && JSON.stringify(options.expectedVault) !== JSON.stringify(vault)) fail("vault binding changed since MCP startup; restart the MCP server");
   if (isDenied(path, config.denyPaths ?? []) || isDenied(join(vault.path, path), config.denyPaths ?? [])) fail("source path is denied; inspect the vault policy before reconciling");
   const store = readEnrichmentStore(home, vault, config.vaults, config.denyPaths ?? []), prior = store.records.find(r => r.path === path && r.kind === request.kind && (r.value as { state?: unknown } | undefined)?.state === "pending");
   const value = prior?.value as { state?: unknown; token?: unknown } | undefined;
@@ -207,6 +224,7 @@ export function reconcileEnrichment(home: string, request: { vault: string; path
   const fingerprint = sha256(JSON.stringify([config, prior, request.resolution]));
   if (request.confirm !== true) {
     if (request.fingerprint !== undefined) fail("fingerprint requires confirmation; request a fresh preview first");
+    check();
     return { ok: true, applied: false, fingerprint, path, kind: request.kind, resolution: request.resolution, intakeId: value.token, warning: "Inspect the journal or proposals first. An incorrect resolution can cause a duplicate or suppress needed work." };
   }
   if (request.fingerprint !== fingerprint) fail("reconciliation fingerprint is missing or stale; inspect the outcome and request a fresh preview");

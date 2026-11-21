@@ -1,6 +1,6 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addVault, changeSettings } from "../src/registry.ts";
@@ -52,5 +52,22 @@ test("enrichment MCP tools reject a changed startup vault binding", async () => 
     const server = createVaultMcp(f.home, { VMEM_HOME: f.home }), settings = { vault: "mine", changes: { enrichmentEnabled: false } }, preview = changeSettings(f.home, settings);
     changeSettings(f.home, { ...settings, confirm: true, fingerprint: preview.fingerprint });
     expect(await server.handlers.vmem_enrichment_work!({ vault: "mine", kind: "summary" })).toMatchObject({ refused: true, issues: [{ message: expect.stringContaining("binding changed") }] });
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+
+test("MCP vector search discards an index if policy changes during its scan", async () => {
+  const { VaultIndex } = await import("../src/vault-index.ts");
+  const f = fixture();
+  try {
+    const server = createVaultMcp(f.home, { VMEM_HOME: f.home }), original = VaultIndex.prototype.scan;
+    const spy = spyOn(VaultIndex.prototype, "scan").mockImplementation(function (this: InstanceType<typeof VaultIndex>, ...args) {
+      const result = original.apply(this, args);
+      const file = join(f.home, "vmem.config.json"), data = JSON.parse(readFileSync(file, "utf8"));
+      data.denyPaths = [join(f.notes, "alpha.md")]; writeFileSync(file, JSON.stringify(data));
+      return result;
+    });
+    try { expect(await server.handlers.vmem_search!({ vault: "mine", query: "lantern", model: "test", vector: [1, 0] })).toMatchObject({ refused: true, issues: [{ message: expect.stringContaining("policy changed during the read") }] }); }
+    finally { spy.mockRestore(); }
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
