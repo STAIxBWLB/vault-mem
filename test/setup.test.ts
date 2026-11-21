@@ -319,3 +319,12 @@ test("a refused skill root exits nonzero when setup changes nothing", () => {
   expect(result.code).toBe(1);
   expect(report.skills[0]).toMatchObject({ target: "codex", refused: true });
 });
+
+test("hosts without automatic skill roots report the export path", () => {
+  for (const target of ["pi", "jcode", "agy"]) {
+    const f = fixture(), report = f.setup(target, "dry-run");
+    const skill = report.skills?.find(entry => entry.target === target);
+    expect(skill?.reason ?? "").toContain("vmem skills export <dir>");
+    expect(skill?.reason ?? "").toContain("not installed");
+  }
+});
