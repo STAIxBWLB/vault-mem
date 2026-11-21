@@ -69,6 +69,54 @@ test("empty local directories count as modifications and are preserved", () => {
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test("an uncertain replacement is refused and keeps both trees", async () => {
+  const fs = await import("node:fs"), { spyOn } = await import("bun:test"), f = fixture();
+  try {
+    installSkills(f.target, "apply");
+    const original = fs.lstatSync, temp = (n: string) => n.startsWith(join(f.target, ".vmem-skill-")) && !n.slice(f.target.length + 1).includes("/");
+    let tempCalls = 0, targetCalls = 0;
+    // Fail the post-exchange verification (second inspection of the moved-aside tree), then the swap-back's target check.
+    const spy = spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+      const name = String(args[0]);
+      if (temp(name) && ++tempCalls === 2) throw new Error("synthetic verification failure");
+      if (name === join(f.target, "vault-connect") && tempCalls >= 2 && ++targetCalls >= 1) throw new Error("synthetic swap-back failure");
+      return original(...args);
+    }) as typeof fs.lstatSync);
+    let result;
+    try { result = installSkills(f.target, "apply", undefined, "0.0.0-test"); } finally { spy.mockRestore(); }
+    const action = result.actions.find(a => a.name === "vault-connect")!;
+    expect(action.change).toBe("refused");
+    expect(action.reason).toContain("replacement outcome needs inspection");
+    const kept = /and (\S+) before retrying/.exec(action.reason!)![1]!;
+    expect(existsSync(join(f.target, "vault-connect", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(kept, "SKILL.md"))).toBe(true);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("a moved-aside tree that changes after verification is kept, not deleted", async () => {
+  const fs = await import("node:fs"), { spyOn } = await import("bun:test"), f = fixture();
+  try {
+    installSkills(f.target, "apply");
+    const original = fs.opendirSync, roots = new Map<string, number>();
+    // Each walk of the moved-aside root opens it once: verification first, then the re-check right before removal.
+    const spy = spyOn(fs, "opendirSync").mockImplementation(((...args: Parameters<typeof fs.opendirSync>) => {
+      const name = String(args[0]);
+      if (name.startsWith(join(f.target, ".vmem-skill-")) && !name.slice(f.target.length + 1).includes("/")) {
+        const n = (roots.get(name) ?? 0) + 1; roots.set(name, n);
+        if (n === 2) writeFileSync(join(name, "late-edit.md"), "changed after verification\n");
+      }
+      return original(...args);
+    }) as typeof fs.opendirSync);
+    let result;
+    try { result = installSkills(f.target, "undo"); } finally { spy.mockRestore(); }
+    const action = result.actions.find(a => a.name === "vault-connect")!;
+    expect(action.change).toBe("remove");
+    expect(existsSync(join(f.target, "vault-connect"))).toBe(false);
+    const kept = /inspect (\S+) before retrying/.exec(action.reason!)![1]!;
+    expect(readFileSync(join(kept, "late-edit.md"), "utf8")).toBe("changed after verification\n");
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("replacement and undo restore the original when post-rename inspection fails", async () => {
   const fs = await import("node:fs"), { spyOn } = await import("bun:test"), f = fixture();
   try {

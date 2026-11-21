@@ -121,6 +121,11 @@ function existingRoot(path: string): string | undefined {
     throw new Error("skill root cannot be inspected; check its path and permissions", { cause: error });
   }
 }
+/** Re-walk a moved-aside tree and delete it only while it still matches `sha`; false keeps it for inspection. */
+function removeVerified(path: string, sha: string): boolean {
+  try { if (digest(walk(path)) !== sha) return false; rmSync(path, { recursive: true }); return true; }
+  catch { return false; }
+}
 /** Plan or install one complete skill tree per name. `root` must be an absolute target directory. */
 export function installSkills(root: string, mode: SetupMode, packageRoot = PACKAGE_ROOT, packageVersion = version, retryCommand = ["vmem", "skills", "export", root].map(shellWord).join(" ")): SkillInstallReport {
   if (!isAbsolute(root)) throw new Error("skills: target must be absolute; provide an absolute skill root");
@@ -154,8 +159,7 @@ export function installSkills(root: string, mode: SetupMode, packageRoot = PACKA
           catch { throw new Error(`skill changed during undo; inspect ${target} and ${moved} and restore the original manually`); }
           throw new Error("skill changed during undo; inspect the skill root before retrying");
         }
-        try { rmSync(moved, { recursive: true }); }
-        catch { action.reason = `removed but cleanup failed; inspect ${moved} before retrying`; }
+        if (!removeVerified(moved, own!.sha256)) action.reason = `removed but the moved-aside tree changed before deletion or cleanup failed; inspect ${moved} before retrying`;
         continue;
       }
       const files = packaged(name, packageRoot), sha = digest(files);
@@ -174,13 +178,16 @@ export function installSkills(root: string, mode: SetupMode, packageRoot = PACKA
           if (!verified) {
             try { if (!identical(staged, lstatSync(target))) throw new Error("target changed"); renameAtomic(temp, target, true); published = false; }
             catch { preserve = true; }
-            if (published) { action.reason = `replacement outcome needs inspection; inspect ${target} and ${temp} before retrying`; continue; }
+            // The swap-back failed with the new tree published: neither tree is known good, so this is a failure.
+            if (published) { action.change = "refused"; action.reason = `replacement outcome needs inspection; inspect ${target} and ${temp} before retrying`; continue; }
             throw new Error("skill changed during replacement; inspect it and retry");
           }
         }
       } finally {
         if (!preserve) {
-          try { rmSync(temp, { recursive: true, force: true }); }
+          // The moved-aside old tree is deleted only if it still matches its marker right before removal.
+          if (published && before) { if (!removeVerified(temp, own!.sha256)) action.reason = `installed, but the previous tree changed before deletion or cleanup failed; inspect ${temp}`; }
+          else try { rmSync(temp, { recursive: true, force: true }); }
           catch (error) { if (published) action.reason = `installed but cleanup failed; inspect ${temp}`; else throw error; }
         }
       }
