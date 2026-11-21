@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Preserve stacks for unexpected CLI load failures while keeping host API refusals concise. This changes the runtime digest; a new performance measurement is required before the next release.
+- Add settings snapshots and fingerprint-bound settings changes for default vault, write mode, PII patterns and graph community resolution, through the console and CLI. Config format 5 preserves these keys when 0.10.x or 0.11.x reads and writes it; older versions ignore the new default and graph options. If an older version unregisters the default vault, the newer version falls back to its first personal vault (or first vault). The note index is unchanged, older CLI versions do not have `settings`, and MCP tool names and arguments are unchanged. Restart running MCP and console sessions after changing default vault or write mode. The runtime digest changes and needs a new performance measurement before release.
 
 ## [0.11.0] - 2026-11-21
 

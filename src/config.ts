@@ -15,6 +15,7 @@ export interface VaultSpec {
   registry?: string;
   domains?: string[];
   canonTables?: CanonTableSpec[];
+  graph?: { resolution?: number };
 }
 /** Advisory canonical tables do not participate in mutation identity or policy. */
 export function mutationVault(vault: VaultSpec): Omit<VaultSpec, "canonTables"> {
@@ -44,11 +45,11 @@ export interface PiiSpec { email?: PiiCell; phone?: PiiCell; custom?: PiiCell; p
  * The config format this build writes. A build that adds a key bumps it. A config whose `version` is newer
  * than this build is read tolerantly: unknown keys are kept as they are and written back unchanged, so an
  * older vmem can share a config with a newer one. At or below this version unknown keys stay errors (typos).
- * An absent `version` means 1. Registry writes add format 2 for `specs`, 3 for vault `domains`, and 4 for vault `canonTables`; otherwise they keep the existing version field.
+ * An absent `version` means 1. Registry writes add format 2 for `specs`, 3 for vault `domains`, 4 for vault `canonTables`, and 5 for default vault or graph options; otherwise they keep the existing version field.
  */
-export const CONFIG_VERSION = 4;
+export const CONFIG_VERSION = 5;
 export interface SpecSourceSpec { id: string; path: string; write: "mcp" | "cli" | "none"; pii: "allow" | "deny" }
-export interface VmemConfig { version?: number; home?: string; vaults: VaultSpec[]; specs?: SpecSourceSpec[]; denyPaths?: string[]; piiPatterns?: string[] }
+export interface VmemConfig { version?: number; home?: string; vaults: VaultSpec[]; specs?: SpecSourceSpec[]; denyPaths?: string[]; piiPatterns?: string[]; defaultVault?: string }
 const controls = /[\x00-\x1f\x7f]/;
 function object(value: unknown, keys: string[], label: string, tolerant = false): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label}: expected object`);
@@ -155,7 +156,7 @@ function parseCanonTables(value: unknown, tolerant: boolean): CanonTableSpec[] {
   }
 }
 export function parseVault(value: unknown, tolerant = false): VaultSpec {
-  const keys = ["id", "path", "kind", "write", "pii", "remote", "registry", "domains", "canonTables"], v = object(value, keys, "vault", tolerant);
+  const keys = ["id", "path", "kind", "write", "pii", "remote", "registry", "domains", "canonTables", "graph"], v = object(value, keys, "vault", tolerant);
   const id = string(v.id, "vault.id");
   if (!/^[a-z][a-z0-9-]{0,31}$/.test(id)) throw new Error("vault.id: invalid id");
   if (v.kind !== "personal" && v.kind !== "org") throw new Error("vault.kind: expected personal or org");
@@ -171,6 +172,11 @@ export function parseVault(value: unknown, tolerant = false): VaultSpec {
     result.domains = [...v.domains];
   }
   if (v.canonTables !== undefined) result.canonTables = parseCanonTables(v.canonTables, tolerant);
+  if (v.graph !== undefined) {
+    const graph = object(v.graph, ["resolution"], "vault.graph", tolerant);
+    if (graph.resolution !== undefined && (typeof graph.resolution !== "number" || !Number.isFinite(graph.resolution) || graph.resolution <= 0 || graph.resolution > 100)) throw new Error("vault.graph.resolution: expected a number above 0 and at most 100; set a valid graph resolution");
+    result.graph = { ...unknown(graph, ["resolution"], tolerant), ...(graph.resolution !== undefined ? { resolution: graph.resolution as number } : {}) };
+  }
   return result;
 }
 /** Spec sources have their own registry shape; they are not vaults. */
@@ -188,13 +194,13 @@ export function parseSpec(value: unknown, tolerant = false): SpecSourceSpec {
   }
 }
 export function parseConfig(value: unknown): VmemConfig {
-  const keys = ["version", "home", "vaults", "specs", "denyPaths", "piiPatterns"];
+  const keys = ["version", "home", "vaults", "specs", "denyPaths", "piiPatterns", "defaultVault"];
   const version = (value as Record<string, unknown> | null)?.version;
   if (version !== undefined && (!Number.isSafeInteger(version) || (version as number) < 1)) throw new Error("config.version: expected a positive integer");
   const tolerant = newerFormat(value), raw = object(value, keys, "config", tolerant);
   const stamp = version === undefined ? {} : { version: version as number };
   if (raw.home !== undefined) {
-    if (["vaults", "specs", "denyPaths", "piiPatterns"].some(key => raw[key] !== undefined)) throw new Error("config: home pointer must not contain vaults, specs or policy; put source entries in the pointed-to home config");
+    if (["vaults", "specs", "denyPaths", "piiPatterns", "defaultVault"].some(key => raw[key] !== undefined)) throw new Error("config: home pointer must not contain vaults, specs or policy; put source entries in the pointed-to home config");
     return { ...unknown(raw, keys, tolerant), ...stamp, home: absolute(raw.home, "config.home"), vaults: [] };
   }
   const vaultInput = raw.vaults === undefined && raw.specs !== undefined ? [] : raw.vaults;
@@ -206,11 +212,13 @@ export function parseConfig(value: unknown): VmemConfig {
   if (specs && new Set(specs.map(source => source.path)).size !== specs.length) throw new Error("config: duplicate spec source path; keep only one entry for each repository root");
   if (new Set(vaults.map(v => v.id)).size !== vaults.length) throw new Error("config: duplicate vault id");
   if (new Set(vaults.map(v => v.path)).size !== vaults.length) throw new Error("config: duplicate vault path");
+  const defaultVault = raw.defaultVault === undefined ? undefined : string(raw.defaultVault, "config.defaultVault");
+  if (defaultVault !== undefined && !/^[a-z][a-z0-9-]{0,31}$/.test(defaultVault)) throw new Error("config.defaultVault: invalid vault id; choose an id from vmem vaults list");
   const denyPaths = strings(raw.denyPaths, "denyPaths"), piiPatterns = strings(raw.piiPatterns, "piiPatterns");
   for (const pattern of piiPatterns ?? []) {
     try { new RegExp(pattern); } catch { throw new Error("piiPatterns: invalid regular expression"); }
   }
-  return { ...unknown(raw, keys, tolerant), ...stamp, vaults, ...(specs !== undefined ? { specs } : {}), ...(denyPaths ? { denyPaths } : {}), ...(piiPatterns ? { piiPatterns } : {}) };
+  return { ...unknown(raw, keys, tolerant), ...stamp, vaults, ...(defaultVault !== undefined ? { defaultVault } : {}), ...(specs !== undefined ? { specs } : {}), ...(denyPaths ? { denyPaths } : {}), ...(piiPatterns ? { piiPatterns } : {}) };
 }
 /** Bounded descriptor read: reject links, devices and oversized/growing files. */
 export function readConfig(home: string): VmemConfig {

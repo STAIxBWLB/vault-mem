@@ -18,7 +18,7 @@ import { VMEM_TOOL_NAMES, vaultTools } from "./mcp-vault.ts";
 import { CONFIG_VERSION, effectiveDomains } from "./config.ts";
 import { runSetup, type SetupMode } from "./setup.ts";
 import { resolveHome } from "./home.ts";
-import { addVault, addSpec, removeSpec, specStatus, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault, setVaultPii } from "./registry.ts";
+import { changeSettings, settingsSnapshot, addVault, addSpec, removeSpec, specStatus, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault, setVaultPii } from "./registry.ts";
 import { piiPolicy } from "./pii.ts";
 import { vaultStats } from "./vault-stats.ts";
 import { PLAIN, UsageError, errorLine, shellWord, takeColorFlag, textOptions, type TextOptions } from "./text-output.ts";
@@ -83,6 +83,20 @@ function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLA
   if (args[0] === "completion") {
     if (args.length !== 2) throw new UsageError("completion: requires bash, zsh or fish");
     return { text: completionScript(args[1]!).trimEnd(), code: 0 };
+  }
+  if (args[0] === "settings") {
+    const { flags, positional } = parse(args.slice(1), ["--set", "--confirm", "--fingerprint", "--json"], ["--set", "--fingerprint"]);
+    if (positional.length !== 1) throw new UsageError("settings: supply one vault id; use vmem settings <vault> [--set JSON]");
+    const home = resolveHome(env).home, value = flags["--set"];
+    if (value === undefined) {
+      if (flags["--confirm"] || flags["--fingerprint"]) throw new UsageError("settings: confirmation requires changes; use --set JSON with a preview fingerprint");
+      return { text: JSON.stringify(settingsSnapshot(home, positional[0]!), null, flags["--json"] ? undefined : 2), code: 0 };
+    }
+    let changes: unknown;
+    try { changes = JSON.parse(String(value)); } catch { throw new UsageError("settings: invalid JSON; supply an object to --set"); }
+    if (Boolean(flags["--confirm"]) !== Boolean(flags["--fingerprint"])) throw new UsageError("settings: --confirm and --fingerprint must be supplied together; preview first");
+    const result = changeSettings(home, { vault: positional[0]!, changes: changes as import("./registry.ts").SettingsChanges, confirm: flags["--confirm"] === true, ...(typeof flags["--fingerprint"] === "string" ? { fingerprint: flags["--fingerprint"] } : {}) });
+    return { text: JSON.stringify(result, null, flags["--json"] ? undefined : 2), code: 0 };
   }
   if (args[0] === "spec") return runSpecCommand(args.slice(1), env, text);
   if (args[0] === "proposal") return runProposalCommand(args.slice(1), resolveHome(env).home, env, text);

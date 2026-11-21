@@ -92,6 +92,7 @@ export function analysisInput(home: string, id: string, options: { today?: strin
       if(found.length)warnings[note.path]=found;
     }catch{ /* Invalid frontmatter remains visible to L02; do not infer missing source paths. */ }
     if(Object.keys(warnings).length)snapshot.sourceWarnings=warnings;
+    if (vault.graph?.resolution !== undefined) snapshot.graphResolution = vault.graph.resolution;
     // Evidence drift is a read/lint finding: status and reason only, never the quote or source text.
     const drift:Record<string,string[]>=Object.create(null),reads:EvidenceReads=new Map();
     for(const note of snapshot.notes)try{

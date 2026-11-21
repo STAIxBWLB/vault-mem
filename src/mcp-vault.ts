@@ -164,7 +164,7 @@ export function exposureReply(reply: ExposureReceipt & { refused?: true }): unkn
 export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.env): { tools: McpTool[]; handlers: Record<string, McpHandler>; vaults: VaultSpec[]; defaultVault: string | undefined; instructions: string } {
   const startup = loadRegistry(home), vaults = startup.vaults, ids = vaults.map(v => v.id);
   const proposalBindings = new Map(vaults.map(v => { try { return [v.id, logBinding(v, startup)] as const; } catch { return [v.id, null] as const; } }));
-  const defaultVault = (vaults.find(v => v.kind === "personal") ?? vaults[0])?.id;
+  const defaultVault = vaults.find(v => v.id === startup.defaultVault)?.id ?? (vaults.find(v => v.kind === "personal") ?? vaults[0])?.id;
   const pick = (args: Record<string, unknown>): VaultSpec => {
     const id = str(args.vault) ?? defaultVault;
     const spec = vaults.find(v => v.id === id);

@@ -9,7 +9,7 @@ import { resolveHome } from "../home.ts";
 import { createVaultMcp } from "../mcp-vault.ts";
 import { validArguments } from "../mcp.ts";
 import { listPromotionCandidates } from "../promote.ts";
-import { loadRegistry } from "../registry.ts";
+import { changeSettings, settingsSnapshot, loadRegistry } from "../registry.ts";
 import { createSnapshotRevision, createPromoteSnapshot, nextSnapshotCursor } from "./snapshot-cache.ts";
 import { createInboxSnapshot } from "./inbox.ts";
 import { lintVault } from "../vault-lint.ts";
@@ -90,8 +90,9 @@ export const plugin: ConsolePlugin = {
       { id: "promote", title: "Promote", order: 4, maxAgeMs: REUSE_MS },
       { id: "lint", title: "Lint", order: 5, maxAgeMs: REUSE_MS },
       { id: "log", title: "Log", order: 6, maxAgeMs: REUSE_MS },
+      { id: "settings", title: "Settings", order: 7 },
     ],
-    capabilities: { actions: ["delete", "move", "promote", "promote-from-amem"], confirm: true, inbox: true, inboxMaxAgeMs: REUSE_MS, search: true },
+    capabilities: { actions: ["delete", "move", "promote", "promote-from-amem", "settings"], confirm: true, inbox: true, inboxMaxAgeMs: REUSE_MS, search: true },
   },
   async open(ctx): Promise<ConsoleProvider> {
     const home = resolveHome().home;
@@ -173,6 +174,11 @@ export const plugin: ConsolePlugin = {
       async snapshot(input) {
         const args = input as Args;
         switch (input.panel) {
+          case "settings": {
+            const vault = vaultOf(args);
+            if (!vault) return { error: "settings: no selected vault; select a registered vault" };
+            return settingsSnapshot(home, vault.id);
+          }
           case "inbox": {
             const result = await inbox.snapshot();
             return args.after === result.cursor ? { changed: false, cursor: result.cursor } : result;
@@ -243,6 +249,17 @@ export const plugin: ConsolePlugin = {
       async action(input) {
         const args = input as Args, confirmed = input.confirmed === true, fingerprint = str(input.fingerprint);
         switch (input.action) {
+          case "settings": {
+            const vault = vaultOf(args);
+            if (!vault) return { ok: false, error: "settings: no selected vault; select a registered vault" };
+            try {
+              const changes = args.changes as import("../registry.ts").SettingsChanges;
+              const preview = changeSettings(home, { vault: vault.id, changes });
+              if (!confirmed || fingerprint !== preview.fingerprint) return { ok: false, needsConfirm: true, fingerprint: preview.fingerprint, verb: "Change settings", preview: Object.entries(preview.changes).map(([key, value]) => `${key}: ${JSON.stringify(value)}`), changes: [{ op: "modify", target: "vmem.config.json" }] };
+              changeSettings(home, { vault: vault.id, changes, confirm: true, fingerprint });
+              return { ok: true, message: "Settings updated; restart the console and MCP server to apply the default vault and permission changes" };
+            } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "settings: change failed; inspect the configuration and retry" }; }
+          }
           case "delete": {
             const path = str(args.path) ?? str(args.id);
             if (!path) return { ok: false, error: "path is required" };

@@ -3,6 +3,7 @@ import type { TitleSuggestion } from "./links.ts";
 export interface AnalysisSnapshot {
   /** Effective selected-vault domain set; standalone snapshots default to the built-ins. */
   domains?: string[];
+  graphResolution?: number;
   notes: { path: string; source: string }[];
   today: string;
   logPath: string;
