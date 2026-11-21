@@ -1,5 +1,5 @@
 import type { AnalysisSnapshot } from "./analysis-types.ts";
-import { LINK_RELATIONS } from "./links.ts";
+import { LINK_RELATIONS, visibleProseLines } from "./links.ts";
 export { LINK_RELATIONS };
 import { AnalysisYamlUnsupported, parseAnalysisYaml, scalarText, yamlTruthy } from "./analysis-yaml.ts";
 
@@ -15,7 +15,7 @@ export interface GraphNode {
   community: number | null;
   degree: number;
 }
-export interface GraphEdge { source: string; target: string; relation: "wiki_link" | "fm_ref" | "bu_member" | "source_ref" | "related" | "supersedes"; field?: string; rel?: string; confidence_tag: "EXTRACTED"; confidence: 1 }
+export interface GraphEdge { source: string; target: string; relation: "wiki_link" | "fm_ref" | "bu_member" | "source_ref" | "related" | "supersedes"; field?: string; rel?: string; confidence_tag: "EXTRACTED" | "INFERRED"; confidence: 1 }
 export interface VaultGraph {
   directed: false;
   multigraph: false;
@@ -357,6 +357,17 @@ export function graphBody(source: string): { body: string; offset: number } {
 export const LEGACY_LINK = /\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]/g;
 /** Legacy target normalisation: trimmed, lower case, spaces to hyphens. */
 export const legacyTarget = (text: string) => text.trim().toLowerCase().replaceAll(" ", "-");
+/** A note declaration, not proof of a producer, proposal, or correctness. */
+export const INFERRED_LINK_LINE = /^- \[\[([a-z0-9][a-z0-9-]{0,190})\]\] <!-- vmem:inferred -->$/;
+export function malformedInferredAnnotations(source: string): string[] {
+  const { body, offset } = graphBody(source), visible = visibleProseLines(body), invalid: string[] = [];
+  for (const line of source.slice(0, offset).split(/\r?\n/)) if (line.includes("vmem:inferred")) invalid.push(JSON.stringify(["frontmatter", line]));
+  for (const [i, line] of body.split(/\r?\n/).entries()) if (line.includes("vmem:inferred") && (!INFERRED_LINK_LINE.test(line) || visible[i] !== line)) invalid.push(JSON.stringify(["body", visible[i] === line, line]));
+  return invalid;
+}
+export function malformedInferredAnnotation(source: string): boolean {
+  return malformedInferredAnnotations(source).length > 0;
+}
 /** Pure transformation of the derived-index snapshot, preserving the reference wiki graph semantics. */
 export function buildGraph(snapshot: AnalysisSnapshot): VaultGraph {
   if (snapshot.notes.length > MAX_NODES) throw new Error(`graph: exceeds ${MAX_NODES} notes`);
@@ -371,13 +382,23 @@ export function buildGraph(snapshot: AnalysisSnapshot): VaultGraph {
       confidence: pyString(truthy(fm.confidence) ? fm.confidence : ""), source_file: `notes/${id}.md`,
       topics: Array.isArray(topics) ? topics.map(topic => pyString(topic).replaceAll("[[", "").replaceAll("]]", "")).join(", ") : pyString(topics),
       community: null, degree: 0 });
+    const inferredStarts = new Set<number>(), visible = visibleProseLines(body);
+    let lineOffset = 0;
+    for (const [i, line] of body.split("\n").entries()) {
+      if (INFERRED_LINK_LINE.test(line.replace(/\r$/, "")) && visible[i] === line.replace(/\r$/, "")) inferredStarts.add(lineOffset);
+      lineOffset += line.length + 1;
+    }
+    let lineStart = 0, lineEnd = body.indexOf("\n");
     for (const match of body.matchAll(LEGACY_LINK)) {
+      while (lineEnd !== -1 && lineEnd < match.index) { lineStart = lineEnd + 1; lineEnd = body.indexOf("\n", lineStart); }
       const target = legacyTarget(match[1]!);
       if (!stems.has(target)) continue;
       const [source, destination] = [id, target].sort(compare) as [string, string];
       const key = JSON.stringify([source, destination]), rel = linkRelation(body, match.index, match[0].length), prior = edges.get(key);
       const kept = prior?.rel ?? rel;
-      edges.set(key, { source, target: destination, relation: "wiki_link", ...(kept ? { rel: kept } : {}), confidence_tag: "EXTRACTED", confidence: 1 });
+      const inferred = inferredStarts.has(lineStart);
+      const tag = inferred && (!prior || prior.confidence_tag === "INFERRED") ? "INFERRED" : "EXTRACTED";
+      edges.set(key, { source, target: destination, relation: "wiki_link", ...(kept ? { rel: kept } : {}), confidence_tag: tag, confidence: 1 });
       if (edges.size > MAX_EDGES) throw new Error(`graph: exceeds ${MAX_EDGES} edges`);
     }
   }

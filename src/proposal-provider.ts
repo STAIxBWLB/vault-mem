@@ -18,7 +18,7 @@ import { canonicalPath, isDenied } from "./platform.ts";
 import { cleanupOwnedFile } from "./write-files.ts";
 
 export interface ProposalSubmitRequest { vault: string; operation: unknown; agentLabel?: string }
-export interface ProposalContext { channel: "cli" | "mcp"; env?: NodeJS.ProcessEnv; now?: Date; expectedVault?: VaultSpec; expectedBinding?: LogBinding | null }
+export interface ProposalContext { channel: "cli" | "mcp"; env?: NodeJS.ProcessEnv; now?: Date; expectedVault?: VaultSpec; expectedBinding?: LogBinding | null; validateBeforeStore?: () => void; proposalId?: string }
 export interface ProposalSubmitted { ok: boolean; stored: boolean | null; id: string; vault: string; path: string | null; state: "pending" | null; createdAt: string; payloadDigest: string | null; issues: WriteIssue[] }
 export interface ProposalSummary { id: string; vault: string; path: string; state: ProposalRecord["state"]; createdAt: string }
 export interface ProposalListRequest { vault: string; state?: ProposalRecord["state"]; limit?: number; after?: string }
@@ -113,7 +113,7 @@ export function submitProposal(home: string, request: ProposalSubmitRequest, opt
   if (!preview.ok) throw new Error(`proposal: validation refused (${[...new Set(preview.issues.filter(issue => issue.severity === "error").map(issue => issue.code))].join(", ") || "unknown"}); correct the proposal and retry`);
   if (preview.changes.length !== 1 || preview.changes[0]!.beforeSha === preview.changes[0]!.sha256) throw new Error("proposal: operation produces no note change; revise the proposal before submitting");
   const createdAt = (options.now ?? new Date()).toISOString();
-  const record: ProposalRecord = { schemaVersion: 1, id: randomUUID(), vault: vault.id, bindingDigest, state: "pending", createdAt, updatedAt: createdAt, operation, payloadDigest: proposalPayloadDigest(operation), ...(request.agentLabel !== undefined ? { agentLabel: request.agentLabel } : {}) };
+  const record: ProposalRecord = { schemaVersion: 1, id: options.proposalId ?? randomUUID(), vault: vault.id, bindingDigest, state: "pending", createdAt, updatedAt: createdAt, operation, payloadDigest: proposalPayloadDigest(operation), ...(request.agentLabel !== undefined ? { agentLabel: request.agentLabel } : {}) };
   encodeProposalRecord(record);
   const placeholder = "0".repeat(64);
   encodeProposalRecord({ ...record, state: "applied", intent: { fingerprint: placeholder, beforeSha: placeholder, afterSha: placeholder }, receipt: { applied: true, logged: false, beforeSha: placeholder, afterSha: placeholder } });
@@ -137,6 +137,7 @@ export function submitProposal(home: string, request: ProposalSubmitRequest, opt
     const bindingIssues: WriteIssue[] = [];
     checkStoredBinding(home, vault.id, bindingDigest, config.denyPaths ?? [], bindingIssues);
     issues.push(...warningsOf(bindingIssues));
+    options.validateBeforeStore?.();
     attempted = true; stored = null;
     try { createStoredProposal(home, record, config.denyPaths ?? [], fd); stored = true; }
     catch (error) {

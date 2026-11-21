@@ -450,6 +450,12 @@ export class VaultIndex<Source extends VaultSpec | SpecSourceSpec = VaultSpec> {
       .slice(snapshot ? snapshotOffset : 0, (snapshot ? snapshotOffset : 0) + (snapshot && allSnapshotRows ? 10000 : limit))
       .map(({ sourceHash: _, ...row }) => ({ ...row, title: boundedText(row.title, 512).content, snippet: boundedText(row.snippet, 1024).content, type: boundedText(row.type, 256).content, domain: boundedText(row.domain, 256).content }));
   }
+  /** Bounded metadata and content hashes for a vector join; never returns note bodies. */
+  enrichmentPointers(): (SearchResult & { hash: string })[] {
+    const rows = this.db.query<{path:string;hash:string;title:string;description:string;type:string;domain:string}, []>("SELECT path,hash,title,substr(description,1,512) AS description,type,domain FROM notes ORDER BY path LIMIT 10001").all();
+    if (rows.length > 10000) throw new Error("enrichment: more than 10000 indexed notes; reduce the vault before vector search");
+    return rows.map(r => ({ ...r, title: boundedText(r.title, 512).content, type: boundedText(r.type, 256).content, domain: boundedText(r.domain, 256).content, score: 0, snippet: "" }));
+  }
   /** Intent words are OR terms; reuse the search tokenizer, BM25 weights and CJK substring/strong-match rules.
    * Materialize scores before grouping: FTS5 auxiliary functions cannot run in an aggregate context. No bodies leave SQL. */
   briefMatches(words: string[]): { path: string; score: number }[] {

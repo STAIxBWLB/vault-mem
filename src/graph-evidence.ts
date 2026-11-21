@@ -41,7 +41,7 @@ export interface GraphHop {
   from: string;
   to: string;
   /** The deduplicated graph edge this hop used: structural metadata only, never a quote or a probability. */
-  edge: { kind: "structural"; relation: GraphEdge["relation"]; rel?: string; field: "body" };
+  edge: { kind: "structural"; relation: GraphEdge["relation"]; rel?: string; field: "body"; confidence_tag?: "INFERRED" };
   occurrences: GraphOccurrence[];
   /** Occurrences found for this pair that the per-hop or byte bound left out. */
   omitted: number;
@@ -149,7 +149,7 @@ export function explainGraphPath(snapshot: AnalysisSnapshot, from: string, to: s
   const snapshotHash = sha(JSON.stringify({ algorithm: ALGORITHM, notes: identity, options: { maxHops, relation, viaHubs } }));
   const hops: GraphHop[] = path.edges.map((edge, index) => {
     const found = candidates(notes, edge.source, edge.target, edge.source);
-    return { index, from: edge.source, to: edge.target, edge: { kind: "structural", relation: edge.relation, ...(edge.rel ? { rel: edge.rel } : {}), field: "body" },
+    return { index, from: edge.source, to: edge.target, edge: { kind: "structural", relation: edge.relation, ...(edge.rel ? { rel: edge.rel } : {}), field: "body", ...(edge.confidence_tag === "INFERRED" ? { confidence_tag: "INFERRED" as const } : {}) },
       occurrences: locate(notes, found.slice(0, EXPLAIN_OCCURRENCES_PER_HOP), edge.source), omitted: Math.max(0, found.length - EXPLAIN_OCCURRENCES_PER_HOP) };
   });
   const result: GraphExplanation = { schemaVersion: 1, snapshotHash,

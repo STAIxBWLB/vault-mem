@@ -12,6 +12,9 @@ import { buildGraph, graphNeighbors, graphPath, LINK_RELATIONS } from "./vault-g
 import { lintVault } from "./vault-lint.ts";
 import { writeAnalysisReports } from "./analysis-reports.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
+import { listEnrichmentWork, intakeEnrichment, readEnrichment, reconcileEnrichment } from "./enrichment.ts";
+import { hybridSearch, similarNotes } from "./enrichment-query.ts";
+import type { EnrichmentKind } from "./enrichment-store.ts";
 import type { VaultSpec } from "./config.ts";
 import { loadRegistry, registryStatus } from "./registry.ts";
 import { VaultIndex, MAX_NOTE_BYTES } from "./vault-index.ts";
@@ -45,6 +48,11 @@ const ASSERT_OP = object({ op: { type: "string", enum: ["declare", "relink", "as
 const oid = { type: "string", minLength: 40, maxLength: 64, pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" };
 const logEvent = LOG_EVENT_SCHEMA;
 const scalar = { type: ["string", "number", "boolean", "null", "array"], maxLength: 4096, maxItems: 64, items: { type: ["string", "number", "boolean"], maxLength: 1024 } };
+const enrichmentKinds = ["embedding", "summary", "community-label", "inferred-link", "fact"];
+const enrichmentOperation = { type: "object", maxProperties: 32, properties: ASSERT_OP.properties, additionalProperties: false };
+const enrichmentValue = { type: ["string", "array", "object"], maxLength: 8192, maxItems: 4096,
+  items: { type: ["number", "object"], maxProperties: 32, properties: enrichmentOperation.properties, additionalProperties: false },
+  maxProperties: 32, properties: { target: string(191) }, additionalProperties: scalar };
 const metadata = { type: "object", maxProperties: 32, properties: { authors: { type: "array", minItems: 1, maxItems: 100, items: string(1024) } }, additionalProperties: scalar };
 const proposalMetadata = { ...metadata, properties: { ...metadata.properties, evidence: { type: "array", maxItems: 16, items: object({ source: string(512), sha256: sha, quote: string(2048), section: string(1024) }, ["source", "sha256", "quote"]) } } };
 const proposalOperation = object({ op: { type: "string", enum: ["create", "patch"] }, path: string(200), frontmatter: proposalMetadata, body: string(32768, 0), expectedSha: sha,
@@ -52,6 +60,7 @@ const proposalOperation = object({ op: { type: "string", enum: ["create", "patch
 
 /** Tool names for the implemented read, write, log, analysis and promotion providers. */
 export const VMEM_TOOL_NAMES = ["vmem_status", "vmem_search", "vmem_brief", "vmem_read", "vmem_read_many", "vmem_list", "vmem_links", "vmem_history", "vmem_changes", "vmem_mocs", "vmem_check", "vmem_log_tail",
+  "vmem_enrichment_work", "vmem_enrichment_intake", "vmem_enrichment_get", "vmem_enrichment_reconcile", "vmem_similar",
   "vmem_create", "vmem_patch", "vmem_append", "vmem_set_frontmatter", "vmem_link", "vmem_supersede", "vmem_log_append", "vmem_move", "vmem_merge", "vmem_delete", "vmem_promote_from_amem", "vmem_lint", "vmem_graph_build", "vmem_graph_neighbors", "vmem_graph_path", "vmem_graph_explain", "vmem_promote", "vmem_skills_mine", "vmem_read_file", "vmem_list_files", "vmem_report", "vmem_evidence", "vmem_stats", "vmem_proposal_submit", "vmem_proposal_list", "vmem_proposal_show", "vmem_proposal_apply", "vmem_proposal_reject", "vmem_proposal_reconcile", "vmem_assert", "vmem_assertions", "vmem_assertions_purge", "vmem_assertions_exposure", ...SPEC_COMMANDS.map(item => item.name)] as const;
 
 /** Server `initialize` instructions: purpose, navigation order and the write contract. Pinned by a test, under 400 bytes. */
@@ -64,7 +73,12 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
   const orgVault = orgIds.length ? { type: "string", enum: [...orgIds] } : string(32);
   return [
     tool("vmem_status", "Registered vaults with health, write policy, effective pii and the piiPolicy matrix (read-only).", object({})),
-    tool("vmem_search", "Full-text (BM25) search over indexed notes. Literal AND terms.", object({ query: string(1000), vault, limit: integer(1, 50), type: string(64), domain: string(64) }, ["query"])),
+    tool("vmem_search", "Full-text (BM25) search over indexed notes. Literal AND terms. Supply model and vector together for local hybrid ranking with stored embeddings.", object({ query: string(1000), vault, limit: integer(1, 50), type: string(64), domain: string(64), model: string(256), vector: { type: "array", minItems: 1, maxItems: 4096, items: { type: "number" } } }, ["query"])),
+    tool("vmem_enrichment_work", "List a bounded page of notes needing one implemented enrichment kind.", object({ vault, kind: { type: "string", enum: enrichmentKinds }, limit: integer(1, 100), after: string(1024) }, ["kind"])),
+    tool("vmem_enrichment_intake", "Submit bounded enrichment output for a source note. Kind-specific validation, PII screening, source hash checks and current vault write policy apply.", object({ vault, path: note, contentHash: sha, kind: { type: "string", enum: enrichmentKinds }, producer: object({ skill: string(128), version: string(64), model: string(256) }, ["skill", "version", "model"]), createdAt: string(32), value: enrichmentValue }, ["path", "contentHash", "kind", "producer", "createdAt", "value"]), "write"),
+    tool("vmem_enrichment_get", "Read one current enrichment record after rechecking its source hash and current disclosure policy.", object({ vault, path: note, kind: { type: "string", enum: enrichmentKinds } }, ["path", "kind"])),
+    tool("vmem_enrichment_reconcile", "Preview, then explicitly confirm after inspecting the journal or proposals, resolution of an uncertain intake as published or not_published. A wrong resolution can allow a duplicate or suppress work.", object({ vault, path: note, kind: { type: "string", enum: ["fact", "inferred-link"] }, resolution: { type: "string", enum: ["published", "not_published"] }, ...twoStep }, ["path", "kind", "resolution"]), "confirm"),
+    tool("vmem_similar", "Find notes nearest to a note with a current stored embedding.", object({ vault, path: note, limit: integer(1, 100) }, ["path"])),
     tool("vmem_brief", "Intent-ranked note pointers and one-hop neighbors, with metadata PII/deny screening and whole-line byte cap including the result JSON. No note bodies; read a selected pointer with vmem_read.", object({ vault, intent: string(1024), paths: { type: "array", maxItems: 16, items: string(1024) }, bytes: integer(256, 4096) }, ["intent"])),
     tool("vmem_read", "Read one note by stem, alias or notes/ path: frontmatter, body, sha256. Bounded by maxBytes; section selects an exact H2, offset pages UTF-8 byte ranges, and truncated reads list H2 headings/nextOffset. With revision, read that full commit id's blob for the path instead: the result carries revision, blob and content sha256 plus basis git_snapshot, within the 48 KiB transport bound.", object({ path: note, vault, maxBytes: integer(1, 65536), section: string(1024), offset: integer(0, MAX_NOTE_BYTES), revision: oid }, ["path"])),
     tool("vmem_read_many", "Read up to 20 notes (8 KiB each).", object({ paths: { type: "array", minItems: 1, maxItems: 20, items: note }, vault }, ["paths"])),
@@ -175,6 +189,10 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     const spec = pick(args), index = new VaultIndex(home, spec, vaults.map(v => v.path));
     try { index.scan(); return body(index); } finally { index.close(); }
   };
+  const assertStartupBinding = (spec: VaultSpec): void => {
+    const current = loadRegistry(home).vaults.find(v => v.id === spec.id);
+    if (!current || JSON.stringify(current) !== JSON.stringify(spec)) throw new Error("enrichment: vault binding changed since MCP startup; restart the MCP server");
+  };
   const write = (args: Record<string, unknown>, operation: WriteOp, extra: Partial<WriteRequest> = {}): WriteReceipt | ReturnType<typeof refusal> & Partial<WriteReceipt> => {
     const request: WriteRequest = { vault: pick(args).id, operation, channel: "mcp", ...extra, ...(args.log ? { log: args.log as LogEvent } : {}) };
     const receipt = applyWrite(home, request, { env });
@@ -226,7 +244,20 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_graph_path: args => graphPath(buildGraph(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot),str(args.from)!,str(args.to)!,{maxHops:(args.maxHops as number|undefined) ?? 6,viaHubs:args.viaHubs === true,...(str(args.relation) === undefined ? {} : {relation:str(args.relation)!})}),
     vmem_graph_explain: args => explainGraphPath(analysisInput(home,pick(args).id,{expectedVault:pick(args)}).snapshot,str(args.from)!,str(args.to)!,{maxHops:(args.maxHops as number|undefined) ?? 6,viaHubs:args.viaHubs === true,...(str(args.relation) === undefined ? {} : {relation:str(args.relation)!})}),
     vmem_status: () => ({ defaultVault: defaultVault ?? null, vaults: registryStatus(home).filter(v => ids.includes(v.id)) }),
-    vmem_search: args => read(args, index => ({ hits: index.search(str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }) })),
+    vmem_search: args => {
+      const spec = pick(args), model = str(args.model), vector = args.vector;
+      if ((model === undefined) !== (vector === undefined)) throw new Error("enrichment: model and vector must be supplied together; provide both or omit both");
+      if (model !== undefined) {
+        assertStartupBinding(spec);
+        return read(args, index => ({ hits: hybridSearch(home, spec.id, index, str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }, { model, values: vector as number[] }) }));
+      }
+      return read(args, index => ({ hits: index.search(str(args.query)!, { limit: (args.limit as number | undefined) ?? 20, type: str(args.type), domain: str(args.domain) }) }));
+    },
+    vmem_enrichment_work: args => { const spec = pick(args); assertStartupBinding(spec); return listEnrichmentWork(home, { vault: spec.id, kind: str(args.kind) as EnrichmentKind, ...(typeof args.limit === "number" ? { limit: args.limit } : {}), ...(str(args.after) ? { after: str(args.after)! } : {}) }); },
+    vmem_enrichment_intake: args => { const spec = pick(args); assertStartupBinding(spec); return intakeEnrichment(home, { vault: spec.id, path: str(args.path)!, contentHash: str(args.contentHash)!, kind: str(args.kind) as EnrichmentKind, producer: args.producer as { skill: string; version: string; model: string }, createdAt: str(args.createdAt)!, value: args.value, channel: "mcp" }, { env }); },
+    vmem_enrichment_get: args => { const spec = pick(args); assertStartupBinding(spec); return readEnrichment(home, { vault: spec.id, path: str(args.path)!, kind: str(args.kind) as EnrichmentKind }); },
+    vmem_enrichment_reconcile: args => { const spec = pick(args); assertStartupBinding(spec); return reconcileEnrichment(home, { vault: spec.id, path: str(args.path)!, kind: str(args.kind) as "fact" | "inferred-link", resolution: str(args.resolution) as "published" | "not_published", channel: "mcp", ...twoStep(args) }); },
+    vmem_similar: args => { const spec = pick(args); assertStartupBinding(spec); return read(args, index => ({ hits: similarNotes(home, spec.id, index, str(args.path)!, (args.limit as number | undefined) ?? 20) })); },
     vmem_read: args => str(args.revision) === undefined
       ? read(args, index => { const r = index.show(str(args.path)!, (args.maxBytes as number | undefined) ?? 16384, str(args.section), args.offset as number | undefined); return document(r); })
       : readRevision({ vault: pick(args), home, env, denyPaths: loadRegistry(home).denyPaths ?? [], note: str(args.path)!, revision: str(args.revision)!,

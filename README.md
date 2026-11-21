@@ -58,6 +58,8 @@ Output: every command prints text for people by default, following agent-hub's C
 
 `vmem settings <vault>` reads effective settings; `--set JSON` previews changes and `--confirm --fingerprint SHA` applies them. The console Settings panel uses the same preview and confirmation. Graph community resolution defaults to 1.
 
+Enrichment is opt-in per vault through `vmem settings` or the Settings panel. A skill computes results outside vmem and uses `vmem_enrichment_work`, `vmem_enrichment_intake` and `vmem_enrichment_get` over MCP. An uncertain fact or link intake blocks replay until the journal or proposal is inspected and `vmem_enrichment_reconcile` confirms whether it was published. Results bind a source path and content hash to unverified producer metadata. Embeddings, summaries and community labels stay in a bounded local sidecar under the vmem home; they are not synced. Inferred links enter the existing proposal flow and their note annotation is an unverified declaration. Facts enter the assertion journal. `vmem_similar` uses stored vectors, and `vmem_search` accepts an optional model and vector for hybrid ranking; without stored vectors it keeps lexical behavior. Only enabled vaults report missing or stale embeddings in lint.
+
 ## Not implemented
 
 - Live cutover of an existing vault writer: outside this repository (see Status).
@@ -109,6 +111,8 @@ The only runtime dependency is the first-party range <!-- facts:amem-pin -->`@st
 - `src/spec-freshness.ts`: `specFreshness`, `specsCoveringPath`
 - `src/registry.ts`: `settingsSnapshot`, `changeSettings`
 - `src/ui/plugin.ts`: `plugin as consolePlugin`
+- `src/enrichment.ts`: `listEnrichmentWork`, `intakeEnrichment`, `readEnrichment`, `reconcileEnrichment`
+- `src/enrichment-query.ts`: `hybridSearch`, `similarNotes`
 
 <!-- /facts:exports -->
 

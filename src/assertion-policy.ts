@@ -8,10 +8,11 @@ import { screenContent } from "./write-validation.ts";
 import type { AssertionItem } from "./assertions.ts";
 
 export type AssertionValue = string | { withheld: "secret" | "pii_policy" };
-export type ScreenedAssertion = Omit<AssertionItem, "value" | "evidence" | "source"> & {
+export type ScreenedAssertion = Omit<AssertionItem, "value" | "evidence" | "source" | "origin"> & {
   value?: AssertionValue;
   evidence?: Record<string, unknown>[];
   source?: (string | { withheld: true })[];
+  origin?: AssertionItem["origin"] | { withheld: true };
   availability?: "unavailable";
 };
 
@@ -31,8 +32,9 @@ function deniedSource(source: string, vault: VaultSpec, config: VmemConfig): boo
 
 /** Screen every field on every read. A denied evidence entry reveals neither its source, quote nor hashes. */
 export function screenAssertion(item: AssertionItem, vault: VaultSpec, config: VmemConfig, reads: EvidenceReads, budget: EvidenceReadBudget): ScreenedAssertion {
-  const { value, evidence, source, ...safe } = item;
+  const { value, evidence, source, origin, ...safe } = item;
   const out: ScreenedAssertion = { ...safe };
+  if (origin !== undefined) out.origin = !origin || typeof origin !== "object" || typeof origin.path !== "string" || !/^notes\/[^/\\]+\.md$/.test(origin.path) || isDenied(origin.path, config.denyPaths ?? []) || isDenied(canonicalPath(resolve(vault.path, origin.path)), config.denyPaths ?? []) || withheld(JSON.stringify(origin), vault, config) ? { withheld: true } : origin;
   if (item.purged) { out.availability = "unavailable"; out.evidence = [{ status: "unavailable" }]; return out; }
   if (typeof value === "string") {
     const reason = withheld(value, vault, config);
