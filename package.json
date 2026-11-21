@@ -1,6 +1,6 @@
 {
   "name": "@staix/vault-mem",
-  "version": "0.10.2",
+  "version": "0.11.0",
   "description": "Validated Obsidian-compatible knowledge vaults for agents and people",
   "license": "MIT",
   "type": "module",
@@ -12,7 +12,7 @@
     "bun": ">=1.4.2"
   },
   "dependencies": {
-    "@staix/agent-mem": "0.32.0"
+    "@staix/agent-mem": ">=0.33.0 <1.0.0"
   },
   "devDependencies": {
     "@staix/agent-console": "github:STAIxBWLB/agent-console#c978b31",

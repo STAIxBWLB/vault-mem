@@ -4,7 +4,10 @@ if (!version || Number(version[1]) < 1 || (Number(version[1]) === 1 && (Number(v
   console.error("vmem: Bun >=1.4.2 is required. Install Bun: https://bun.sh");
   process.exit(1);
 }
-const { main, mainAsync, reportError, runMcp } = await import("../src/cli.ts");
+let cli;
+try { cli = await import("../src/cli.ts"); }
+catch (error) { console.error(`vmem: ${error instanceof Error ? error.message : "failed to load"}`); process.exit(1); }
+const { main, mainAsync, reportError, runMcp } = cli;
 const { resolveColor, takeColorFlag } = await import("../src/text-output.ts");
 const argv = process.argv.slice(2);
 // `--color=` may stand anywhere, so the dispatch looks at the words without it; main/mainAsync take it off again.

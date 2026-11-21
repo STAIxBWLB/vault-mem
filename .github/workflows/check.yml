@@ -16,6 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        agent_mem: [locked, latest]
         # Pull requests without the ci:macos label run Ubuntu only; every
         # other event, and a labelled pull request, run both.
         os: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:macos') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest"]') }}
@@ -35,6 +36,11 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
+      - name: Resolve latest agent-mem in declared range
+        if: matrix.agent_mem == 'latest'
+        run: |
+          bun update @staix/agent-mem
+          bun -e 'console.log("agent-mem resolved:", require("./node_modules/@staix/agent-mem/package.json").version)'
       - run: bun run check
       - run: npm pack --dry-run --ignore-scripts
 

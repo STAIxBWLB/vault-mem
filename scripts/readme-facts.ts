@@ -14,7 +14,7 @@ const block = (body: string) => `\n\n${body}\n\n`;
 export function facts(): Record<string, string> {
   const pkg = JSON.parse(read("package.json")) as { engines: { bun: string }; dependencies: Record<string, string> };
   const amem = pkg.dependencies["@staix/agent-mem"];
-  if (!amem) throw new Error("package.json has no @staix/agent-mem dependency; restore the exact pin before rendering README facts");
+  if (!amem) throw new Error("package.json has no @staix/agent-mem dependency; restore the bounded range before rendering README facts");
   const types = /const TYPES = new Set\(\[([^\]]+)\]\)/.exec(read("src/write-validation.ts"))?.[1];
   if (!types) throw new Error("note types not found: src/write-validation.ts must define const TYPES = new Set([...]); update scripts/readme-facts.ts if it moved");
   const exports = [...read("src/index.ts").matchAll(/^export \{([^}]+)\} from "\.\/([^"]+)\.ts";$/gm)]

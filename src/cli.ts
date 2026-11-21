@@ -1,3 +1,4 @@
+import { agentMemInfo } from "./platform.ts";
 import { runBriefCommand } from "./vault-brief.ts";
 import { runProposalCommand } from "./proposal-commands.ts";
 import { runSpecCommand, specTools } from "./mcp-spec.ts";
@@ -133,7 +134,7 @@ function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLA
       });
       const sources = command === "doctor" && config.specs !== undefined ? specStatus(home.home, env) : undefined;
       const healthy = vaults.every(v => v.healthy && (!v.checks || Object.values(v.checks).every(check => check.ok))) && (!sources || sources.every(source => source.healthy));
-      const status: StatusResult = { ...home, version, healthy, vaults, ...(config.specs !== undefined ? { specs: sources ?? config.specs } : {}) };
+      const status: StatusResult = { ...home, version, agentMem: agentMemInfo, healthy, vaults, ...(config.specs !== undefined ? { specs: sources ?? config.specs } : {}) };
       result = status;
       render = () => command === "doctor" ? renderDoctor(status, text) : renderStatus(status, text);
       if (command === "doctor" && !healthy) code = 1;

@@ -1,6 +1,6 @@
 # Release readiness evidence
 
-- Status: 0.10.1 (tag `v0.10.1`) is the latest published release. This prepares 0.10.2 from main `20e182d` with fresh cgroup performance evidence and the unchanged external synthetic parity evidence. Historical private-corpus and native fixture evidence below is not new 0.10.2 acceptance; live cutover remains a separate operation.
+- Status: 0.10.2 (tag `v0.10.2`) is the latest published release. This prepares 0.11.0 from main `922cc20` with fresh cgroup performance evidence and unchanged external synthetic parity evidence. Historical private-corpus and native fixture evidence below is not new 0.11.0 acceptance; live cutover remains a separate operation.
 - Contract: [issue #11](https://github.com/STAIxBWLB/vault-mem/issues/11). This readiness work performed no host registration or live vault write. Publication does not authorize registration or cutover.
 - Runtime and method digests in the raw evidence bind measurements to source bytes. Evidence-only documentation changes do not alter measured runtime; a runtime/method change requires a new measurement.
 
@@ -30,7 +30,11 @@
 
 ## Performance record
 
+The retained 0.10.0 external parity record was measured with agent-mem 0.29.0, and its input hashes remain unchanged. The 0.11.0 performance measurement uses agent-mem 0.33.0; other versions in the declared range are covered by the host API gate and CI, not by these measurements. No MCP status fields changed, so no vault skill follow-up is required.
+
 The [raw synthetic report](evidence/synthetic-performance.json) contains every search/write/RSS sample, runtime/method digests, Bun/kernel/CPU details and container quotas. RSS uses decimal byte thresholds; search p95 is the nearest-rank statistic over 30 measured MCP queries after five warmups, including metadata refresh and transport. The derived index is prebuilt before the MCP process starts.
+
+The 0.11.0 candidate ([versioned performance report](evidence/v0.11.0-synthetic-performance.json)) was measured on 2026-11-21 with agent-mem 0.33.0. MCP idle RSS was 49.80 MB, cgroup `memory.peak` 92.59 MB, sampled VmRSS/VmHWM maximum 126.32 MB, and search p95 21.76 ms. All synthetic gates passed. The Git-free run has an empty `revision`; runtime and method digests bind the measured bytes. Representative private-write, native Obsidian, consumer and live cutover checks were not repeated.
 
 The 0.10.2 candidate ([versioned performance report](evidence/v0.10.2-synthetic-performance.json)) was measured on 2026-11-21 based on main `20e182d`. MCP idle RSS was 49.44 MB, cgroup `memory.peak` 91.11 MB, sampled VmRSS/VmHWM maximum 125.26 MB, and search p95 22.99 ms. All synthetic gates passed. The Git-free run has an empty `revision`; the runtime and method digests bind the measured bytes. Representative private-write, native Obsidian, consumer and live cutover checks were not repeated.
 
