@@ -16,8 +16,12 @@ export function installedAmemVersion(entry: string): string {
   }
 }
 export const amemVersion = () => installedAmemVersion(createRequire(import.meta.url).resolve("@staix/agent-mem/platform"));
+export class HostApiVersionError extends Error {
+  readonly code = "VMEM_HOST_API_INCOMPATIBLE";
+}
+
 export function checkHostApi(api: { HOST_API_MIN?: unknown; HOST_API_VERSION?: unknown }, version: string): void {
   const min = api.HOST_API_MIN, max = api.HOST_API_VERSION;
   if (Number.isSafeInteger(min) && Number.isSafeInteger(max) && (min as number) >= 1 && (min as number) <= 1 && (max as number) >= 1) return;
-  throw new Error(`agent-mem ${version}: host API ${String(min ?? "missing")}..${String(max ?? "missing")} is incompatible with vmem host API 1; update @staix/agent-mem or @staix/vault-mem to compatible versions`);
+  throw new HostApiVersionError(`agent-mem ${version}: host API ${String(min ?? "missing")}..${String(max ?? "missing")} is incompatible with vmem host API 1; update @staix/agent-mem or @staix/vault-mem to compatible versions`);
 }
