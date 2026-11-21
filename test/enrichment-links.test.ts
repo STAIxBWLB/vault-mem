@@ -33,10 +33,11 @@ test("orphan inferred list entries are lint warnings, not write refusals", () =>
 });
 
 test("marker mentions in prose and code do not cause write refusals", () => {
-  const after = note("<!-- vmem:inferred -->\n```\n- [[B]] <!-- vmem:inferred -->\n```\n`<!-- vmem:inferred -->`");
+  const after = "---\ntype: insight\ndomain: research\ndescription: synthetic\ntopics: ['[[research]]']\n---\n# Example\n\nMention `vmem:inferred` inline.\n\n```md\n- [[B]] <!-- vmem:inferred -->\n```\n\n## Topics\n\n- [[research]]\n";
   const vault = { id: "synthetic", path: "/synthetic", kind: "personal" as const, write: "mcp" as const };
-  const issues = validateWrite([{ path: "notes/a.md", before: null, after }], { vault, config: { vaults: [vault] }, notes: new Map(), operation: { op: "create", path: "notes/a.md", frontmatter: {} } });
-  expect(issues.some(issue => issue.message.includes("inferred"))).toBe(false);
+  const research = "---\ntype: moc\ndescription: Research.\n---\n# Research\n";
+  const issues = validateWrite([{ path: "notes/a.md", before: null, after }], { vault, config: { vaults: [vault] }, notes: new Map([["notes/research.md", research]]), operation: { op: "create", path: "notes/a.md", frontmatter: {} } });
+  expect(issues.filter(issue => issue.severity === "error")).toEqual([]);
 });
 
 test("inferred_links schema accepts bounded canonical stems", () => {
