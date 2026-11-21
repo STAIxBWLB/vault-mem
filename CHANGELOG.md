@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-11-21
+
+- Raise the exact `@staix/agent-mem` runtime pin from 0.30.0 to 0.32.0. The 0.31.0 release adds an optional reader lease signature and a held placement outcome; 0.32.0 adds catalog and placement view exports and optional refusal details. Both releases are additive for library consumers, preserve shared storage formats and do not raise the home format floor.
+
 ## [0.10.1] - 2026-11-20
 
 - Raise the exact `@staix/agent-mem` runtime pin from 0.29.0 to 0.30.0, allowing the home format floor to be raised after older library hosts stop. The upgrade does not raise the floor automatically.
