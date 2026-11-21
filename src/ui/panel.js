@@ -15,6 +15,11 @@ export default (host) => {
       input, h("button", { type: "submit", class: "btn", text: "Search" }));
   };
 
+  /** Journal coverage warnings computed by the provider (`warnings`); anything short of a fully verified journal shows. */
+  const coverageNotices = (warnings) => (warnings ?? []).map((w) => ui.notice(w.message, w.tone));
+  // A continuation is bound to the query that produced it, so every query param travels with it.
+  const assertionQuery = () => Object.fromEntries(["subject", "relation", "at", "asOf", "history", "limit"].filter((k) => params[k] !== undefined && params[k] !== "").map((k) => [k, params[k]]));
+
   const views = {
     settings(s) {
       if (s.error) return [ui.notice(s.error, "err")];
@@ -130,6 +135,56 @@ export default (host) => {
           return ui.row({ title: x.raw ?? `${x.type}  ${x.source}${x.dest ? ` → ${x.dest}` : ""}`, sub: x.raw ? "unparsed line" : `${x.at} · ${x.project} · ${x.note}${x.agent ? " · agent" : ""}`,
             ...(typeof p === "string" && p.startsWith("notes/") ? { onOpen: () => openNote(p) } : {}) });
         }) ?? ui.empty("Log is empty")];
+    },
+    proposals(s) {
+      const items = s.page?.items ?? [], p = s.selected;
+      const stateSelect = h("select", { name: "state", class: "vmem-input", "aria-label": "Proposal state", onchange: () => go("proposals", { state: stateSelect.value }) },
+        ...["pending", "applied", "rejected", "apply_unknown"].map((v) => h("option", { value: v, text: v, ...(v === s.state ? { selected: true } : {}) })));
+      const reason = h("input", { type: "text", name: "reason", class: "vmem-input", "aria-label": "Rejection reason", placeholder: "reason for rejecting" });
+      const detail = p ? ui.detail({
+        kind: "proposal", title: p.path, state: { text: p.state, ...(p.state === "apply_unknown" ? { tone: "warn" } : {}) },
+        actions: p.state === "pending" ? [
+          ui.button("Apply…", () => host.action({ action: "proposal-apply", id: p.id, ...vaultParam() }), { tone: "primary" }),
+          h("form", { class: "vmem-inline", onsubmit: (e) => { e.preventDefault(); if (reason.value.trim()) host.action({ action: "proposal-reject", id: p.id, reason: reason.value.trim(), ...vaultParam() }); } },
+            reason, h("button", { type: "submit", class: "btn", text: "Reject…" })),
+        ] : [],
+        ...(p.decisionReason ? { summary: `reason: ${p.decisionReason}` } : {}),
+        sections: [{ title: "Operation", open: true, body: h("div", {}, h("pre", { class: "vmem-body", text: p.content ?? "" }), p.truncated ? ui.notice("Truncated; read the rest with `vmem proposal show`.", "warn") : null) }],
+        footer: [`${p.id} · ${p.createdAt}${p.agentLabelUnverified ? ` · agent ${p.agentLabelUnverified} (unverified)` : ""}`],
+      }) : null;
+      return [s.error ? ui.notice(s.error, "err") : null, h("div", { class: "vmem-bar" }, stateSelect,
+        ...(s.page?.nextCursor ? [ui.button("Next page", () => go("proposals", { state: s.state, page: s.page.nextCursor }))] : [])), detail,
+        ui.rows(items, (x) => ui.row({ title: x.path, sub: `${x.state} · ${x.createdAt}`, onOpen: () => go("proposals", { state: s.state, id: x.id }), ...(p?.id === x.id ? { chip: { text: "shown", tone: "neutral" } } : {}) }))
+          ?? ui.empty(`No ${s.state} proposals`, "Agents submit proposals with `vmem_proposal_submit` when the vault opts in.")];
+    },
+    assertions(s) {
+      const r = s.result, items = r?.items ?? [];
+      const subject = h("input", { type: "text", name: "subject", class: "vmem-input", "aria-label": "Subject", placeholder: "subject (optional)", value: params.subject ?? "" });
+      const relation = h("input", { type: "text", name: "relation", class: "vmem-input", "aria-label": "Relation", placeholder: "relation (optional)", value: params.relation ?? "" });
+      const filter = h("form", { class: "vmem-bar", onsubmit: (e) => { e.preventDefault(); const { subject: _s, relation: _r, ...rest } = assertionQuery(); go("assertions", { ...rest, ...(subject.value.trim() ? { subject: subject.value.trim() } : {}), ...(relation.value.trim() ? { relation: relation.value.trim() } : {}) }); } },
+        subject, relation, h("button", { type: "submit", class: "btn", text: "Filter" }));
+      return [s.error ? ui.notice(s.error, "err") : null, filter,
+        ...coverageNotices(s.warnings),
+        ui.rows(items, (a) => ui.row({ title: `${a.subject} · ${a.relation}${a.value !== undefined ? ` = ${a.value}` : ""}`, sub: [a.op, a.from && `from ${a.from}`, a.to && `to ${a.to}`, a.on && `on ${a.on}`, `recorded ${a.recordedAt}`].filter(Boolean).join(" · "),
+          ...(a.subjectNote?.path ? { onOpen: () => openNote(a.subjectNote.path) } : {}) }))
+          ?? ui.empty("No assertions", "Agents record them with `vmem_assert`."),
+        r?.continuation ? ui.button("Next page", () => go("assertions", { ...assertionQuery(), cursor: r.continuation })) : null];
+    },
+    history(s) {
+      const path = h("input", { type: "text", name: "path", class: "vmem-input", "aria-label": "Note path", placeholder: "notes/stem.md", value: s.path ?? "" });
+      const form = h("form", { class: "vmem-bar", onsubmit: (e) => { e.preventDefault(); if (path.value.trim()) go("history", { path: path.value.trim() }); } }, path, h("button", { type: "submit", class: "btn", text: "History" }));
+      const revs = s.history?.revisions ?? [], changed = s.changes?.changed ?? [];
+      const reason = s.history?.capability ?? s.changes?.capability;
+      return [s.error ? ui.notice(s.error, "err") : null, form,
+        reason ? ui.notice(`Git history is unavailable: ${reason}`, "warn") : null,
+        s.changes ? h("section", { class: "card" }, h("h2", { text: `Changes ${s.changes.from.slice(0, 10)} → ${s.changes.to.slice(0, 10)}` }),
+          ui.rows(changed, (c) => ui.row({ title: c.path, sub: c.status, onOpen: () => openNote(c.path) })) ?? ui.empty("No note changed"),
+          s.changes.continuation ? ui.button("More changes", () => go("history", { ...(s.path ? { path: s.path } : {}), ...(params.cursor ? { cursor: params.cursor } : {}), from: s.changes.from, to: s.changes.to, changesCursor: s.changes.continuation })) : null) : null,
+        s.path ? ui.rows(revs.map((r, i) => ({ r, prev: revs[i + 1] })), ({ r, prev }) => ui.row({ title: `${r.revision.slice(0, 10)} · ${r.committedAt}`, sub: `${r.bytes} bytes`,
+          ...(prev ? { verbs: [ui.button("Changes since previous", () => go("history", { path: s.path, from: prev.revision, to: r.revision }))] } : {}) }))
+          ?? ui.empty("No revisions", "The note has no committed history yet.") : ui.empty("No note selected", "Enter a note path to see its Git history."),
+        s.history?.continuation ? h("div", { class: "vmem-bar" }, ui.button("Older revisions", () => go("history", { path: s.path, cursor: s.history.continuation })), ...(params.cursor ? [ui.button("Newest", () => go("history", { path: s.path }))] : [])) : null,
+        s.history?.coverage && s.history.coverage.complete === false ? ui.notice(`History is incomplete${s.history.coverage.reason ? `: ${s.history.coverage.reason}` : ""}.`, "warn") : null];
     },
   };
 
