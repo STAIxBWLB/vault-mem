@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-22
+
+- N-1: 0.13.1 and 0.14.0 share the note and spec index files, config format 6 and the enrichment sidecar format. CLI commands and MCP tool names, arguments and receipts are unchanged. Only the console provider differs: its Graph snapshot adds the first-page `enrichment` field and the `similar` and `semantic` arguments, which the 0.13.1 provider does not offer.
+
 - Add Graph enrichment capability metadata, similar-note queries and opt-in paged semantic similarity edges; embeddings remain inside the provider.
 
 ## [0.13.1] - 2026-11-22
