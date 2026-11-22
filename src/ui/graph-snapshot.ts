@@ -11,6 +11,8 @@ export interface GraphEnrichmentInputs { model: string | null; embedded: number;
 export interface GraphSnapshotAssembly { vault: string; revision: string; pages: GraphSnapshotPage[]; enrichment?: GraphEnrichmentInputs }
 const MAX_BYTES = 1_048_576 - 32;
 const MAX_NODES = 10_000, MAX_EDGES = 100_000;
+// ponytail: exact all-pairs search is bounded here; larger vaults need ANN or precomputed neighbors.
+const MAX_SEMANTIC_EMBEDDINGS = 3_000;
 const scalar = (v: unknown): string | null => scalarText(v) ?? (typeof v === "string" || typeof v === "number" || typeof v === "boolean" || typeof v === "bigint" ? String(v) : null);
 const token = (vault: string, revision: string, kind: string, offset: number): string => Buffer.from(JSON.stringify([1, vault, revision, kind, offset])).toString("base64url");
 export const encodeGraphPage = (assembly: GraphSnapshotAssembly, page: GraphSnapshotPage): string => token(assembly.vault, assembly.revision, page.kind, page.offset);
@@ -96,6 +98,7 @@ export function assembleSemanticPages(assembly: GraphSnapshotAssembly, k: number
   if (!Number.isInteger(k) || k < 1 || k > 20 || typeof minScore !== "number" || !Number.isFinite(minScore) || minScore < 0 || minScore > 1)
     throw new Error("graph semantic: k must be 1..20 and minScore must be 0..1; correct the parameters and restart");
   if (!assembly.enrichment) throw new Error("enrichment: enrichment is disabled; enable it in settings");
+  if (assembly.enrichment.embedded > MAX_SEMANTIC_EMBEDDINGS) throw new Error(`graph semantic: exceeds ${MAX_SEMANTIC_EMBEDDINGS} current embeddings; reduce the embedded set or use similar notes`);
   const ids = new Map<string, number>();
   for (const page of assembly.pages) if (page.kind === "nodes") {
     const columns = page.columns as GraphNodeColumns;

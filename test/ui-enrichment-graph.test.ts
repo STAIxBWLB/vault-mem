@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { addVault, changeSettings } from "../src/registry.ts";
+import { addVault, changeSettings, loadRegistry } from "../src/registry.ts";
 import { intakeEnrichment } from "../src/enrichment.ts";
+import { enrichmentStoreStamp, readEnrichmentStore } from "../src/enrichment-store.ts";
+import { graphEnrichmentInputs } from "../src/enrichment-query.ts";
 import { createVaultMcp } from "../src/mcp-vault.ts";
 import { createGraphSnapshotCache, plugin } from "../src/ui/plugin.ts";
 import { assembleGraphSnapshot, assembleSemanticPages, resolveSemanticPage } from "../src/ui/graph-snapshot.ts";
@@ -83,9 +85,9 @@ test("provider exposes current enrichment, similar notes and private bounded sem
 });
 
 test("semantic pages bind revision, query and offsets", async () => {
-  const count = 9_000, notes = Array.from({ length: count }, (_, i) => ({ path: `notes/n${String(i).padStart(5, "0")}.md`, source: "" }));
+  const count = 3_000, notes = Array.from({ length: count }, (_, i) => ({ path: `notes/n${String(i).padStart(5, "0")}.md`, source: "" }));
   const snapshot: AnalysisSnapshot = { notes, today: "2026-01-01", logPath: "log", log: null, registryIds: null, reports: {} };
-  const vectors = notes.map(n => ({ path: n.path.slice(6), values: [1, 0] }));
+  const vectors = notes.map(n => ({ path: n.path.slice(6), values: [1, 1] }));
   const assembly = assembleGraphSnapshot(snapshot, "v", { model: "synthetic", embedded: count, total: count, digest: "fixture", vectors });
   const pages = assembleSemanticPages(assembly, 20, 0);
   expect(pages.length).toBeGreaterThan(1);
@@ -99,6 +101,8 @@ test("semantic pages bind revision, query and offsets", async () => {
   const token = pages[0]!.next!;
   expect(() => resolveSemanticPage(assembly, pages, 19, 0, token)).toThrow("restart from the first page");
   expect(() => resolveSemanticPage({ ...assembly, revision: "changed" }, pages, 20, 0, token)).toThrow("restart from the first page");
+  const over = { ...assembly, enrichment: { ...assembly.enrichment!, embedded: 3_001, get vectors(): never { throw new Error("vectors were accessed"); } } };
+  expect(() => assembleSemanticPages(over, 10, 0)).toThrow("exceeds 3000 current embeddings");
   const small = assembleGraphSnapshot({ ...snapshot, notes: notes.slice(0, 2) }, "v", { model: "synthetic", embedded: 2, total: 2, digest: "small", vectors: vectors.slice(0, 2) });
   const oldToken = Buffer.from(JSON.stringify([1, "v", small.revision, "semantic", 1, 0, 0])).toString("base64url");
   let stamp = 1;
@@ -106,4 +110,30 @@ test("semantic pages bind revision, query and offsets", async () => {
   expect((await cache.snapshot("v", { semantic: { k: 1, minScore: 0 }, page: oldToken })).count).toBe(1);
   stamp++;
   await expect(cache.snapshot("v", { semantic: { k: 1, minScore: 0 }, page: oldToken })).rejects.toThrow("restart from the first page");
+}, 30_000);
+
+test("replacing a sidecar between semantic pages refuses the old token", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-semantic-revision-"))), home = join(root, "home"), vault = join(root, "vault");
+  mkdirSync(join(vault, "notes"), { recursive: true });
+  try {
+    addVault(home, { id: "v", path: vault, kind: "personal", write: "mcp" });
+    const settings = { vault: "v", changes: { enrichmentEnabled: true } }, preview = changeSettings(home, settings);
+    changeSettings(home, { ...settings, confirm: true, fingerprint: preview.fingerprint });
+    const config = loadRegistry(home), spec = config.vaults[0]!, empty = readEnrichmentStore(home, spec, config.vaults, []);
+    const count = 3_000, notes = Array.from({ length: count }, (_, i) => ({ path: `notes/n${String(i).padStart(5, "0")}.md`, source: "" }));
+    const snapshot: AnalysisSnapshot = { notes, today: "2026-01-01", logPath: "log", log: null, registryIds: null, reports: {} };
+    const vector = Buffer.alloc(8); vector.writeFloatLE(1, 0); vector.writeFloatLE(1, 4);
+    const record = { contentHash: createHash("sha256").update("").digest("hex"), kind: "embedding", producer: { skill: "fixture", version: "1", model: "synthetic" }, createdAt: "2026-11-21T00:00:00.000Z", value: { encoding: "float32le", data: vector.toString("base64") } };
+    const store = { schemaVersion: 1, binding: empty.binding, model: "synthetic", dimension: 2, records: notes.map(n => ({ ...record, path: n.path })) };
+    const dir = join(home, "enrichment"), file = join(dir, `${empty.binding}.json`); mkdirSync(dir, { mode: 0o700 });
+    writeFileSync(file, JSON.stringify(store), { mode: 0o600 });
+    const stamp = () => enrichmentStoreStamp(home, spec, config.vaults, []);
+    const cache = createGraphSnapshotCache(stamp, async () => assembleGraphSnapshot(snapshot, "v", graphEnrichmentInputs(home, "v", snapshot)));
+    const first = await cache.snapshot("v", { semantic: { k: 20, minScore: 0 } });
+    expect(typeof first.next).toBe("string");
+    const changed = Buffer.alloc(8); changed.writeFloatLE(1, 0); changed.writeFloatLE(0, 4);
+    store.records[0]!.value = { encoding: "float32le", data: changed.toString("base64") };
+    const replacement = join(dir, "replacement.json"); writeFileSync(replacement, JSON.stringify(store), { mode: 0o600 }); renameSync(replacement, file);
+    await expect(cache.snapshot("v", { semantic: { k: 20, minScore: 0 }, page: first.next })).rejects.toThrow("restart from the first page");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 }, 30_000);
