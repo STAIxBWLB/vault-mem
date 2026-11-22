@@ -1,10 +1,57 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exportSkills, installSkills, SKILL_NAMES, skillRoot } from "../src/skills-install.ts";
+import { exportSkills, installSkills, resolveHostSkillRoot, SKILL_NAMES, skillRoot } from "../src/skills-install.ts";
 
 function fixture() { const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-skills-"))); return { root, target: join(root, "skills") }; }
+test("a linked profile root is rechecked immediately before publication", () => {
+  const f = fixture();
+  try {
+    const home = join(f.root, "home"), profile = join(f.root, "profile"), target = join(home, ".codex", "skills"), foreign = join(f.root, "foreign");
+    mkdirSync(target, { recursive: true }); mkdirSync(profile); mkdirSync(foreign);
+    const link = join(profile, "skills"); symlinkSync(target, link);
+    const root = resolveHostSkillRoot("codex", { HOME: home, CODEX_HOME: profile })!;
+    let calls = 0;
+    const result = installSkills(root.root, "apply", undefined, undefined, undefined, () => {
+      if (++calls === 3) { unlinkSync(link); symlinkSync(foreign, link); }
+      root.recheck!();
+    });
+    expect(result.actions.every(item => item.change === "refused" && item.reason?.includes("link changed"))).toBe(true);
+    expect(result.actions[0]!.reason).toContain(foreign);
+    expect(SKILL_NAMES.every(name => !existsSync(join(target, name)) && !existsSync(join(foreign, name)))).toBe(true);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+test("a removed default root is not recreated after the profile link changes", () => {
+  const f = fixture();
+  try {
+    const home = join(f.root, "home"), profile = join(f.root, "profile"), target = join(home, ".codex", "skills"), foreign = join(f.root, "foreign");
+    mkdirSync(target, { recursive: true }); mkdirSync(profile); mkdirSync(foreign);
+    const link = join(profile, "skills"); symlinkSync(target, link);
+    const root = resolveHostSkillRoot("codex", { HOME: home, CODEX_HOME: profile })!;
+    rmSync(target, { recursive: true }); unlinkSync(link); symlinkSync(foreign, link);
+    expect(() => installSkills(root.root, "apply", undefined, undefined, undefined, root.recheck)).toThrow("link changed");
+    expect(existsSync(target)).toBe(false);
+    expect(SKILL_NAMES.every(name => !existsSync(join(foreign, name)))).toBe(true);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+test("a linked profile root is rechecked before undo", () => {
+  const f = fixture();
+  try {
+    const home = join(f.root, "home"), profile = join(f.root, "profile"), target = join(home, ".codex", "skills"), foreign = join(f.root, "foreign");
+    mkdirSync(target, { recursive: true }); mkdirSync(profile); mkdirSync(foreign);
+    const link = join(profile, "skills"); symlinkSync(target, link);
+    const root = resolveHostSkillRoot("codex", { HOME: home, CODEX_HOME: profile })!;
+    expect(installSkills(root.root, "apply", undefined, undefined, undefined, root.recheck).actions.every(item => item.change === "install")).toBe(true);
+    let calls = 0;
+    const result = installSkills(root.root, "undo", undefined, undefined, undefined, () => {
+      if (++calls === 2) { unlinkSync(link); symlinkSync(foreign, link); }
+      root.recheck!();
+    });
+    expect(result.actions.every(item => item.change === "refused" && item.reason?.includes("link changed"))).toBe(true);
+    expect(SKILL_NAMES.every(name => existsSync(join(target, name)) && !existsSync(join(foreign, name)))).toBe(true);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
 test("install, idempotent apply, upgrade and undo respect markers", () => {
   const f = fixture();
   try {
