@@ -107,11 +107,17 @@ test("assertions panel reads through vmem_assertions and reports invalid input",
 test("assertion coverage gaps become warnings naming the next step", () => {
   const base = { journal: "present" as const, beforeFirstEntry: false, untrusted: [], unsupported: [], tornTail: [], partialBatch: [], purged: 0, unsynced: 0 };
   expect(assertionCoverageWarnings(base)).toEqual([]);
-  const warnings = assertionCoverageWarnings({ ...base, untrusted: [{ segment: "s1", seq: 4, reason: "hash mismatch" }], unsupported: [{ segment: "s1", seq: 5 }], tornTail: ["s2"], partialBatch: [{ segment: "s1", seq: 6 }], purged: 2, unsynced: 3, indexIssue: "assertion index could not be read or verified; check VMEM_HOME/indexes and retry" });
+  const warnings = assertionCoverageWarnings({ ...base, untrusted: [{ segment: "s1", seq: 4, failedSeq: 4, entries: 1, reason: "hash mismatch" }], unsupported: [{ segment: "s1", seq: 5, failedSeq: 5, entries: 1 }], tornTail: ["s2"], partialBatch: [{ segment: "s1", seq: 6, entries: 1, size: 2 }], purged: 2, unsynced: 3, indexIssue: "assertion index could not be read or verified; check VMEM_HOME/indexes and retry" });
   expect(warnings.map(w => w.tone)).toEqual(["err", "warn", "warn", "warn", "neutral", "warn", "warn"]);
-  expect(warnings[0]!.message).toBe("1 journal entry is untrusted and left out (s1#4: hash mismatch); run `vmem assertions <vault> --history --json` and inspect the journal segments");
+  expect(warnings[0]!.message).toBe("1 journal entry is untrusted and left out (s1#4, failed #4, 1 left out: hash mismatch); run `vmem assertions <vault> --history --json` and inspect the journal segments");
   expect(warnings[5]!.message).toContain("run `vmem sync`");
   expect(assertionCoverageWarnings({ ...base, unsynced: null }).map(w => w.tone)).toEqual(["neutral"]);
+  const many = assertionCoverageWarnings({ ...base,
+    untrusted: [{ segment: "a", seq: 2, failedSeq: 10, entries: 60, reason: "hash mismatch" }, { segment: "b", seq: 4, failedSeq: 4, entries: 2, reason: "invalid JSON" }],
+    partialBatch: [{ segment: "a", seq: 2, entries: 17, size: 30 }, { segment: "b", seq: 32, entries: 3, size: 10 }] });
+  expect(many[0]!.message).toContain("62 journal entries are untrusted");
+  expect(many[0]!.message).toContain("a#2, failed #10, 60 left out");
+  expect(many.slice(1).map(w => w.message)).toEqual(["batch a:2 has 17 of 30 entries; all 17 are left out; resubmit the batch", "batch b:32 has 3 of 10 entries; all 3 are left out; resubmit the batch"]);
 });
 
 test("proposal action input refusals name the next step", async () => {

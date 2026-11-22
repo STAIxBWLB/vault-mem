@@ -112,7 +112,7 @@ test("a newer segment schema reports unsupported and is never evaluated", () => 
   const file = join(f.vault, "assertions", `${receipt.segment}.jsonl`), original = readFileSync(file, "utf8");
   writeFileSync(file, original.replace('"v":1', '"v":2'));
   const result = readAssertions(f.home, { vault: "test" }, { env: f.env });
-  expect(result.coverage.unsupported).toEqual([{ segment: receipt.segment!, seq: 1 }]);
+  expect(result.coverage.unsupported).toEqual([{ segment: receipt.segment!, seq: 1, failedSeq: 1, entries: 1 }]);
   expect(result.items).toEqual([]);
 });
 

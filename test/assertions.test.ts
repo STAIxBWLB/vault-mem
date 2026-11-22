@@ -268,7 +268,7 @@ test("T7 recovery: torn tail and partial batch are ignored, then truncated on th
   const full = readFileSync(path, "utf8"), cut = full.indexOf("\n", size) + 1;
   writeFileSync(path, full.slice(0, cut)); writeFileSync(writer, record);
   answer = evaluateAssertions(f.journal(), {});
-  expect(answer.coverage.partialBatch).toEqual([{ segment: file!.slice(0, 16), seq: 4 }]);
+  expect(answer.coverage.partialBatch).toEqual([{ segment: file!.slice(0, 16), seq: 4, entries: 1, size: 2 }]);
   expect(answer.items.map(item => item.value)).toEqual(["a", "b"]);
   const again = ok(f.append([{ op: "assert", subject: "s:t", relation: "r", value: "e", kind: "state", from: "2026", to: "open", source: ["mem:e"] }], "2026-01-04T00:00:00Z"));
   expect(again.recovery[0]).toMatch(/partial batch/);
@@ -470,7 +470,7 @@ test("T7: a payload under a purged marker, a malformed marker and a foreign pare
   forgedRow.payload.value = "FORGED"; forgedRow.purged = purge;
   writeFileSync(forgedSegment.file, [...forgedSegment.lines.slice(0, 2), canonical(forgedRow), ...forgedSegment.lines.slice(3)].join("\n") + "\n");
   const forgedAnswer = evaluateAssertions(forged.journal(), { history: true });
-  expect(forgedAnswer.coverage.untrusted).toEqual([{ segment: forgedRow.seg, seq: 3, reason: "a purged entry still carries a payload" }]);
+  expect(forgedAnswer.coverage.untrusted).toEqual([{ segment: forgedRow.seg, seq: 3, failedSeq: 3, entries: 1, reason: "a purged entry still carries a payload" }]);
   expect(forgedAnswer.items.some(item => item.value === "FORGED")).toBe(false);
   // 2. A well-formed purge drops only the payload, verifies with the same chain, and is counted as purged.
   const purged = fixture(), purgedSegment = three(purged), purgedRow = JSON.parse(purgedSegment.lines[2]!) as Record<string, any>;
@@ -487,7 +487,7 @@ test("T7: a payload under a purged marker, a malformed marker and a foreign pare
     const malformed = fixture(), segment = three(malformed), row = JSON.parse(segment.lines[2]!) as Record<string, any>;
     delete row.payload; row.purged = marker;
     writeFileSync(segment.file, [...segment.lines.slice(0, 2), canonical(row)].join("\n") + "\n");
-    expect([name, evaluateAssertions(malformed.journal(), {}).coverage.untrusted]).toEqual([name, [{ segment: row.seg, seq: 3, reason: "invalid purged" }]]);
+    expect([name, evaluateAssertions(malformed.journal(), {}).coverage.untrusted]).toEqual([name, [{ segment: row.seg, seq: 3, failedSeq: 3, entries: 1, reason: "invalid purged" }]]);
   }
   // 4. A revision naming a parent that belongs to another assertion is untrusted: the named assertion keeps its own
   // head, and the dropped revision leaves its real parent as the head it already was.
@@ -499,7 +499,7 @@ test("T7: a payload under a purged marker, a malformed marker and a foreign pare
   revise.payload.id = other; revise.payload_sha256 = sha(canonical(revise.payload));
   writeFileSync(segment.file, [...segment.lines.slice(0, -1), rehash(revise)].join("\n") + "\n");
   const answer = evaluateAssertions(foreign.journal(), { history: true });
-  expect(answer.coverage.untrusted).toEqual([{ segment: revise.seg, seq: revise.seq, reason: "a parent belongs to another assertion" }]);
+  expect(answer.coverage.untrusted).toEqual([{ segment: revise.seg, seq: revise.seq, failedSeq: revise.seq, entries: 1, reason: "a parent belongs to another assertion" }]);
   expect(pick(answer, first).map(item => item.value)).toEqual(["a"]); expect(pick(answer, other).map(item => item.value)).toEqual(["b"]);
 });
 
@@ -611,4 +611,45 @@ test("purged assert and revision remain identifiable through their verified pare
     expect(result.items).toEqual([]); expect(result.coverage.purged).toBe(1);
   }
   expect(readAssertions(f.home, { vault: f.id, at: "2026-03-01" }, { env: f.env }).items).toEqual([]);
+});
+
+test("damaged batches report left-out entries and consistent CLI coverage", async () => {
+  const f = fixture();
+  ok(f.append([{ op: "declare", subject: "s:alpha" }], "2026-01-01T00:00:00Z"));
+  const ops = Array.from({ length: 30 }, (_, i) => ({ op: "assert", subject: "s:alpha", relation: `r${i}`, value: "synthetic", kind: "state", from: "2026", to: "open", source: ["mem:x"] }));
+  ok(f.append(ops, "2026-01-02T00:00:00Z")); ok(f.append(ops, "2026-01-03T00:00:00Z"));
+  const { file, lines } = segmentOf(f), segment = file.split("/").at(-1)!.slice(0, 16);
+  expect(lines).toHaveLength(61);
+  const { readAssertions } = await import("../src/assertion-read.ts");
+  const { assertionCoverageWarnings } = await import("../src/assertion-coverage.ts");
+  const damaged = [...lines]; damaged[9] = damaged[9]!.replace('"recorded_at":"2026-01-02T00:00:00Z"', '"recorded_at":"2026-01-04T00:00:00Z"');
+  writeFileSync(file, damaged.join("\n") + "\n");
+  for (const history of [false, true]) {
+    const result = readAssertions(f.home, { vault: f.id, history }, { env: f.env });
+    expect(result.items).toHaveLength(0);
+    expect(result.coverage.untrusted).toEqual([{ segment, seq: 2, failedSeq: 10, entries: 60, reason: "hash mismatch" }]);
+    const warning = assertionCoverageWarnings(result.coverage)[0]!.message;
+    expect(warning).toContain(`${segment}#2, failed #10, 60 left out`);
+    expect(run(["assertions", f.id, ...(history ? ["--history"] : [])], f.env).text).toContain(warning);
+    expect(JSON.parse(run(["assertions", f.id, ...(history ? ["--history"] : []), "--json"], f.env).text).coverage.untrusted).toEqual(result.coverage.untrusted);
+  }
+  for (const [length, seq, kept] of [[18, 2, 0], [48, 32, 30]] as const) {
+    writeFileSync(file, lines.slice(0, length).join("\n") + "\n");
+    const result = readAssertions(f.home, { vault: f.id }, { env: f.env });
+    expect(result.items).toHaveLength(kept);
+    expect(result.coverage.partialBatch).toEqual([{ segment, seq, entries: 17, size: 30 }]);
+    const warning = `batch ${segment}:${seq} has 17 of 30 entries; all 17 are left out; resubmit the batch`;
+    expect(assertionCoverageWarnings(result.coverage).map(w => w.message)).toContain(warning);
+    expect(run(["assertions", f.id], f.env).text).toContain(warning);
+  }
+  writeFileSync(file, damaged.join("\n") + "\n" + '{"torn":');
+  const torn = readAssertions(f.home, { vault: f.id }, { env: f.env });
+  expect(torn.coverage.untrusted[0]!.entries).toBe(60);
+  expect(torn.coverage.tornTail).toEqual([segment]);
+  expect(run(["assertions", f.id], f.env).text).toContain("torn journal tail");
+  const unsupported = [...lines]; unsupported[9] = unsupported[9]!.replace('"v":1', '"v":2');
+  writeFileSync(file, unsupported.join("\n") + "\n");
+  const newer = readAssertions(f.home, { vault: f.id }, { env: f.env });
+  expect(newer.coverage.unsupported).toEqual([{ segment, seq: 2, failedSeq: 10, entries: 60 }]);
+  expect(run(["assertions", f.id], f.env).text).toContain(`${segment}#2, failed #10, 60 left out`);
 });

@@ -63,9 +63,9 @@ export interface SegmentReport {
   verifiedBytes: number;
   size: number;
   tornTail: boolean;
-  partialBatch: { seq: number } | null;
-  untrusted: { seq: number; reason: string } | null;
-  unsupported: { seq: number; version: unknown } | null;
+  partialBatch: { seq: number; entries: number; size: number } | null;
+  untrusted: { seq: number; failedSeq: number; entries: number; reason: string } | null;
+  unsupported: { seq: number; failedSeq: number; entries: number; version: unknown } | null;
 }
 export interface VerifiedJournal { present: boolean; segments: SegmentReport[]; ignored: string[]; bytes: number; entries: number }
 
@@ -86,8 +86,8 @@ export interface AssertionAnswerSet {
   pin: { segment: string; seq: number; hash: string }[];
   coverage: {
     journal: "present" | "absent"; beforeFirstEntry: boolean;
-    untrusted: { segment: string; seq: number; reason: string }[]; unsupported: { segment: string; seq: number }[];
-    tornTail: string[]; partialBatch: { segment: string; seq: number }[]; purged: number;
+    untrusted: { segment: string; seq: number; failedSeq: number; entries: number; reason: string }[]; unsupported: { segment: string; seq: number; failedSeq: number; entries: number }[];
+    tornTail: string[]; partialBatch: { segment: string; seq: number; entries: number; size: number }[]; purged: number;
   };
   items: AssertionItem[];
   overlaps: { subject: string; relation: string; ids: string[]; possible?: true }[];
@@ -218,12 +218,12 @@ export function verifySegment(segment: string, bytes: Buffer): SegmentReport {
     const newline = bytes.indexOf(10, offset);
     if (newline < 0) { report.tornTail = true; break; }
     const seq = report.entries.length + pending.length + 1, raw = bytes.subarray(offset, newline);
-    const fail = (reason: string) => { report.untrusted = { seq, reason }; };
+    const fail = (reason: string) => { report.untrusted = { seq, failedSeq: seq, entries: 0, reason }; };
     let entry: JournalEntry;
     try {
       const text = decoder.decode(raw), parsed = JSON.parse(text) as Record<string, unknown>;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) { fail("not an object"); break; }
-      if (parsed.v !== ASSERTION_SCHEMA_VERSION) { report.unsupported = { seq, version: parsed.v }; break; }
+      if (parsed.v !== ASSERTION_SCHEMA_VERSION) { report.unsupported = { seq, failedSeq: seq, entries: 0, version: parsed.v }; break; }
       if (canonical(parsed) !== text) { fail("not canonical JSON"); break; }
       const problem = shapeProblem(parsed);
       if (problem) { fail(problem); break; }
@@ -248,8 +248,15 @@ export function verifySegment(segment: string, bytes: Buffer): SegmentReport {
       report.entries.push(...pending.map(item => item.entry)); report.verifiedBytes = offset; pending = [];
     }
   }
-  if (pending.length && !report.untrusted && !report.unsupported) report.partialBatch = { seq: pending[0]!.entry.seq };
-  else if (pending.length && report.untrusted) report.untrusted = { seq: pending[0]!.entry.seq, reason: report.untrusted.reason };
+  if (pending.length && !report.untrusted && !report.unsupported) report.partialBatch = { seq: pending[0]!.entry.seq, entries: pending.length, size: pending[0]!.entry.batch.size };
+  if (report.untrusted || report.unsupported) {
+    let entries = 0;
+    for (let i = report.verifiedBytes; i < bytes.length; i++) if (bytes[i] === 10) entries++;
+    const failure = report.untrusted ?? report.unsupported!;
+    failure.entries = entries;
+    if (pending.length) failure.seq = pending[0]!.entry.seq;
+    if (bytes.length && bytes[bytes.length - 1] !== 10) report.tornTail = true;
+  }
   const tail = report.entries.at(-1);
   if (tail) report.tail = { seq: tail.seq, hash: tail.hash, recordedAt: tail.recorded_at };
   return report;
@@ -289,7 +296,7 @@ export function readJournal(vaultPath: string, denyPaths: readonly string[] = []
 
 /** `depth` is the longest parent chain below the entry, so a parent always sorts before its child. */
 interface Kept { entry: JournalEntry; effective: string; inverted: boolean; depth: number; assertionId?: string }
-interface Resolved { kept: Map<string, Kept>; untrusted: { segment: string; seq: number; reason: string }[] }
+interface Resolved { kept: Map<string, Kept>; untrusted: { segment: string; seq: number; failedSeq: number; entries: number; reason: string }[] }
 /** Steps 2: effective record times across segments; an entry whose parent is missing, untrusted or foreign is untrusted. */
 function resolveEntries(journal: VerifiedJournal): Resolved {
   const byHash = new Map<string, JournalEntry>();
@@ -321,7 +328,7 @@ function resolveEntries(journal: VerifiedJournal): Resolved {
   const kept = new Map<string, Kept>(), untrusted: Resolved["untrusted"] = [];
   for (const segment of journal.segments) for (const entry of segment.entries) {
     const result = resolve(entry);
-    if (typeof result === "string") untrusted.push({ segment: entry.seg, seq: entry.seq, reason: result });
+    if (typeof result === "string") untrusted.push({ segment: entry.seg, seq: entry.seq, failedSeq: entry.seq, entries: 1, reason: result });
     else kept.set(entry.hash, result);
   }
   return { kept, untrusted };
@@ -446,10 +453,10 @@ export function evaluateAssertions(journal: VerifiedJournal, query: AssertionQue
     coverage: {
       journal: journal.present ? "present" : "absent",
       beforeFirstEntry: !!asOf && all.length > 0 && kept.length === 0,
-      untrusted: [...journal.segments.filter(s => s.untrusted).map(s => ({ segment: s.segment, seq: s.untrusted!.seq, reason: s.untrusted!.reason })), ...resolved.untrusted],
-      unsupported: journal.segments.filter(s => s.unsupported).map(s => ({ segment: s.segment, seq: s.unsupported!.seq })),
+      untrusted: [...journal.segments.filter(s => s.untrusted).map(s => ({ segment: s.segment, ...s.untrusted! })), ...resolved.untrusted],
+      unsupported: journal.segments.filter(s => s.unsupported).map(s => ({ segment: s.segment, seq: s.unsupported!.seq, failedSeq: s.unsupported!.failedSeq, entries: s.unsupported!.entries })),
       tornTail: journal.segments.filter(s => s.tornTail).map(s => s.segment),
-      partialBatch: journal.segments.filter(s => s.partialBatch).map(s => ({ segment: s.segment, seq: s.partialBatch!.seq })),
+      partialBatch: journal.segments.filter(s => s.partialBatch).map(s => ({ segment: s.segment, ...s.partialBatch! })),
       purged,
     },
     items, overlaps,

@@ -405,6 +405,7 @@ A purged line keeps every hashed field, drops `payload` and adds `"purged": {"at
 ```
 
 - `unsynced` counts journal files with uncommitted changes when the vault is a Git repository, and is `null` otherwise. No other paths are read or reported.
+- `untrusted` records include the first excluded `seq`, the actual `failedSeq`, the number of newline-terminated `entries` left out and the reason. `unsupported` records include those sequence and count fields. `partialBatch` records give the batch first `seq`, present `entries` and declared `size`. A torn tail is reported separately.
 - Items are ordered by subject, relation, id and revision.
 - `--history` returns every revision and retraction with `recordedAt` and `replacedAt` (the `recorded_at` of the next revision or retraction, or null), plus `answer` when `at` is given.
 - `overlaps` is present only with `at`: groups of two or more assertion ids with the same subject and relation, different values, and an answer of `yes` or `unknown`. Each page includes only groups touching its items, with the ids on that page and `size` giving the total number of group members. Page the subject and relation query to collect the full membership. A group with any `unknown` member is marked `possible: true`.
@@ -414,7 +415,7 @@ A purged line keeps every hashed field, drops `payload` and adds `"purged": {"at
 
 ### Evaluation
 
-1. Verify each segment from seq 1: contiguous seq, `prev`, `hash`, `payload_sha256` unless purged, non-decreasing `recorded_at`, supported `v`. Stop the segment at the first failure and report `untrusted`, or `unsupported` for an unknown version, from that seq. Ignore a final line without LF (`tornTail`) and any batch with missing entries.
+1. Verify each segment from seq 1: contiguous seq, `prev`, `hash`, `payload_sha256` unless purged, non-decreasing `recorded_at`, supported `v`. Stop the segment at the first failure and report `untrusted`, or `unsupported` for an unknown version, from the first excluded entry of its batch. Ignore a final line without LF (`tornTail`) and any batch with missing entries.
 2. Compute each entry's effective record time: its `recorded_at`, raised to the latest effective record time of its `parents`. Flag a raised entry `clockInverted`. Parents are resolved across segments; a parent missing from every verified segment marks the entry `untrusted`.
 3. Keep entries whose effective record time is within the `as_of` cutoff, and order them by (effective record time, segment, seq).
 4. For each assertion id, find its heads among the kept entries: the entries no other kept entry names as a parent. One revision head is the current revision. Several heads are all returned with `revisionConflict`, each answered. A retraction head excludes the assertion only when it is the sole head. Drop retracted and purged assertions except in history.
