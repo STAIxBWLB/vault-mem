@@ -1,0 +1,1314 @@
+[
+  {
+    "file": "amem/seam.ts",
+    "message": "amem: invalid project key"
+  },
+  {
+    "file": "amem/seam.ts",
+    "message": "amem: no active project shard for ‹›"
+  },
+  {
+    "file": "analysis-commands.ts",
+    "message": "analysis: repeated option"
+  },
+  {
+    "file": "analysis-commands.ts",
+    "message": "analysis: unknown option ‹›"
+  },
+  {
+    "file": "analysis-commands.ts",
+    "message": "graph build: requires one vault id"
+  },
+  {
+    "file": "analysis-commands.ts",
+    "message": "graph explain: max hops 1..6"
+  },
+  {
+    "file": "analysis-commands.ts",
+    "message": "graph explain: requires <vault> <from> <to>"
+  },
+  {
+    "file": "analysis-commands.ts",
+    "message": "graph neighbors: hops 1..2, limit 1..500"
+  },
+  {
+    "file": "analysis-commands.ts",
+    "message": "graph path: max hops 1..6"
+  },
+  {
+    "file": "analysis-commands.ts",
+    "message": "graph path: requires <vault> <from> <to>"
+  },
+  {
+    "file": "analysis-commands.ts",
+    "message": "graph: use build <vault>, neighbors <vault> <stem>, path <vault> <from> <to> or explain <vault> <from> <to>"
+  },
+  {
+    "file": "analysis-commands.ts",
+    "message": "lint: requires one vault id"
+  },
+  {
+    "file": "analysis-commands.ts",
+    "message": "‹›: requires value"
+  },
+  {
+    "file": "analysis-commands.ts",
+    "message": "‹›: ‹› applies only to ‹›"
+  },
+  {
+    "file": "analysis-input.ts",
+    "message": "analysis: auxiliary input exceeds bound or is not plain"
+  },
+  {
+    "file": "analysis-input.ts",
+    "message": "analysis: input changed during read"
+  },
+  {
+    "file": "analysis-input.ts",
+    "message": "analysis: input path is denied"
+  },
+  {
+    "file": "analysis-input.ts",
+    "message": "analysis: invalid date"
+  },
+  {
+    "file": "analysis-input.ts",
+    "message": "analysis: linked input directory"
+  },
+  {
+    "file": "analysis-input.ts",
+    "message": "analysis: registry projects must be array"
+  },
+  {
+    "file": "analysis-input.ts",
+    "message": "analysis: report count exceeds bound"
+  },
+  {
+    "file": "analysis-input.ts",
+    "message": "analysis: reports directory must be plain"
+  },
+  {
+    "file": "analysis-input.ts",
+    "message": "analysis: reports exceed aggregate bound"
+  },
+  {
+    "file": "analysis-input.ts",
+    "message": "analysis: unknown vault id"
+  },
+  {
+    "file": "analysis-input.ts",
+    "message": "analysis: vault changed during snapshot"
+  },
+  {
+    "file": "analysis-reports.ts",
+    "message": "analysis: report changed during build"
+  },
+  {
+    "file": "analysis-reports.ts",
+    "message": "analysis: report changed during build"
+  },
+  {
+    "file": "analysis-reports.ts",
+    "message": "analysis: vault or policy changed during build"
+  },
+  {
+    "file": "analysis-reports.ts",
+    "message": "workspace is only supported for graph build"
+  },
+  {
+    "file": "analysis-yaml.ts",
+    "message": "analysis YAML: invalid anchor"
+  },
+  {
+    "file": "analysis-yaml.ts",
+    "message": "analysis YAML: invalid timestamp"
+  },
+  {
+    "file": "analysis-yaml.ts",
+    "message": "analysis YAML: invalid timestamp"
+  },
+  {
+    "file": "analysis-yaml.ts",
+    "message": "analysis YAML: invalid timestamp timezone"
+  },
+  {
+    "file": "analysis-yaml.ts",
+    "message": "analysis YAML: invalid token"
+  },
+  {
+    "file": "analysis-yaml.ts",
+    "message": "analysis YAML: merge source must be a mapping"
+  },
+  {
+    "file": "assert-command.ts",
+    "message": "assert: unknown or repeated option: ‹›"
+  },
+  {
+    "file": "assert-command.ts",
+    "message": "‹›: value required"
+  },
+  {
+    "file": "assertions-command.ts",
+    "message": "--limit: expected an integer from 1 to 100"
+  },
+  {
+    "file": "assertions-command.ts",
+    "message": "assertions exposure: unknown or repeated option: ‹›"
+  },
+  {
+    "file": "assertions-command.ts",
+    "message": "assertions purge: --confirm needs --fingerprint SHA from the preview"
+  },
+  {
+    "file": "assertions-command.ts",
+    "message": "assertions purge: unknown or repeated option: ‹›"
+  },
+  {
+    "file": "assertions-command.ts",
+    "message": "assertions: unknown or repeated option: ‹›"
+  },
+  {
+    "file": "assertions-command.ts",
+    "message": "‹›: value required"
+  },
+  {
+    "file": "assertions-command.ts",
+    "message": "‹›: value required"
+  },
+  {
+    "file": "assertions-command.ts",
+    "message": "‹›: value required"
+  },
+  {
+    "file": "assertions.ts",
+    "message": "assertion append did not publish"
+  },
+  {
+    "file": "assertions.ts",
+    "message": "registered vault root changed while acquiring the assertion lock"
+  },
+  {
+    "file": "cli.ts",
+    "message": "completion: requires bash, zsh or fish"
+  },
+  {
+    "file": "cli.ts",
+    "message": "manifest: unexpected arguments"
+  },
+  {
+    "file": "cli.ts",
+    "message": "recover: unexpected arguments"
+  },
+  {
+    "file": "cli.ts",
+    "message": "setup: requires one target and at most one of --apply/--undo"
+  },
+  {
+    "file": "cli.ts",
+    "message": "unknown or repeated option: ‹›"
+  },
+  {
+    "file": "cli.ts",
+    "message": "vaults add: requires id and absolute path"
+  },
+  {
+    "file": "cli.ts",
+    "message": "vaults list: unexpected arguments"
+  },
+  {
+    "file": "cli.ts",
+    "message": "vaults pii: --confirm requires --set"
+  },
+  {
+    "file": "cli.ts",
+    "message": "vaults pii: --set expects allow, deny or a JSON policy object"
+  },
+  {
+    "file": "cli.ts",
+    "message": "vaults pii: requires id"
+  },
+  {
+    "file": "cli.ts",
+    "message": "vaults remove: requires id"
+  },
+  {
+    "file": "cli.ts",
+    "message": "‹›: unexpected arguments"
+  },
+  {
+    "file": "cli.ts",
+    "message": "‹›: value required"
+  },
+  {
+    "file": "commands-table.ts",
+    "message": "completion: use bash, zsh or fish"
+  },
+  {
+    "file": "config.ts",
+    "message": "config.vaults: expected array"
+  },
+  {
+    "file": "config.ts",
+    "message": "config.version: expected a positive integer"
+  },
+  {
+    "file": "config.ts",
+    "message": "config: duplicate vault id"
+  },
+  {
+    "file": "config.ts",
+    "message": "config: duplicate vault path"
+  },
+  {
+    "file": "config.ts",
+    "message": "piiPatterns: invalid regular expression"
+  },
+  {
+    "file": "config.ts",
+    "message": "spec source.id: expected a lowercase letter followed by at most 31 lowercase letters, digits or hyphens"
+  },
+  {
+    "file": "config.ts",
+    "message": "spec source.pii: expected allow or deny"
+  },
+  {
+    "file": "config.ts",
+    "message": "spec source.write: expected mcp, cli or none"
+  },
+  {
+    "file": "config.ts",
+    "message": "vault.canonTables.keyColumn: expected a 1-based integer column from 1 to 64"
+  },
+  {
+    "file": "config.ts",
+    "message": "vault.canonTables.path: expected a literal flat notes/<name>.md path of at most 256 bytes without traversal, dot paths, backslashes or control characters"
+  },
+  {
+    "file": "config.ts",
+    "message": "vault.canonTables: expected at most 16 table entries"
+  },
+  {
+    "file": "config.ts",
+    "message": "vault.id: invalid id"
+  },
+  {
+    "file": "config.ts",
+    "message": "vault.kind: expected personal or org"
+  },
+  {
+    "file": "config.ts",
+    "message": "vault.pii.patterns.regex: exceeds 256 bytes"
+  },
+  {
+    "file": "config.ts",
+    "message": "vault.pii.patterns.‹›: invalid regular expression"
+  },
+  {
+    "file": "config.ts",
+    "message": "vault.pii.patterns: expected at most 32 patterns"
+  },
+  {
+    "file": "config.ts",
+    "message": "vault.pii.patterns: invalid or duplicate name ‹›"
+  },
+  {
+    "file": "config.ts",
+    "message": "vault.pii: expected allow, deny or a policy object"
+  },
+  {
+    "file": "config.ts",
+    "message": "vault.write: expected mcp, cli or none"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›.‹›: expected allow, warn or deny"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›: cannot read plain config file"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›: config too large"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›: expected absolute path"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›: expected allow, warn or deny"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›: expected at most 64 strings"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›: expected nonempty string without control characters"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›: expected object"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›: expected plain file <= ‹› bytes"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›: invalid JSON"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›: item exceeds 256 bytes"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›: unknown key ‹›"
+  },
+  {
+    "file": "config.ts",
+    "message": "‹›: ‹›"
+  },
+  {
+    "file": "enrichment-store.ts",
+    "message": "enrichment: sidecar was not published; ‹›"
+  },
+  {
+    "file": "enrichment-store.ts",
+    "message": "enrichment: ‹›"
+  },
+  {
+    "file": "enrichment.ts",
+    "message": "enrichment: ‹›"
+  },
+  {
+    "file": "frontmatter.ts",
+    "message": "frontmatter: changed values must be JSON-compatible"
+  },
+  {
+    "file": "frontmatter.ts",
+    "message": "frontmatter: changed values must be JSON-compatible"
+  },
+  {
+    "file": "frontmatter.ts",
+    "message": "frontmatter: duplicate key"
+  },
+  {
+    "file": "frontmatter.ts",
+    "message": "frontmatter: editing requires a block mapping"
+  },
+  {
+    "file": "frontmatter.ts",
+    "message": "frontmatter: editing requires a block mapping"
+  },
+  {
+    "file": "frontmatter.ts",
+    "message": "frontmatter: expected mapping"
+  },
+  {
+    "file": "frontmatter.ts",
+    "message": "frontmatter: expected string mapping key"
+  },
+  {
+    "file": "frontmatter.ts",
+    "message": "frontmatter: invalid YAML"
+  },
+  {
+    "file": "frontmatter.ts",
+    "message": "frontmatter: missing closing delimiter"
+  },
+  {
+    "file": "log-commands.ts",
+    "message": "log append: requires vault, TYPE, project, source and note"
+  },
+  {
+    "file": "log-commands.ts",
+    "message": "log limit: expected integer 1..200"
+  },
+  {
+    "file": "log-commands.ts",
+    "message": "log ‹›: requires vault‹›"
+  },
+  {
+    "file": "log-commands.ts",
+    "message": "log ‹›: unknown or repeated option: ‹›"
+  },
+  {
+    "file": "log-commands.ts",
+    "message": "log: option value required"
+  },
+  {
+    "file": "log-commands.ts",
+    "message": "log: use tail, grep or append"
+  },
+  {
+    "file": "log-filter.ts",
+    "message": "grep pattern exceeds 256 characters"
+  },
+  {
+    "file": "log-filter.ts",
+    "message": "incomplete grep escape"
+  },
+  {
+    "file": "log-filter.ts",
+    "message": "unsupported class escape"
+  },
+  {
+    "file": "log-filter.ts",
+    "message": "unsupported grep escape"
+  },
+  {
+    "file": "log-filter.ts",
+    "message": "unsupported grep syntax"
+  },
+  {
+    "file": "log-filter.ts",
+    "message": "unterminated grep class"
+  },
+  {
+    "file": "mcp.ts",
+    "message": "tool returned no result"
+  },
+  {
+    "file": "org-commands.ts",
+    "message": "promote: requires personal vault id, note and --to <org vault>"
+  },
+  {
+    "file": "org-commands.ts",
+    "message": "sync: requires vault id"
+  },
+  {
+    "file": "org-commands.ts",
+    "message": "‹›: unknown or repeated option ‹›"
+  },
+  {
+    "file": "org-commands.ts",
+    "message": "‹›: value required"
+  },
+  {
+    "file": "org-promote.ts",
+    "message": "source note: expected plain file <=256 KiB"
+  },
+  {
+    "file": "promote-command.ts",
+    "message": "--all-projects lists candidates only"
+  },
+  {
+    "file": "promote-command.ts",
+    "message": "V06: body path denied"
+  },
+  {
+    "file": "promote-command.ts",
+    "message": "body: exceeds 256 KiB"
+  },
+  {
+    "file": "promote-command.ts",
+    "message": "body: expected regular file <=256 KiB"
+  },
+  {
+    "file": "promote-command.ts",
+    "message": "body: invalid UTF-8"
+  },
+  {
+    "file": "promote-command.ts",
+    "message": "choose either --all-projects or --project"
+  },
+  {
+    "file": "promote-command.ts",
+    "message": "promote-from-amem: requires vault id and optional mem id"
+  },
+  {
+    "file": "promote-command.ts",
+    "message": "promote-from-amem: unknown or repeated option ‹›"
+  },
+  {
+    "file": "promote-command.ts",
+    "message": "promote-from-amem: unknown vault id"
+  },
+  {
+    "file": "promote-command.ts",
+    "message": "‹›: value required"
+  },
+  {
+    "file": "promote.ts",
+    "message": "limit: expected integer 1..200"
+  },
+  {
+    "file": "promote.ts",
+    "message": "promote: unknown vault id"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal list: --after needs a returned cursor"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal list: invalid --state"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal reconcile: --confirm and a preview fingerprint must be supplied together"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal reject: --reason must be nonempty and at most 4096 bytes"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal submit: --agent-label needs nonempty text without controls, at most 256 bytes"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal ‹›: --confirm and --fingerprint must be supplied together"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal ‹›: --fingerprint needs the SHA from a fresh preview"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal ‹›: expected a proposal id from proposal list"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal ‹›: expected ‹›"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal ‹›: repeated option ‹›"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal ‹›: unknown option ‹›"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal ‹›: ‹› requires a value"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal: use submit, list, show, apply, reject or reconcile"
+  },
+  {
+    "file": "proposal-commands.ts",
+    "message": "proposal: ‹› requires an integer ‹›..‹›"
+  },
+  {
+    "file": "proposal-provider.ts",
+    "message": "proposal: ‹›"
+  },
+  {
+    "file": "proposal-provider.ts",
+    "message": "proposal: ‹›"
+  },
+  {
+    "file": "proposal-provider.ts",
+    "message": "proposal: ‹›"
+  },
+  {
+    "file": "proposal-provider.ts",
+    "message": "proposal: ‹›"
+  },
+  {
+    "file": "proposals.ts",
+    "message": "proposal: input is not JSON serializable"
+  },
+  {
+    "file": "proposals.ts",
+    "message": "proposal: input is not JSON serializable"
+  },
+  {
+    "file": "read-commands.ts",
+    "message": "limit: expected integer 1..500"
+  },
+  {
+    "file": "read-commands.ts",
+    "message": "limit: expected integer 1..‹› for changes"
+  },
+  {
+    "file": "read-commands.ts",
+    "message": "limit: expected integer 1..‹› for history"
+  },
+  {
+    "file": "read-commands.ts",
+    "message": "max-bytes: expected integer 1..65536"
+  },
+  {
+    "file": "read-commands.ts",
+    "message": "offset: expected integer 0..‹›"
+  },
+  {
+    "file": "read-commands.ts",
+    "message": "section: expected one exact H2 heading <=1024 bytes"
+  },
+  {
+    "file": "read-commands.ts",
+    "message": "unknown read command"
+  },
+  {
+    "file": "read-commands.ts",
+    "message": "‹›: expected integer"
+  },
+  {
+    "file": "read-commands.ts",
+    "message": "‹›: requires vault id‹›"
+  },
+  {
+    "file": "read-commands.ts",
+    "message": "‹›: unknown or repeated option ‹›"
+  },
+  {
+    "file": "read-commands.ts",
+    "message": "‹›: unknown vault id"
+  },
+  {
+    "file": "read-commands.ts",
+    "message": "‹›: value required"
+  },
+  {
+    "file": "registry.ts",
+    "message": "changed"
+  },
+  {
+    "file": "registry.ts",
+    "message": "vault ‹›: path ‹› already registered"
+  },
+  {
+    "file": "registry.ts",
+    "message": "vault ‹›: path ‹› is unavailable"
+  },
+  {
+    "file": "registry.ts",
+    "message": "vault ‹›: ‹› must contain notes directory"
+  },
+  {
+    "file": "registry.ts",
+    "message": "vault ‹›: ‹› must not be a symlink"
+  },
+  {
+    "file": "registry.ts",
+    "message": "‹›: cannot create registry lock"
+  },
+  {
+    "file": "registry.ts",
+    "message": "‹›: cannot list registry home"
+  },
+  {
+    "file": "registry.ts",
+    "message": "‹›: cannot remove temporary file"
+  },
+  {
+    "file": "registry.ts",
+    "message": "‹›: redirected home cannot contain another home pointer"
+  },
+  {
+    "file": "registry.ts",
+    "message": "‹›: registry updated but directory fsync failed: ‹›"
+  },
+  {
+    "file": "registry.ts",
+    "message": "‹›: registry updated but ‹›"
+  },
+  {
+    "file": "registry.ts",
+    "message": "‹›: serialized config exceeds 64 KiB"
+  },
+  {
+    "file": "registry.ts",
+    "message": "‹›: unknown vault id ‹›"
+  },
+  {
+    "file": "registry.ts",
+    "message": "‹›: unknown vault id ‹›"
+  },
+  {
+    "file": "setup.ts",
+    "message": "invalid TOML escape"
+  },
+  {
+    "file": "setup.ts",
+    "message": "setup: --root must be an absolute path"
+  },
+  {
+    "file": "setup.ts",
+    "message": "setup: MCP command must be absolute"
+  },
+  {
+    "file": "setup.ts",
+    "message": "setup: ‹› has no bin/vmem.js"
+  },
+  {
+    "file": "setup.ts",
+    "message": "setup: ‹› has no package.json"
+  },
+  {
+    "file": "setup.ts",
+    "message": "setup: ‹› is not a vault-mem install root"
+  },
+  {
+    "file": "setup.ts",
+    "message": "setup: ‹› is not a vault-mem install root"
+  },
+  {
+    "file": "setup.ts",
+    "message": "setup: ‹› must be absolute"
+  },
+  {
+    "file": "setup.ts",
+    "message": "setup: ‹›: package.json is not readable (‹›)"
+  },
+  {
+    "file": "setup.ts",
+    "message": "setup: ‹›: package.json is not valid JSON"
+  },
+  {
+    "file": "setup.ts",
+    "message": "‹›: acon needs a real ‹›, not a link or other entry"
+  },
+  {
+    "file": "setup.ts",
+    "message": "‹›: exceeds ‹›"
+  },
+  {
+    "file": "setup.ts",
+    "message": "‹›: exceeds ‹›"
+  },
+  {
+    "file": "setup.ts",
+    "message": "‹›: expected a plain file (links are refused)"
+  },
+  {
+    "file": "setup.ts",
+    "message": "‹›: expected a plain file (links are refused)"
+  },
+  {
+    "file": "setup.ts",
+    "message": "‹›: expected an object"
+  },
+  {
+    "file": "setup.ts",
+    "message": "‹›: receipt belongs to ‹›, not ‹›"
+  },
+  {
+    "file": "setup.ts",
+    "message": "‹›: unreadable setup receipt"
+  },
+  {
+    "file": "skills-install.ts",
+    "message": "target changed"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: --days takes 1..3650"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: --days takes 1..3650"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: --min-novelty takes 0..1"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: --min-novelty takes 0..1"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: --min-size takes 1..10000"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: --min-size takes 1..10000"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: --skills is not a directory: ‹›"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: --vocab has no ‹›.yaml"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: choose either --all-projects or --project"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: choose either --all-projects or --project"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: input path is denied: ‹›"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: invalid YAML in ‹›"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: repeated option ‹›"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: requires one vault id"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: skill catalog exceeds ‹› files"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "skills mine: unknown option ‹›"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "‹›: expected a number"
+  },
+  {
+    "file": "skills-mine.ts",
+    "message": "‹›: value required"
+  },
+  {
+    "file": "source.ts",
+    "message": "source URL is invalid"
+  },
+  {
+    "file": "source.ts",
+    "message": "source URL must be one absolute URL"
+  },
+  {
+    "file": "source.ts",
+    "message": "source entries must be nonempty bounded strings without controls"
+  },
+  {
+    "file": "source.ts",
+    "message": "source memory id is invalid"
+  },
+  {
+    "file": "source.ts",
+    "message": "source must be a string or a nonempty list of at most 32 strings"
+  },
+  {
+    "file": "source.ts",
+    "message": "source paths must be workspace-relative"
+  },
+  {
+    "file": "source.ts",
+    "message": "source paths must be workspace-relative without traversal"
+  },
+  {
+    "file": "spec-git.ts",
+    "message": "spec source: git output exceeded ‹› bytes; ‹›"
+  },
+  {
+    "file": "spec-gitlinks.ts",
+    "message": "invalid worker receipt"
+  },
+  {
+    "file": "spec-write.ts",
+    "message": "directory ownership changed"
+  },
+  {
+    "file": "spec-write.ts",
+    "message": "error"
+  },
+  {
+    "file": "spec-write.ts",
+    "message": "‹›:‹›"
+  },
+  {
+    "file": "sync.ts",
+    "message": "git ‹› not started: the ‹› s budget is used up; ‹›"
+  },
+  {
+    "file": "sync.ts",
+    "message": "vault path is not the root of its git repository"
+  },
+  {
+    "file": "text-output.ts",
+    "message": "‹›, given once"
+  },
+  {
+    "file": "tidy.ts",
+    "message": "tidy map: enum field must be confidence, status or type"
+  },
+  {
+    "file": "tidy.ts",
+    "message": "tidy map: enum values must be strings <=200 bytes"
+  },
+  {
+    "file": "tidy.ts",
+    "message": "tidy map: exceeds 64 KiB"
+  },
+  {
+    "file": "tidy.ts",
+    "message": "tidy map: invalid JSON"
+  },
+  {
+    "file": "tidy.ts",
+    "message": "tidy map: invalid ‹› ‹›"
+  },
+  {
+    "file": "tidy.ts",
+    "message": "tidy map: keys.‹› must be \"drop\", \"keep\" or {rename}"
+  },
+  {
+    "file": "tidy.ts",
+    "message": "tidy map: more than 1000 entries"
+  },
+  {
+    "file": "tidy.ts",
+    "message": "tidy map: more than 1000 entries"
+  },
+  {
+    "file": "tidy.ts",
+    "message": "tidy map: unknown key ‹›"
+  },
+  {
+    "file": "tidy.ts",
+    "message": "tidy map: ‹› must be an object"
+  },
+  {
+    "file": "tidy.ts",
+    "message": "tidy: log changed since preview"
+  },
+  {
+    "file": "tidy.ts",
+    "message": "tidy: log must be a plain nonlinked file <=32 MiB"
+  },
+  {
+    "file": "ui/graph-snapshot.ts",
+    "message": "graph: exceeds ‹› edges"
+  },
+  {
+    "file": "ui/snapshot-cache.ts",
+    "message": "registry exceeds its revision read budget"
+  },
+  {
+    "file": "ui/snapshot-cache.ts",
+    "message": "revision source is too large"
+  },
+  {
+    "file": "vault-brief.ts",
+    "message": "brief: bytes must be an integer 256..4096"
+  },
+  {
+    "file": "vault-brief.ts",
+    "message": "brief: intent must contain 1..1024 UTF-8 bytes"
+  },
+  {
+    "file": "vault-brief.ts",
+    "message": "brief: paths must be at most 16 nonempty hints of at most 1024 bytes without control characters"
+  },
+  {
+    "file": "vault-graph.ts",
+    "message": "graph neighbors: hops must be 1 or 2"
+  },
+  {
+    "file": "vault-graph.ts",
+    "message": "graph neighbors: limit must be 1..500"
+  },
+  {
+    "file": "vault-graph.ts",
+    "message": "graph neighbors: unknown note"
+  },
+  {
+    "file": "vault-graph.ts",
+    "message": "graph path: max hops must be 1..6"
+  },
+  {
+    "file": "vault-graph.ts",
+    "message": "graph path: unknown note (from)"
+  },
+  {
+    "file": "vault-graph.ts",
+    "message": "graph path: unknown note (to)"
+  },
+  {
+    "file": "vault-graph.ts",
+    "message": "graph: exceeds ‹› edges"
+  },
+  {
+    "file": "vault-graph.ts",
+    "message": "graph: exceeds ‹› notes"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "analysis: cached snapshot exceeds bound"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "analysis: cached snapshot exceeds bound"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "analysis: snapshot exceeds bound"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "index: expected plain cache directory"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "index: expected plain database file"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "index: expected plain database file"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "index: linked cache directory"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "limit: expected integer 1..‹›"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "max-bytes: cannot fit the next UTF-8 character"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "max-bytes: expected integer 1..‹›"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "note: expected target <=1024 bytes"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "note: indexed source exceeds read bound"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "offset: exceeds requested note or section"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "offset: expected integer 0..‹›"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "offset: must be a UTF-8 character boundary"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "prefix: expected <=1024 bytes"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "promoted_from: expected mem:<32 hex>"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "search: query must contain 1..1024 bytes"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "section: expected one exact H2 heading <=1024 bytes"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "spec discovery ‹›: cannot ‹› Markdown (‹›); ‹›"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "vault ‹›, ‹›: invalid frontmatter"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "vault ‹›, ‹›: note exceeds ‹› bytes"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "vault ‹›: notes must be a plain directory"
+  },
+  {
+    "file": "vault-index.ts",
+    "message": "vault ‹›: path or notes directory changed"
+  },
+  {
+    "file": "vault-lint.ts",
+    "message": "analysis: invalid graph artifact"
+  },
+  {
+    "file": "vault-lint.ts",
+    "message": "analysis: invalid graph report date"
+  },
+  {
+    "file": "workspace-graph.ts",
+    "message": "workspace graph: exceeds 20000 nodes"
+  },
+  {
+    "file": "workspace-graph.ts",
+    "message": "workspace graph: exceeds 200000 edge candidates"
+  },
+  {
+    "file": "workspace-graph.ts",
+    "message": "workspace graph: node or edge bound exceeded"
+  },
+  {
+    "file": "workspace-input.ts",
+    "message": "workspace graph: directory entry count exceeds bound"
+  },
+  {
+    "file": "workspace-input.ts",
+    "message": "workspace graph: file count exceeds bound"
+  },
+  {
+    "file": "workspace-input.ts",
+    "message": "workspace graph: file count exceeds bound"
+  },
+  {
+    "file": "workspace-input.ts",
+    "message": "workspace graph: input changed during build"
+  },
+  {
+    "file": "workspace-input.ts",
+    "message": "workspace graph: input changed during snapshot"
+  },
+  {
+    "file": "workspace-input.ts",
+    "message": "workspace graph: input disappeared"
+  },
+  {
+    "file": "workspace-input.ts",
+    "message": "workspace graph: total bytes exceed bound"
+  },
+  {
+    "file": "workspace-input.ts",
+    "message": "workspace graph: vault requires a registry"
+  },
+  {
+    "file": "workspace-input.ts",
+    "message": "workspace graph: work root is denied"
+  },
+  {
+    "file": "workspace-input.ts",
+    "message": "workspace graph: work root must be a plain directory"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "--edits: expected a JSON array of {oldString, newString}"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "--source: expected a string or JSON array of strings"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "V06: input path denied"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "input: exceeds 256 KiB"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "input: expected regular file <=256 KiB"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "input: invalid UTF-8"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "patch: use --old/--new or --edits, not both"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "tidy: --dry-run and --confirm are exclusive"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "tidy: select at least one rule (--connections --escapes --enums --keys --sources --topics --secrets --log) or --all"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "tidy: use rule flags or --all, not both"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "unknown writer command"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "unknown writer command"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "‹›: expected object"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "‹›: invalid JSON"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "‹›: required"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "‹›: unknown or repeated option: ‹›"
+  },
+  {
+    "file": "write-commands.ts",
+    "message": "‹›: value required"
+  },
+  {
+    "file": "write-validation.ts",
+    "message": "budget"
+  },
+  {
+    "file": "write-validation.ts",
+    "message": "budget"
+  },
+  {
+    "file": "write-validation.ts",
+    "message": "cycle"
+  },
+  {
+    "file": "writer.ts",
+    "message": "external write detected before rollback"
+  },
+  {
+    "file": "writer.ts",
+    "message": "intent or receipt does not match"
+  },
+  {
+    "file": "writer.ts",
+    "message": "vault policy changed"
+  },
+  {
+    "file": "yaml-quoted.ts",
+    "message": "YAML: duplicate decoded mapping key"
+  },
+  {
+    "file": "yaml-quoted.ts",
+    "message": "YAML: incomplete quoted escape"
+  },
+  {
+    "file": "yaml-quoted.ts",
+    "message": "YAML: invalid quoted Unicode escape"
+  },
+  {
+    "file": "yaml-quoted.ts",
+    "message": "YAML: non-printable quoted character"
+  },
+  {
+    "file": "yaml-quoted.ts",
+    "message": "YAML: quoted Unicode escape outside range"
+  },
+  {
+    "file": "yaml-quoted.ts",
+    "message": "YAML: unknown quoted escape"
+  },
+  {
+    "file": "yaml-quoted.ts",
+    "message": "YAML: unterminated quoted scalar"
+  }
+]

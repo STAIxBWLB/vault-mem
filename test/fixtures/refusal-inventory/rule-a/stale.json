@@ -1,0 +1,5 @@
+[
+  { "file": "messages.ts", "message": "widget: listed in the baseline" },
+  { "file": "messages.ts", "message": "widget: ‹›" },
+  { "file": "messages.ts", "message": "widget: this message was reworded" }
+]
