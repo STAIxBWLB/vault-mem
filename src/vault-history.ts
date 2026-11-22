@@ -1,3 +1,4 @@
+import { paint } from "@staix/cli-output";
 /**
  * Read-only Git snapshot history for a registered vault (#235). Git commits are snapshot boundaries; this provider
  * never writes, checks out, fetches or reads commit messages/authors. Every object id is a full SHA-1/SHA-256 commit
@@ -11,7 +12,7 @@ import { join } from "node:path";
 import { isDenied, memoryGitArgv, memoryGitEnv } from "./platform.ts";
 import { VaultIndex, MAX_NOTE_BYTES, MAX_READ_BYTES, h2Sections, headingMetadata, readPage } from "./vault-index.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { blocks, clean, fields, heading, nextCommand, paint, plural, shellWord, status, stripTerminal, summary, table, tone, type TextOptions } from "./text-output.ts";
+import { blocks, clean, fields, heading, nextCommand, plural, shellWord, status, stripTerminal, summary, table, tone, type TextOptions } from "./text-output.ts";
 import type { VaultSpec } from "./config.ts";
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
@@ -643,7 +644,7 @@ export function revisionText(result: RevisionResult, o: TextOptions, c: { vault:
     ...(c.maxBytes !== undefined ? ["--max-bytes", String(c.maxBytes)] : []), "--offset", String(result.nextOffset)];
   const tail = [status("warn", result.transportLimited ? "truncated at the 48 KiB transport bound" : "truncated", o),
     ...(result.nextOffset !== undefined ? [nextCommand("next", command(...words), o)] : [])];
-  const headings = result.headings?.length ? ["H2 headings (read one with --section):", ...result.headings.map(name => `  ${clean(name)}`), ...(result.headingsTruncated ? [paint("  ... more headings", "muted", o)] : [])].join("\n") : undefined;
+  const headings = result.headings?.length ? ["H2 headings (read one with --section):", ...result.headings.map(name => `  ${clean(name)}`), ...(result.headingsTruncated ? [paint([{ text: "  ... more headings", role: "hint" }], o.color)] : [])].join("\n") : undefined;
   return blocks(head, body, tail.join("\n"), headings);
 }
 

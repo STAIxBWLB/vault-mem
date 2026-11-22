@@ -1,3 +1,4 @@
+import { markerCell } from "@staix/cli-output";
 import type { CanonRowMatch } from "./canon-tables.ts";
 /**
  * Text renderers for writes, two-step previews and promotion (#114): one result line, then changes, issues, the
@@ -10,13 +11,13 @@ import type { OrgPromoteResult } from "./org-promote.ts";
 import { STAGED_DESCRIPTION, type SyncResult } from "./sync.ts";
 import type { PromoteResult } from "./promote.ts";
 import { notePath } from "./write-operations.ts";
-import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paragraph, plural, shellWord, summary, table, type TextOptions, type Tone } from "./text-output.ts";
+import { blocks, clean, fields, heading, issueTable, nextCommand, paragraph, plural, shellWord, summary, table, type TextOptions, type Tone } from "./text-output.ts";
 
 /** The words the command was run with (`[command, ...args]`, no `--color`) and its positional arguments. */
 export interface WriteContext { argv: string[]; positional: string[] }
 type Candidates = { projects: { project: string; candidates: { id: string; project: string; kind: string; title: string | null; at: string }[] }[] };
 
-const line = (text: string, o: TextOptions, t?: Tone) => paragraph(t === "ok" || t === "warn" || t === "fail" ? `${marker(t, { ...o, color: false })} ${text}` : text, o, t);
+const line = (text: string, o: TextOptions, t?: Tone) => paragraph(t === "ok" || t === "warn" || t === "fail" ? `${markerCell(t, o.ascii === true)} ${text}` : text, o, t);
 const list = (label: string, items: readonly string[] | undefined) => items?.length ? [`${label}:`, ...items.map(item => `  - ${clean(item)}`)].join("\n") : undefined;
 const canonList = (rows: readonly CanonRowMatch[] | undefined) => list("canonical rows", rows?.map(row => `${row.path}:${row.line} ${row.key}: ${row.row}`));
 const short = (sha: string | null) => sha ? sha.slice(0, 12) : "-";

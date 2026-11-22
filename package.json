@@ -9,10 +9,11 @@
     "url": "git+https://github.com/STAIxBWLB/vault-mem.git"
   },
   "engines": {
-    "bun": ">=1.4.2"
+    "bun": ">=1.4.4"
   },
   "dependencies": {
-    "@staix/agent-mem": ">=0.33.0 <1.0.0"
+    "@staix/agent-mem": ">=0.33.0 <1.0.0",
+    "@staix/cli-output": "0.1.0"
   },
   "devDependencies": {
     "@staix/agent-console": "github:STAIxBWLB/agent-console#c978b31",

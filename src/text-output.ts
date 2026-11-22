@@ -4,39 +4,25 @@
  * through here, and color only adds emphasis: every renderer's text is complete without it.
  */
 import type { WriteIssue } from "./write-types.ts";
+import { asciiMarkers, cellWidth, markerCell, MARKERS, paint as paintSpans, Report, resolveColor, streamEnv, type MarkerName, type Role } from "@staix/cli-output";
 
 export type Tone = "ok" | "warn" | "fail" | "muted" | "info" | "accent" | "bold";
-export type Role = "header" | "section" | "key" | "value" | "success" | "warning" | "error" | "hint" | "accent";
-export type Marker = "ok" | "fail" | "warn" | "absent" | "unknown" | "pending" | "active" | "next";
+export type { Role } from "@staix/cli-output";
+export type Marker = MarkerName;
 export interface TextOptions { color: boolean; columns?: number; ascii?: boolean }
 export interface Cell { text: string; tone?: Tone }
 export type CellInput = string | number | boolean | null | undefined | Cell;
 
 /** Plain text, no wrapping: the default for library callers and tests. */
 export const PLAIN: TextOptions = { color: false };
-const ROLE_CODES: Record<Role, string> = { header: "1;34", section: "1;35", key: "34", value: "", success: "1;32", warning: "1;33", error: "1;31", hint: "90", accent: "36" };
+// Translate vmem's domain-specific cell tones pending STAIxBWLB/cli-output#7; role styling remains in cli-output.
 const TONE_ROLES: Record<Tone, Role> = { ok: "success", warn: "warning", fail: "error", muted: "hint", info: "accent", accent: "accent", bold: "header" };
-export const MARKERS: Record<Marker, { glyph: string; ascii: string; role: Role }> = {
-  ok: { glyph: "✓", ascii: "ok", role: "success" }, fail: { glyph: "✗", ascii: "x", role: "error" }, warn: { glyph: "⚠", ascii: "!", role: "warning" },
-  absent: { glyph: "-", ascii: "-", role: "hint" }, unknown: { glyph: "?", ascii: "?", role: "hint" }, pending: { glyph: "~", ascii: "~", role: "hint" },
-  active: { glyph: "*", ascii: "*", role: "success" }, next: { glyph: "→", ascii: "->", role: "accent" },
-};
-export function marker(name: Marker, o: TextOptions): string {
-  const item = MARKERS[name], text = o.ascii ? item.ascii : item.glyph;
-  return paint(text + " ".repeat(Math.max(0, 2 - width(text))), item.role, o);
-}
 /** A status marker with its state word or finding; padding remains visible without color. */
 export function status(name: "ok" | "warn" | "fail" | "unknown" | "pending" | "absent" | "active", text: string, o: TextOptions): string {
-  return `${marker(name, o)} ${paint(clean(text), MARKERS[name].role, o)}`;
-}
-/** Invocation errors use a marker only for a terminal, with color resolved for stderr. */
-export function errorLine(message: string, o: TextOptions, isTTY: boolean): string {
-  const text = `vmem: ${clean(message)}`;
-  return isTTY ? status("fail", text, o) : paint(text, "error", o);
+  return paintSpans([{ text: markerCell(name, o.ascii === true), role: MARKERS[name].role }, { text: " " }, { text: clean(text), role: MARKERS[name].role }], o.color);
 }
 export function summary(counts: { failed?: number; warnings?: number; ok?: number; unknown?: number }, o: TextOptions): string {
-  const entries = [["fail", counts.failed, "failed"], ["warn", counts.warnings, "warnings"], ["ok", counts.ok, "ok"], ["unknown", counts.unknown, "unknown"]] as const;
-  return entries.filter(([, count]) => count).map(([name, count, label]) => `${marker(name, o)} ${count} ${label}`).join("  ") || `${marker("ok", o)} 0 ok`;
+  return new Report(undefined, o.ascii === true).summary(counts).render(o.color).join("\n");
 }
 export class UsageError extends Error {}
 const COLOR_USAGE = "--color: expected --color=auto, --color=always or --color=never";
@@ -49,43 +35,33 @@ export function takeColorFlag(args: string[]): { args: string[]; color?: string 
   if (found.length > 1 || found[0] === "--color") throw new UsageError(`${COLOR_USAGE}, given once`);
   return { args: args.filter((arg, i) => i >= end || arg !== found[0]), color: found[0]!.slice("--color=".length) };
 }
-export function resolveColor(flag: string | undefined, env: { isTTY: boolean; TERM?: string; NO_COLOR?: string; FORCE_COLOR?: string; CLICOLOR_FORCE?: string; CLICOLOR?: string }): boolean {
-  if (flag === "always") return true;
-  if (flag === "never") return false;
-  if (flag !== undefined && flag !== "auto") throw new UsageError(COLOR_USAGE);
-  if (env.NO_COLOR) return false;
-  if ((env.FORCE_COLOR && env.FORCE_COLOR !== "0") || (env.CLICOLOR_FORCE && env.CLICOLOR_FORCE !== "0")) return true;
-  if (env.FORCE_COLOR === "0" || env.CLICOLOR === "0") return false;
-  return env.isTTY && env.TERM !== "dumb";
-}
-/** Terminal width on a TTY (at least 80), else `COLUMNS` when set, else no wrapping. */
+/** Terminal width selection is retained pending STAIxBWLB/cli-output#7. */
 export function outputWidth(env: { isTTY: boolean; columns?: number; COLUMNS?: string }): number | undefined {
   if (env.isTTY) return env.columns && Number.isFinite(env.columns) && env.columns > 0 ? env.columns : 80;
   return env.COLUMNS && /^[1-9][0-9]*$/.test(env.COLUMNS) ? Number(env.COLUMNS) : undefined;
 }
 /** Options for a stdout; the default is a non-terminal, so library calls and tests get the same text everywhere. */
 export function textOptions(flag: string | undefined, env: NodeJS.ProcessEnv = process.env, stdout: { isTTY?: boolean; columns?: number } = {}): TextOptions {
-  const isTTY = stdout.isTTY === true, color = resolveColor(flag, { ...env, isTTY });
+  const isTTY = stdout.isTTY === true, color = resolveColor(flag, streamEnv(isTTY, env), "vmem");
+  if (color instanceof Error) throw new UsageError(COLOR_USAGE);
   const columns = outputWidth({ isTTY, columns: stdout.columns, COLUMNS: env.COLUMNS });
-  return { color, ascii: !/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || ""), ...(columns !== undefined ? { columns } : {}) };
+  return { color, ascii: asciiMarkers(env), ...(columns !== undefined ? { columns } : {}) };
 }
 
 const cell = (value: CellInput): Cell => typeof value === "object" && value !== null ? value : { text: value === null || value === undefined ? "" : String(value) };
-/** Control characters (terminal escapes, tabs, newlines) never reach the terminal from data. */
+/** Single-line control-to-space handling is retained pending STAIxBWLB/cli-output#8. */
 export const clean = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
-export const width = (text: string) => Bun.stringWidth(text, { ambiguousIsNarrow: true });
+export const width = cellWidth;
 /** Note and spec bodies printed as is, minus terminal escape sequences (OSC, CSI, C1) and control characters other than tab and newline. */
+// Keep complete C1 sequence handling and CR normalization until STAIxBWLB/cli-output#8.
 export const stripTerminal = (text: string) => text
   .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\u001b\[[0-?]*[ -/]*[@-~]?|\u009b[0-?]*[ -/]*[@-~]?|\u001b[^[\]]?/g, "")
   .replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
-export function paint(text: string, tone: Tone | Role | undefined, o: TextOptions): string {
-  const role = tone && (TONE_ROLES[tone as Tone] ?? tone as Role), code = role && ROLE_CODES[role];
-  return o.color && code && text ? `\u001b[${code}m${text}\u001b[0m` : text;
-}
 export const tone = (text: CellInput, t: Tone): Cell => ({ text: cell(text).text, tone: t });
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** Word wrap by display width; a word longer than the width is split by grapheme. */
+// Preserve grapheme-safe, unbounded domain layouts pending STAIxBWLB/cli-output#7.
 export function wrap(text: string, columns: number | undefined, indent = ""): string[] {
   const flat = clean(text);
   if (columns === undefined) return [indent + flat];
@@ -109,6 +85,7 @@ const pad = (text: string, size: number) => text + " ".repeat(Math.max(0, size -
  * Table with uppercase headers and two-space gaps. When a width is known and the row is too wide, the last column
  * wraps under itself; with no width (pipes, tests) rows stay on one line.
  */
+// Keep vmem's role-bearing cells and layout pending STAIxBWLB/cli-output#7.
 export function table(headers: string[], rows: CellInput[][], o: TextOptions): string {
   return tableParts(headers, rows, o).join("\n");
 }
@@ -151,24 +128,25 @@ export function tableParts(headers: string[], rows: CellInput[][], o: TextOption
     const height = Math.max(...columns.map(parts => parts.length));
     return Array.from({ length: height }, (_, row) => cells.map((c, i) => {
       const part = columns[i]![row] ?? "";
-      return paint(i === last ? part : pad(part, sizes[i]!), bold ? "key" : c.tone, o);
+      return paintSpans([{ text: i === last ? part : pad(part, sizes[i]!), ...(bold ? { role: "key" as const } : c.tone ? { role: TONE_ROLES[c.tone] } : {}) }], o.color);
     }).join("  ").replace(/ +$/, "")).join("\n");
   };
   return [line(headers.map(text => ({ text })), true), ...data.map(row => line(row))];
 }
 /** `label  value` lines with aligned values, indented by two spaces. Empty values are left out. */
+// Keep vmem's key/value layout pending STAIxBWLB/cli-output#7.
 export function fields(pairs: [label: string, value: CellInput][], o: TextOptions, indent = "  "): string {
   const shown = pairs.map(([label, value]) => [label, cell(value)] as const).filter(([, value]) => value.text !== "");
   const size = Math.max(0, ...shown.map(([label]) => width(label)));
   const hang = indent + " ".repeat(size + 2);
   return shown.map(([label, value]) => {
     const lines = wrap(value.text, o.columns === undefined ? undefined : o.columns - width(hang));
-    return lines.map((text, i) => (i ? hang : indent + pad(label, size) + "  ") + paint(text, value.tone, o)).join("\n");
+    return lines.map((text, i) => (i ? hang : indent + pad(label, size) + "  ") + paintSpans([{ text, ...(value.tone ? { role: TONE_ROLES[value.tone] } : {}) }], o.color)).join("\n");
   }).join("\n");
 }
-export const heading = (text: string, o: TextOptions) => paint(clean(text), "bold", o);
+export const heading = (text: string, o: TextOptions) => paintSpans([{ text: clean(text), role: "header" }], o.color);
 /** Paragraph wrapped to the width, for hints and verdicts. */
-export const paragraph = (text: string, o: TextOptions, t?: Tone, indent = "") => wrap(text, o.columns, indent).map(line => paint(line, t, o)).join("\n");
+export const paragraph = (text: string, o: TextOptions, t?: Tone, indent = "") => wrap(text, o.columns, indent).map(line => paintSpans([{ text: line, ...(t ? { role: TONE_ROLES[t] } : {}) }], o.color)).join("\n");
 /** Joins the non-empty blocks with one blank line. */
 export const blocks = (...parts: (string | undefined | false)[]) => parts.filter((part): part is string => !!part).join("\n\n");
 export const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
@@ -177,9 +155,9 @@ export const plural = (count: number, one: string, many = `${one}s`) => `${count
 export function issueTable(issues: readonly WriteIssue[], o: TextOptions): string | undefined {
   if (!issues.length) return undefined;
   const sorted = [...issues].sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1));
-  return table(["LEVEL", "CODE", "PATH", "MESSAGE"], sorted.map(issue => [tone(`${marker(issue.severity === "error" ? "fail" : "warn", { ...o, color: false })} ${issue.severity}`, issue.severity === "error" ? "fail" : "warn"), issue.code, issue.path ?? "-", issue.message]), o);
+  return table(["LEVEL", "CODE", "PATH", "MESSAGE"], sorted.map(issue => [tone(`${markerCell(issue.severity === "error" ? "fail" : "warn", o.ascii === true)} ${issue.severity}`, issue.severity === "error" ? "fail" : "warn"), issue.code, issue.path ?? "-", issue.message]), o);
 }
 /** The command a person runs next, for example to confirm a preview or read the next page. */
-export const nextCommand = (label: string, command: string, o: TextOptions) => `${label}: ${paint(clean(command), "info", o)}`;
+export const nextCommand = (label: string, command: string, o: TextOptions) => `${label}: ${paintSpans([{ text: clean(command), role: "accent" }], o.color)}`;
 /** Quotes one shell word only when it needs it, so a printed command can be pasted. */
 export const shellWord = (word: string) => /^[\p{L}\p{N}_./:=@%+,-]+$/u.test(word) ? word : `'${word.replace(/'/g, `'"'"'`)}'`;
