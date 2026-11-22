@@ -95,7 +95,8 @@ test("G4/G5 CLI JSON and MCP share one implementation; reads write nothing; tool
   expect(JSON.parse(cli.text)).toEqual(await mcp.handlers.vmem_graph_explain!({ vault: "mine", from: "a", to: "c" }) as object);
   expect(JSON.parse(cli.text)).toEqual(explainGraphPath(analysisInput(home, "mine").snapshot, "a", "c"));
   const human = run(["graph", "explain", "mine", "a", "c"], env);
-  expect(human.text).toContain("hop 1: a -> b"); expect(human.text).toContain("reverse");
+  expect(human.text).toContain("Hop 1");
+  expect(human.text).toContain("From:      a"); expect(human.text).toContain("reverse");
   expect(readdirSync(vault, { recursive: true }).sort()).toEqual(before);
   expect(() => run(["graph", "explain", "mine", "a", "c", "--hops", "2"], env)).toThrow("applies only");
 });

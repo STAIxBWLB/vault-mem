@@ -92,8 +92,8 @@ test("usage and operation failures have distinct process exits", () => {
 
 test("evidence states use semantic markers and colors", () => {
   const report = { schemaVersion: 1 as const, vault: "v", note: { path: "notes/a.md", sha256: "abc" }, truncated: false as const, evidence: [{ index: 0, source: "notes/b.md", kind: "path" as const, expectedSha256: "abc", status: "verified" as const }] };
-  expect(evidenceText(report, plain)).toContain("ok verified");
+  expect(evidenceText(report, plain)).toContain("ok 0: verified");
   const colored = evidenceText(report, color);
-  expect(stripTerminal(colored)).toContain("ok verified");
+  expect(stripTerminal(colored)).toContain("ok 0: verified");
   expect([...colored.matchAll(/\[([0-9;]+)m/g)].map(match => match[1])).toContain("1;32");
 });

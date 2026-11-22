@@ -221,9 +221,13 @@ test("#165 part 5: the note-to-source ratio reads cited workspace files only, sk
   expect(tool.ratio).toEqual(expected.ratio);
   expect({ size: printed.size, ratio: printed.ratio }).toEqual(expected);
   const text = run(["stats", "mine"], { VMEM_HOME: f.home }).text;
-  expect(text).toContain(`Note size\n  total  ${stats.size.total.bytes} bytes`);
-  expect(text).toContain("Note-to-source ratio\n  notes    2 notes\n  sources  2 files");
-  expect(text).toContain("  over 1   1 note\n  skipped  6 source references, 2 not a file\n  largest  small.md 2.65; big.md 0.027");
+  expect(text).toContain(`Bytes:  ${stats.size.total.bytes}`);
+  expect(text).toContain("Note-to-source ratio");
+  expect(text).toMatch(/Notes:\s+2/);
+  expect(text).toMatch(/Sources:\s+2/);
+  expect(text).toMatch(/Skipped references:\s+6/);
+  expect(text).toMatch(/Not a file:\s+2/);
+  expect(text).toContain("small.md: 2.65");
   expect(tree(f.dir)).toEqual(before);
 });
 
@@ -232,7 +236,9 @@ test("#165 part 5: without a registered workspace the ratio reads nothing and sa
   writeFileSync(join(f.notes, "one.md"), cited('["src/notes.txt"]'));
   const stats = vaultStats(f.home, "mine", { now });
   expect(stats.ratio).toEqual({ notes: 0, sources: 0, skipped: 1, skippedNonFile: 0, emptySourceNotes: 0, truncatedNotes: 0, median: null, p90: null, overOne: 0, largest: [] });
-  expect(run(["stats", "mine"], { VMEM_HOME: f.home }).text).toContain("no note cites a readable workspace file; 1 source reference skipped");
+  const text = run(["stats", "mine"], { VMEM_HOME: f.home }).text;
+  expect(text).toContain("no note cites a readable workspace file");
+  expect(text).toMatch(/Skipped references:\s+1/);
 });
 
 test("#82 fix: a source counts at its own byte size, not at the size of its decoded text", () => {
@@ -304,7 +310,8 @@ test("#184 fix: a note whose only readable source is empty is counted apart, nev
   expect({ notes: ratio.notes, sources: ratio.sources, skipped: ratio.skipped, emptySourceNotes: ratio.emptySourceNotes })
     .toEqual({ notes: 0, sources: 1, skipped: 0, emptySourceNotes: 1 });
   const text = run(["stats", "mine"], { VMEM_HOME: f.home }).text;
-  expect(text).toContain("no cited source had a nonzero size; 1 note with only empty sources");
+  expect(text).toContain("no cited source had a nonzero size");
+  expect(text).toMatch(/Empty source notes:\s+1/);
   expect(text).not.toContain("source reference skipped");
 });
 
@@ -322,8 +329,8 @@ test("#184 fix: notes with empty sources and skipped references are counted in t
   expect({ notes: ratio.notes, sources: ratio.sources, skipped: ratio.skipped, emptySourceNotes: ratio.emptySourceNotes })
     .toEqual({ notes: 1, sources: 2, skipped: 1, emptySourceNotes: 1 });
   const text = run(["stats", "mine"], { VMEM_HOME: f.home }).text;
-  expect(text).toContain("skipped  1 source reference\n");
-  expect(text).toContain("empty    1 note with only empty sources");
+  expect(text).toMatch(/Skipped references:\s+1/);
+  expect(text).toMatch(/Empty source notes:\s+1/);
 });
 
 test("#82 fix: sourced notes past the note cap are counted, in the index, the ratio and the text output", () => {
@@ -342,5 +349,5 @@ test("#82 fix: sourced notes past the note cap are counted, in the index, the ra
   const stats = vaultStats(f.home, "mine", { now: new Date(2026, 10, 4, 12, 0) }), options = textOptions(undefined);
   expect(stats.ratio.truncatedNotes).toBe(0);
   expect(renderStats(stats, options)).not.toContain("past the 10000-note cap");
-  expect(renderStats({ ...stats, ratio: { ...stats.ratio, truncatedNotes: 7 } }, options)).toContain("truncated  7 notes past the 10000-note cap");
+  expect(renderStats({ ...stats, ratio: { ...stats.ratio, truncatedNotes: 7 } }, options)).toContain("7 notes past the 10000-note cap");
 });

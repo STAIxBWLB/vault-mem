@@ -174,7 +174,7 @@ test("#165 AC3 fix: a NUL dead link is reported by links and both MCP tools, not
   expect(run(["links", "demo", "hub"], f.env).text).toContain("suggested bad.md");
   const lint = run(["lint", "demo"], f.env).text;
   expect(lint).toContain("suggested `bad.md`");
-  expect(lint).toContain("SUMMARY errors=");
+  expect(lint).toContain(" failed");
   const server = createVaultMcp(f.home, { VMEM_HOME: f.home });
   const mcp = await server.handlers.vmem_links!({ vault: "demo", path: "hub" }) as { dead: { target: string; suggested: { path: string } | null }[] };
   expect(mcp.dead.find(link => link.target === "bad\u0000target")!.suggested).toMatchObject({ path: "bad.md" });

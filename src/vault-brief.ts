@@ -1,10 +1,11 @@
 import { join } from "node:path";
+import { Report } from "@staix/cli-output";
 import { isDeepStrictEqual } from "node:util";
 import { unenforceablePii, type VaultSpec } from "./config.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry } from "./registry.ts";
 import { VaultIndex, type BriefPointer } from "./vault-index.ts";
-import { UsageError } from "./text-output.ts";
+import { PLAIN, UsageError, type TextOptions } from "./text-output.ts";
 import { screenContent, screenMetadata } from "./write-validation.ts";
 
 export interface VaultBrief { vault: string; lines: string[]; omitted: number; bytes: number }
@@ -71,7 +72,20 @@ export function vaultBrief(home: string, request: BriefRequest, expectedVault?: 
   } finally { index.close(); }
 }
 
-export function runBriefCommand(args: string[], home: string): { text: string; code: number } {
+export function renderBrief(result: VaultBrief, options: TextOptions, maxBytes: number): string {
+  let count = result.lines.length;
+  while (true) {
+    const out = new Report(options.columns, options.ascii).header("vmem", "brief").section("Pointers");
+    for (const line of result.lines.slice(0, count)) out.bullet("absent", line);
+    const omitted = result.omitted + result.lines.length - count;
+    if (omitted) out.note(`${omitted} matches omitted`);
+    const text = out.render(options.color).join("\n");
+    if (Buffer.byteLength(text) + 1 <= maxBytes || count === 0) return text;
+    count--;
+  }
+}
+
+export function runBriefCommand(args: string[], home: string, options: TextOptions = PLAIN): { text: string; code: number } {
   const paths: string[] = [], positional: string[] = []; let intent: string | undefined, bytes: number | undefined, json = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
@@ -90,5 +104,5 @@ export function runBriefCommand(args: string[], home: string): { text: string; c
   if (bytes !== undefined && (!Number.isSafeInteger(bytes) || bytes < 256 || bytes > 4096)) throw new UsageError("brief: bytes must be an integer 256..4096");
   if (paths.length > 16 || paths.some(p => !p.trim() || Buffer.byteLength(p) > 1024 || /\p{Cc}/u.test(p))) throw new UsageError("brief: paths must be at most 16 nonempty hints of at most 1024 bytes without control characters");
   const result = vaultBrief(home, { vault: positional[0]!, intent, paths, bytes });
-  return { text: json ? JSON.stringify(result) : briefText(result), code: 0 };
+  return { text: json ? JSON.stringify(result) : renderBrief(result, options, bytes ?? 1024), code: 0 };
 }

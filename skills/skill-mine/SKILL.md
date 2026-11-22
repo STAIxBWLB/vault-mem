@@ -31,10 +31,10 @@ vmem skills mine <vault> --days 30 \
 
 - MCP만 있으면 `vmem_skills_mine`에 `vault`, `days`, `vocab`, `skills`를 전달한다. amem 데이터가 없으면 이용 가능한 vault 노트로 실행하고 누락된 입력을 보고한다.
 - 입력: amem curated(decision·finding·contract·fail), amem capture(사용자 프롬프트·observation·summary), vault 노트(person·moc·reference 제외). 기간은 `--days`(기본 30), 프로젝트는 기본 전체이고 `--project <key>`로 좁힌다.
-- 호스트가 `UserPromptSubmit`으로 주입한 합성 프롬프트(`<task-notification>`, `<channel `, `<agent-message `로 시작)는 사람 프롬프트가 아니므로 제외되고 리포트 `dropped:` 줄의 `synthetic N`으로 집계된다.
-- 상한(20,000건·총 64 MiB)을 넘으면 실패하지 않고 최신 레코드만 남긴다. 리포트 머리의 `over cap:` 줄이 남긴 건수와 제외한 건수를 알려 준다. 그 줄이 보이면 `--days`를 줄이거나 `--project <key>`로 프로젝트별로 나눠 다시 실행한다.
-- 표준출력이 리포트 본문(markdown)이다. `--json`은 후보·점수·출처별 건수를 구조화해 돌려준다. MCP에서는 `vmem_skills_mine`.
-- workspace가 있으면 리포트를 `<workspace-root>/_meta/reports/skill-candidates-YYMMDD.md`로 저장한다. 없으면 사용자에게 결과를 보여주고 workspace 저장을 건너뛰었다고 보고한다. 같은 날 재실행은 덮어쓴다.
+- 호스트가 `UserPromptSubmit`으로 주입한 합성 프롬프트(`<task-notification>`, `<channel `, `<agent-message `로 시작)는 사람 프롬프트가 아니므로 제외되고 human 출력의 `Synthetic dropped` 행으로 집계된다. JSON에서는 `dropped.synthetic`이다.
+- 상한(20,000건·총 64 MiB)을 넘으면 실패하지 않고 최신 레코드만 남긴다. human 출력의 `Over cap` 행과 corpus 건수로 제외·유지 건수를 확인한다. JSON에서는 `dropped.overCap`과 `records`를 확인한다. 제외 건수가 0보다 크면 `--days`를 줄이거나 `--project <key>`로 프로젝트별로 나눠 다시 실행한다.
+- 기본 표준출력은 사람이 읽는 섹션형 보고서다. Markdown을 저장할 때는 같은 명령에 `--json`을 추가하고 결과의 `report` 문자열을 사용한다. MCP의 `vmem_skills_mine` 결과에서도 `report`를 사용한다. `--json`은 후보·점수·출처별 건수도 구조화해 돌려준다.
+- workspace가 있으면 JSON 또는 MCP 결과의 `report` 문자열을 변경하지 않고 리포트 본문으로 사용해 `<workspace-root>/_meta/reports/skill-candidates-YYMMDD.md`로 저장한다. 없으면 사용자에게 결과를 보여주고 workspace 저장을 건너뛰었다고 보고한다. 같은 날 재실행은 덮어쓴다.
 - `--skills`는 novelty 비교용 기존 스킬 카탈로그다. 사용 가능한 호스트 스킬 설치 디렉토리를 반복해서 넘긴다.
 - 임계치 조정: `--min-size N`(기본 3), `--min-novelty X`(기본 0.3).
 - expect: vmem refuses an unknown option, a missing `--vocab` file and, through MCP, a vault re-registered after the server started. 명령은 vault·vmem home·amem home에 아무것도 쓰지 않는다.
