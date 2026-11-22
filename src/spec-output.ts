@@ -84,7 +84,7 @@ export function renderSpecValidate(r: SpecValidateResult, o: TextOptions, contex
   const out = report("spec validate", o), stale = r.freshness.filter(entry => entry.state === "stale");
   if (r.items.length) { out.section("Findings"); for (const item of [...r.items].sort((a,b) => Number(b.severity === "error") - Number(a.severity === "error"))) out.bullet(item.severity === "error" ? "fail" : "warn", `${item.code}: ${finding(item)}`); }
   if (context.values.requireFresh !== true && stale.length) { out.section("Freshness"); for (const entry of stale) out.bullet("warn", `${entry.path}${entry.id ? ` (${entry.id})` : ""}: ${staleText(entry)}; review the scope and refresh verified-against`); }
-  if (r.diagnostics.length) { out.section("Discovery"); for (const item of r.diagnostics) out.bullet("unknown", `${item.code}: ${finding(item)}`); }
+  if (r.diagnostics.length) { out.section("Discovery"); for (const item of r.diagnostics) out.bullet("absent", `${item.code}: ${finding(item)}`); }
   if (r.truncated) out.section("Coverage").bullet("warn", `truncated: ${r.items.length} of ${r.errors + r.warnings} findings shown; raise --limit (up to 500) or fix the listed findings and rerun`);
   out.section("Scope").kv([["Source", context.repo !== undefined ? `--repo ${context.repo}` : r.source]]);
   out.summary({ failed: r.errors || (r.ok ? 0 : 1), warnings: r.warnings + (context.values.requireFresh === true ? 0 : stale.length), ok: r.ok && !r.errors && !r.warnings && !stale.length ? 1 : 0 });

@@ -67,8 +67,8 @@ const LEVELS: Record<LintCode, "error" | "warn"> = { L01: "error", L02: "error",
 export function lintText(d: { report: LintReport; notes: number; titles: Record<LintCode, string>; info: Partial<Record<LintCode, string>> }, o: TextOptions, c: { vault: string; note?: string }): string {
   const out = report("lint", o).section("Findings");
   const codes = Object.keys(d.report.findings) as LintCode[];
-  for (const code of codes) for (const finding of d.report.findings[code]) out.bullet(LEVELS[code] === "error" ? "fail" : "warn", `${code}: ${finding}`);
-  for (const code of codes) if (d.info[code]) out.note(`${code}: ${d.info[code]}`);
+  for (const code of codes) for (const finding of d.report.findings[code]) out.bullet(LEVELS[code] === "error" ? "fail" : "warn", `${code}: ${finding.replaceAll("`", "")}`);
+  for (const code of codes) if (d.info[code]) out.note(`${code}: ${d.info[code]!.replaceAll("`", "")}`);
   out.section("Scope").kv([["Vault", c.vault], ["Note", c.note], ["Notes", d.notes]]);
   out.summary({ failed: d.report.errors, warnings: d.report.warnings, ok: codes.filter(code => !d.report.findings[code].length).length });
   return done(out, o);
