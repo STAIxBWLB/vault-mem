@@ -123,7 +123,7 @@ test("#114 AC1: stats prints field blocks, manifest marks read-only tools and se
     ratio: { notes: 0, sources: 0, skipped: 2, skippedNonFile: 2, emptySourceNotes: 0, truncatedNotes: 0, median: null, p90: null, overOne: 0, largest: [] },
     log: { days: 30, since: "2026-10-06", total: 0, byType: { INGEST: 0, LEARN: 0 }, warnings: [], issues: [] } }, PLAIN);
   expect(empty).toContain("no note cites a readable workspace file");
-  expect(empty).toContain("Skipped:        2");
+  expect(empty).toMatch(/Skipped references:\s+2/);
   // The truncation line appears only when the index cut sourced notes, so the common output keeps its shape.
   expect(empty).not.toContain("Note size");
   const manifest = renderManifest({ name: "@staix/vault-mem", version: "9.9.9", configVersion: 2, mcp: { server: "vmem", tools: [{ name: "vmem_status", readOnly: true }, "vmem_create"] }, commands: ["status", "doctor"] }, PLAIN);

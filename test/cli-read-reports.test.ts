@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { lintDetails } from "../src/vault-lint.ts";
 import { analysisCorpus } from "./fixtures/analysis-corpus.ts";
 import { lintText, searchText, showText } from "../src/read-output.ts";
+import { renderMineText, type MineResult } from "../src/skills-mine.ts";
 import { renderBrief } from "../src/vault-brief.ts";
 import { stripTerminal, width } from "../src/text-output.ts";
 
@@ -11,7 +12,9 @@ test("read and analysis reports retain content, ASCII layout and semantic color"
   const context = { vault: "demo", query: "synthetic", limit: 2 };
   const expected = [" vmem search", "", "> Results", "  Vault:    demo", "  Query:    synthetic", "  Results:  1", "  -  synthetic.md: Synthetic title (method)", "  synthetic excerpt"].join("\n");
   expect(searchText(hits, plain, context)).toBe(expected);
-  expect(stripTerminal(searchText(hits, { ...plain, color: true }, context))).toBe(expected);
+  const colored = searchText(hits, { ...plain, color: true }, context);
+  expect(stripTerminal(colored)).toBe(expected);
+  expect(colored).not.toBe(expected);
   const details = lintDetails(analysisCorpus());
   const lint = lintText(details, plain, { vault: "demo" });
   expect(lint).not.toContain(details.report.summary);
@@ -30,4 +33,16 @@ test("brief preserves byte cap including color and only reports omitted matches 
   const text = renderBrief(large, { ...plain, color: true }, 256);
   expect(Buffer.byteLength(text) + 1).toBeLessThanOrEqual(256);
   expect(stripTerminal(text)).toContain("matches omitted");
+});
+
+
+test("skills mine human report has ASCII and color without changing Markdown", () => {
+  const result: MineResult = { vault: "demo", days: 30, since: "2026-01-01", projects: [], records: { curated: 0, capture: 0, vault: 0 }, dropped: { synthetic: 0, overCap: 0, secret: 0, policy: 0, oversized: 0, duplicate: 0, unreadable: 0, truncatedCapture: 0, malformedRecord: 0, recordOutsideWindow: 0, recordOutsideCapped: 0, recordOutsideUnavailable: 0 }, graph: { nodes: 0, edges: 0, communities: 0, partitioner: "leiden" }, godNodes: [], candidates: [], rejected: { below3: 0, detailed: [] }, surprising: [], report: "# Original Markdown\n" };
+  const text = renderMineText(result, plain), colored = renderMineText(result, { ...plain, color: true });
+  expect(text).toContain("> Candidates");
+  expect(text).not.toContain("# Original Markdown");
+  expect(result.report).toBe("# Original Markdown\n");
+  expect(stripTerminal(colored)).toBe(text);
+  expect(colored).not.toBe(text);
+  for (const line of text.split("\n")) expect(width(line)).toBeLessThanOrEqual(80);
 });

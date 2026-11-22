@@ -77,8 +77,9 @@ export function renderStats(r: VaultStats, o: TextOptions): string {
   }
   if (r.size.total.notes) out.section("Note size").kv([["Bytes", r.size.total.bytes], ["Words", r.size.total.words]]);
   const ratio = r.ratio;
-  out.section("Note-to-source ratio").kv([["Notes", ratio.notes], ["Sources", ratio.sources], ["Median", ratio.median], ["P90", ratio.p90], ["Over 1", ratio.overOne], ["Skipped", ratio.skipped], ["Not a file", ratio.skippedNonFile], ["Empty sources", ratio.emptySourceNotes], ["Truncated", ratio.truncatedNotes]]);
+  out.section("Note-to-source ratio").kv([["Notes", ratio.notes], ["Sources", ratio.sources], ["Median", ratio.median], ["P90", ratio.p90], ["Over 1", ratio.overOne], ["Skipped references", ratio.skipped], ["Not a file", ratio.skippedNonFile], ["Empty source notes", ratio.emptySourceNotes], ["Notes past cap", ratio.truncatedNotes]]);
   if (!ratio.notes) out.note(ratio.sources ? "no cited source had a nonzero size" : "no note cites a readable workspace file");
+  if (ratio.truncatedNotes) out.note(`${plural(ratio.truncatedNotes, "note")} past the ${MAX_RATIO_NOTES}-note cap`);
   for (const entry of ratio.largest) out.bullet("absent", `${entry.path}: ${entry.ratio}`);
   out.section("Modified").kv([["Last 7 days", r.modified.last7Days], ["Last 30 days", r.modified.last30Days]]);
   out.section("Log").kv([["Since", r.log.since], ["Days", r.log.days], ["Total", r.log.total], ...Object.entries(r.log.byType ?? {}).filter(([, n]) => n > 0).sort(([a, x], [b, y]) => y - x || a.localeCompare(b))]);
