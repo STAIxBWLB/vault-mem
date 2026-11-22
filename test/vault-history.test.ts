@@ -591,15 +591,15 @@ test("the CLI renders history, a pinned revision and a tree comparison with the 
   expect(text).toContain("REVISION");
   expect(text).toContain("COMMITTED (GIT METADATA)");
   expect(text).toContain(head.slice(0, 12));
-  expect(text).toContain("next: vmem history demo notes/alpha.md --limit 1 --cursor ");
+  expect(text).toContain("vmem history demo notes/alpha.md --limit 1 --cursor ");
   expect(JSON.parse(run(["history", "demo", "alpha", "--json"], f.env).text).revisions).toHaveLength(2);
   expect(() => run(["history", "demo", "alpha", "--limit", "101"], f.env)).toThrow(/limit: expected integer 1\.\.100/);
   expect(() => run(["history", "demo", "alpha", "--cursor", "nope"], f.env)).toThrow(/not a continuation/);
   expect(() => run(["changes", "demo", "--from", first], f.env)).toThrow(/requires one vault id plus --from and --to/);
   const show = run(["show", "demo", "alpha", "--revision", first, "--max-bytes", "12"], f.env).text;
-  expect(show).toContain(`show demo notes/alpha.md at ${first.slice(0, 12)}`);
+  expect(show).toContain("notes/alpha.md");
   expect(show).toContain(first);
-  expect(show).toContain(`next: vmem show demo alpha --revision ${first} --max-bytes 12 --offset 12`);
+  expect(show).toContain(`vmem show demo alpha --revision ${first} --max-bytes 12 --offset 12`);
   const changes = JSON.parse(run(["changes", "demo", "--from", first, "--to", head, "--json"], f.env).text);
   expect(changes.changed).toEqual([{ path: "notes/alpha.md", status: "M",
     before: f.git(f.vault, "rev-parse", `${first}:notes/alpha.md`), after: f.git(f.vault, "rev-parse", `${head}:notes/alpha.md`) }]);

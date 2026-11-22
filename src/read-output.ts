@@ -1,5 +1,4 @@
-import { markerCell, Report } from "@staix/cli-output";
-import { paint } from "@staix/cli-output";
+import { Report } from "@staix/cli-output";
 /**
  * Text views for the read, log and analysis commands (#114). Each renderer is pure, takes the same result the
  * command prints with `--json`, and never shows more than that result carries.
@@ -12,7 +11,7 @@ import type { GraphNeighborhood, GraphPath } from "./vault-graph.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
 import type { EvidenceReport } from "./evidence.ts";
 import type { GraphExplanation } from "./graph-evidence.ts";
-import { blocks, clean, fields, heading, issueTable, nextCommand, paragraph, plural, shellWord, status, summary, table, tableParts, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
+import { plural, shellWord, type TextOptions, stripTerminal } from "./text-output.ts";
 
 const command = (...words: string[]) => ["vmem", ...words].map(shellWord).join(" ");
 const report = (name: string, o: TextOptions) => new Report(o.columns, o.ascii).header("vmem", name);
@@ -48,7 +47,6 @@ export function rebuildText(r: { vault: string; notes: number; changed: number; 
   return done(report("rebuild", o).section("Index").kv([["Vault", r.vault], ["Notes", r.notes], ["Changed", r.changed], ["Removed", r.removed], ["Skipped", r.skipped?.length ?? 0]]), o);
 }
 
-const warnings = (list: string[], o: TextOptions) => list.length ? list.map(w => status("warn", `warning: ${w}`, o)).join("\n") : undefined;
 export function logReadText(r: LogReadResult, o: TextOptions, c: { command: "tail" | "grep"; vault: string; pattern?: string; limit: number; type?: string }): string {
   const out = report(`log ${c.command}`, o);
   if (r.issues.length || r.warnings.length || !r.ok) { out.section("Problems"); if (!r.ok) out.bullet("fail", "log not read"); for (const issue of r.issues) out.bullet("fail", `${issue.code}: ${issue.message}`); for (const warning of r.warnings) out.bullet("warn", warning); }
@@ -66,7 +64,6 @@ export function logAppendText(r: LogReceipt, o: TextOptions, c: { vault: string;
 }
 
 const LEVELS: Record<LintCode, "error" | "warn"> = { L01: "error", L02: "error", L03: "warn", L09: "warn", L10: "warn", L11: "warn", L12: "warn", L13: "error", L14: "warn", L15: "warn", L16: "warn", L17: "warn", L18: "warn", L19: "warn" };
-const verdict = (r: { errors: number; warnings: number; summary: string }, o: TextOptions) => paint([{ text: clean(r.summary), role: r.errors ? "error" : r.warnings ? "warning" : "success" }], o.color);
 export function lintText(d: { report: LintReport; notes: number; titles: Record<LintCode, string>; info: Partial<Record<LintCode, string>> }, o: TextOptions, c: { vault: string; note?: string }): string {
   const out = report("lint", o).section("Findings");
   const codes = Object.keys(d.report.findings) as LintCode[];

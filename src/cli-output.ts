@@ -1,4 +1,4 @@
-import { Report, markerCell } from "@staix/cli-output";
+import { Report } from "@staix/cli-output";
 /**
  * Text renderers for the registry, health, setup and manifest commands (#114). Each is a pure function of the
  * command's JSON result; `--json` never comes through here, and the text shows no more than that JSON carries.
@@ -9,7 +9,7 @@ import type { PiiMatrix, PiiRow } from "./pii.ts";
 import { effectivePii, type RecoveryReport, type SettingsResult, type SettingsSnapshot } from "./registry.ts";
 import type { SetupReport } from "./setup.ts";
 import type { SkillInstallReport } from "./skills-install.ts";
-import { blocks, fields, heading, issueTable, paragraph as formatParagraph, plural, shellWord, type TextOptions, type Tone } from "./text-output.ts";
+import { plural, shellWord, type TextOptions } from "./text-output.ts";
 import { MAX_RATIO_NOTES } from "./vault-index.ts";
 import type { VaultStats } from "./vault-stats.ts";
 
@@ -20,7 +20,6 @@ export type SpecRow = SpecSourceSpec & { healthy?: boolean; issue?: string };
 export interface StatusResult extends ResolvedHome { version: string; agentMem?: { version: string; hostApi: number; hostApiMin: number }; healthy: boolean; vaults: VaultRow[]; specs?: SpecRow[] }
 export interface Manifest { name: string; version: string; configVersion: number; mcp: { server: string; tools: (string | { name: string; readOnly: boolean })[] }; commands: string[] }
 
-const paragraph = (text: string, o: TextOptions, toneName?: Tone, indent = "") => formatParagraph(toneName === "ok" || toneName === "warn" || toneName === "fail" ? `${markerCell(toneName, o.ascii === true)} ${text}` : text, o, toneName, indent);
 const report = (name: string, o: TextOptions) => new Report(o.columns, o.ascii).header("vmem", name);
 const render = (r: Report, o: TextOptions) => r.render(o.color).join("\n");
 const NO_VAULTS = "no vaults registered";

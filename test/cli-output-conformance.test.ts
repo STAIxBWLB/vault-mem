@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { errorLine, paint, markerCell, resolveColor, ROLE_SGR, SGR_RESET, type Role } from "@staix/cli-output";
-import { stripTerminal, table, textOptions, width } from "../src/text-output.ts";
+import { errorLine, paint, markerCell, Report, resolveColor, ROLE_SGR, SGR_RESET, type Role } from "@staix/cli-output";
+import { stripTerminal, textOptions, width } from "../src/text-output.ts";
 import { run } from "../src/cli.ts";
 import { evidenceText } from "../src/read-output.ts";
 import { renderStatus } from "../src/cli-output.ts";
@@ -36,14 +36,10 @@ test("color precedence and JSON on pipes", () => {
   expect(stripTerminal(json)).toBe(json);
   expect(JSON.parse(json).name).toBe("@staix/vault-mem");
 });
-test("80-column reports cap fixed columns and keep state on one line", () => {
-  const output = table(["ID", "STATE", "FINDING"], [["long-id-".repeat(10), "failed", "a long finding ".repeat(12)]], { color: false, columns: 80 });
-  for (const line of output.split("\n")) expect(width(line)).toBeLessThanOrEqual(80);
-  expect(output).toContain("failed");
-  expect(output).toContain("...");
-  const piped = table(["LABEL", "RESULT"], [["alpha beta gamma delta epsilon zeta eta theta", "done"]], plain);
-  expect(piped).toContain("alpha beta gamma delta epsilon");
-  expect(piped).toContain("zeta eta theta");
+test("80-column reports cap columns", () => {
+  const output = new Report(80, true).section("Findings").table(["ID", "STATE", "FINDING"], [["long-id-".repeat(10), "failed", "a long finding ".repeat(12)]]).render(false);
+  for (const line of output) expect(width(line)).toBeLessThanOrEqual(80);
+  expect(output.join("\n")).toContain("failed");
 });
 test("LANG=C selects ASCII markers", () => {
   const options = textOptions("never", { LANG: "C" });

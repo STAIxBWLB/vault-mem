@@ -631,7 +631,7 @@ test("damaged batches report left-out entries and consistent CLI coverage", asyn
     expect(result.coverage.untrusted).toEqual([{ segment, seq: 2, failedSeq: 10, entries: 60, reason: "hash mismatch" }]);
     const warning = assertionCoverageWarnings(result.coverage)[0]!.message;
     expect(warning).toContain(`${segment}#2, failed #10, 60 left out`);
-    expect(run(["assertions", f.id, ...(history ? ["--history"] : [])], f.env).text).toContain(warning);
+    expect(run(["assertions", f.id, ...(history ? ["--history"] : [])], f.env).text).toContain(warning.replaceAll("`", "").replace("<vault>", f.id));
     expect(JSON.parse(run(["assertions", f.id, ...(history ? ["--history"] : []), "--json"], f.env).text).coverage.untrusted).toEqual(result.coverage.untrusted);
   }
   for (const [length, seq, kept] of [[18, 2, 0], [48, 32, 30]] as const) {

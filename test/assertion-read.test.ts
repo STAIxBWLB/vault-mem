@@ -29,6 +29,11 @@ test("read evaluates the verified journal, paginates, and rechecks subject notes
   expect(first.items[0]).toMatchObject({ value: "member", answer: "yes", subjectNote: { path: "notes/subject.md", status: "present" } });
   const next = readAssertions(f.home, { vault: "test", at: "2026-01-01", asOf: "2026-01-01", limit: 1, cursor: first.continuation }, { env: f.env });
   expect(next.items[0]?.value).toBe("research"); expect(next.truncated).toBe(false);
+  const { run } = require("../src/cli.ts") as typeof import("../src/cli.ts");
+  const shown = run(["assertions", "test", "--at", "2026-01-01", "--as-of", "2026-01-01", "--limit", "1"], { ...f.env, LC_ALL: "C", COLUMNS: "80" }).text;
+  expect(shown).toContain(`vmem assertions test --at 2026-01-01 --as-of 2026-01-01 --limit 1 --cursor ${first.continuation}`);
+  expect(shown).not.toContain("assertion(s)");
+  expect(Buffer.byteLength(shown)).toBeLessThanOrEqual(48 * 1024);
   writeFileSync(join(f.notes, "subject.md"), "---\nstatus: superseded\nsuperseded_by: replacement\n---\nSubject\n");
   expect(readAssertions(f.home, { vault: "test", limit: 1 }, { env: f.env }).items[0]?.subjectNote).toMatchObject({ status: "superseded", supersededBy: "replacement" });
   rmSync(join(f.notes, "subject.md"));
@@ -232,4 +237,17 @@ test("paging an overlap query recovers every member once", () => {
     cursor = page.continuation;
   } while (cursor);
   expect(ids.size).toBe(6);
+});
+
+test("human assertion pages retain cursor filters and remain within the response bound", () => {
+  const f = fixture();
+  const subject = "s:test";
+  expect(f.append([{ op: "declare", subject }], "2026-01-01T00:00:00Z").ok).toBe(true);
+  for (let start = 0; start < 60; start += 30) {
+    const ops = Array.from({ length: 30 }, (_, i) => ({ op: "assert", subject, relation: `synthetic-${start + i}`, value: "x".repeat(900), kind: "state", from: "2025", to: "open", source: ["mem:fixture"] }));
+    expect(f.append(ops, "2026-01-02T00:00:00Z").ok).toBe(true);
+  }
+  const { run } = require("../src/cli.ts") as typeof import("../src/cli.ts");
+  const text = run(["assertions", "test", "--subject", subject, "--limit", "100", "--color=always"], { ...f.env, LC_ALL: "C", COLUMNS: "80" }).text;
+  expect(Buffer.byteLength(text) + 1).toBeLessThanOrEqual(48 * 1024);
 });

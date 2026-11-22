@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Standardize assertion, history and proposal human reports and remove the retired local layout helpers; JSON results remain unchanged.
+
 - Standardize spec command human reports and validation summaries; JSON results and spec bodies are unchanged.
 
 - Standardize write, preview, promotion and sync human reports while keeping JSON receipts and exit codes unchanged.
