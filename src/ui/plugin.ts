@@ -235,7 +235,7 @@ export const plugin: ConsolePlugin = {
         switch (input.panel) {
           case "graph": {
             const vault = vaultOf(args);
-            if (!vault) return { vault: null, error: `unknown vault ${str(args.vault) ?? ""}; pick a registered vault from Overview` };
+            if (!vault) return { vault: null, error: str(args.vault) ? `unknown vault ${str(args.vault)}; pick a registered vault from Overview` : "graph: no selected vault; select a registered vault" };
             const stem = (value: unknown) => typeof value === "string" && value.startsWith("notes/") && value.endsWith(".md") ? value.slice(6, -3) : value;
             if (args.neighbors !== undefined) {
               const r = await readTool("vmem_graph_neighbors", args, { vault: vault.id, path: stem(args.neighbors) });

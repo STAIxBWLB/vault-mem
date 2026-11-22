@@ -22,7 +22,7 @@ export default (host) => {
 
   const views = {
     graph(s) {
-      if (s.error) return [ui.notice(s.error, "err")];
+      if (s.error) return [ui.notice(s.error, "err"), ...(params.page ? [h("div", { class: "vmem-bar" }, ui.button("First page", () => go("graph")))] : [])];
       const graph = s.graph ?? {}, totals = s.totals ?? {};
       return [h("section", { class: "card" }, h("h2", { text: `Graph · ${s.vault}` }),
         h("p", { text: `Revision: ${s.revision}` }),
