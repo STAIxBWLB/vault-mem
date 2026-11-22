@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Add whole-tree CLI conformance tests: every command runs on a synthetic home under color on and off, `COLUMNS=80` and `LC_ALL=C` against the standard-v1 checks and the #312 layout rules.
 - Standardize assertion, history and proposal human reports and remove the retired local layout helpers; JSON results remain unchanged.
 
 - Standardize spec command human reports and validation summaries; JSON results and spec bodies are unchanged.
