@@ -203,10 +203,10 @@ describe("CLI", () => {
     expect(JSON.parse(result.stdout.toString())).toMatchObject({ healthy: true, vaults: [] });
     const node = Bun.spawnSync(["node", "bin/vmem.js", "--version"], { env, stdout: "pipe", stderr: "pipe" });
     expect(node.exitCode).toBe(1);
-    expect(node.stderr.toString()).toContain("Bun >=1.4.4");
-    const older = Bun.spawnSync(["node", "-e", 'process.versions.bun = "1.4.3"; import("./bin/vmem.js")'], { env, stdout: "pipe", stderr: "pipe" });
+    expect(node.stderr.toString()).toContain("Bun >=1.4.2");
+    const older = Bun.spawnSync(["node", "-e", 'process.versions.bun = "1.4.1"; import("./bin/vmem.js")'], { env, stdout: "pipe", stderr: "pipe" });
     expect(older.exitCode).toBe(1);
-    expect(older.stderr.toString()).toContain("Bun >=1.4.4");
+    expect(older.stderr.toString()).toContain("Bun >=1.4.2");
   });
 });
 describe("follow-ups", () => {

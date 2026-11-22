@@ -1,6 +1,6 @@
 # vault-mem
 
-`vmem` keeps Obsidian-compatible knowledge vaults that agents and people both write safely. Every note write is validated (schema, links, secrets, PII), staged atomically, returned as a receipt and recorded in the vault log; reads go through a derived SQLite FTS5 index. It ships a CLI and an MCP stdio server. Requires <!-- facts:bun-floor -->Bun >=1.4.4<!-- /facts:bun-floor -->.
+`vmem` keeps Obsidian-compatible knowledge vaults that agents and people both write safely. Every note write is validated (schema, links, secrets, PII), staged atomically, returned as a receipt and recorded in the vault log; reads go through a derived SQLite FTS5 index. It ships a CLI and an MCP stdio server. Requires <!-- facts:bun-floor -->Bun >=1.4.2<!-- /facts:bun-floor -->.
 
 Status: released versions are published to npm ([CHANGELOG](CHANGELOG.md), [release readiness](docs/release-readiness.md)). Replacing an existing vault writer is a live cutover: it is the parent plan's operation, outside this repository, and follows the [cutover checklist](docs/cutover-checklist.md). This repository does not record its result, and a release does not authorize it.
 

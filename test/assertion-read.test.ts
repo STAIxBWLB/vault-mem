@@ -31,7 +31,7 @@ test("read evaluates the verified journal, paginates, and rechecks subject notes
   expect(next.items[0]?.value).toBe("research"); expect(next.truncated).toBe(false);
   const { run } = require("../src/cli.ts") as typeof import("../src/cli.ts");
   const shown = run(["assertions", "test", "--at", "2026-01-01", "--as-of", "2026-01-01", "--limit", "1"], { ...f.env, LC_ALL: "C", COLUMNS: "80" }).text;
-  expect(shown).toContain(`vmem assertions test --at 2026-01-01 --as-of 2026-01-01 --limit 1 --cursor ${first.continuation}`);
+  expect(shown.replace(/ \\\n\s+/g, " ")).toContain(`vmem assertions test --at 2026-01-01 --as-of 2026-01-01 --limit 1 --cursor ${first.continuation}`);
   expect(shown).not.toContain("assertion(s)");
   expect(Buffer.byteLength(shown)).toBeLessThanOrEqual(48 * 1024);
   writeFileSync(join(f.notes, "subject.md"), "---\nstatus: superseded\nsuperseded_by: replacement\n---\nSubject\n");
