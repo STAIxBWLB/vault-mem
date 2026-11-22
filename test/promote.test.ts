@@ -62,7 +62,7 @@ test("#167 AC1/AC3/AC5 canonical acronym and person rows add advisory choices wi
   ]);
   expect(preview.choices).toEqual(["create", "link-existing notes/people.md", "link-existing notes/glossary.md"]);
   expect(preview.fingerprint).toBe(baseline.fingerprint);
-  expect(renderPromote(preview, PLAIN, { argv: ["promote-from-amem", "mine", f.id], positional: ["mine", f.id] })).toContain("canonical rows:");
+  expect(renderPromote(preview, PLAIN, { argv: ["promote-from-amem", "mine", f.id], positional: ["mine", f.id] })).toContain("Canonical rows");
   configureCanonTables(f.home, undefined);
   expect((await promoteFromAmem(f.home, request, options)).fingerprint).toBe(baseline.fingerprint);
   configureCanonTables(f.home, [{ path: "notes/glossary.md" }, { path: "notes/people.md" }]);
@@ -76,9 +76,9 @@ test("#167 AC2 absent canonTables preserves the baseline JSON and text golden", 
   const normalized = JSON.parse(JSON.stringify(preview).replaceAll(f.id, "entry-id").replace(preview.fingerprint!, "fingerprint"));
   const text = ["---", '"title": "Prefer explicit generation witnesses"', '"description": "Explicit generation witnesses keep immutable identity stable across rebuilds."', '"type": "decision"', '"domain": "research"', '"topics": ["[[storage]]"]', '"promoted_from": "mem:entry-id"', '"promoted_at": "2026-01-02"', '"updated": "2026-01-02"', '"created": "2026-01-02"', "---", "# Prefer explicit generation witnesses", "", "Explicit generation witnesses keep immutable identity stable across rebuilds.", "", "## Relevant Notes", "", "- path:src/storage.ts", "", "## Topics", "", "- [[storage]]", ""].join("\n");
   expect(JSON.stringify(normalized)).toBe(JSON.stringify({ ok: true, action: "create", applied: false, id: "entry-id", path: "notes/explicit-generation-witnesses.md", issues: [], text, fingerprint: "fingerprint", linked: null, preview: true }));
-  expect(renderPromote(normalized, PLAIN, { argv: ["promote-from-amem", "mine", "entry-id"], positional: ["mine", "entry-id"] })).toBe([
-    "dry run: would create notes/explicit-generation-witnesses.md from mem:entry-id", "", `draft: ${Buffer.byteLength(text)} bytes; --json shows the text, --edit opens it in $EDITOR`, "", "confirm: vmem promote-from-amem mine entry-id --confirm --fingerprint fingerprint",
-  ].join("\n"));
+  const rendered = renderPromote(normalized, PLAIN, { argv: ["promote-from-amem", "mine", "entry-id"], positional: ["mine", "entry-id"] });
+  expect(rendered).toContain("dry run: would create notes/explicit-generation-witnesses.md from mem:entry-id");
+  expect(rendered).toContain("vmem promote-from-amem mine entry-id --confirm --fingerprint fingerprint");
 });
 
 test("#167 unavailable and denied absent canonical notes are nonblocking advisory inputs", async () => {

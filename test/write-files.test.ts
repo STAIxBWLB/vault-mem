@@ -79,9 +79,9 @@ test("a second-target prepublication drift reports the partial write and only it
   expect(retained.startsWith("notes/.vmem-")).toBe(true);
   expect(readFileSync(join(f.root, retained), "utf8")).toBe(f.original);
   expect(readdirSync(f.parent).filter(name => name.endsWith(".tmp"))).toEqual([retained.slice("notes/".length)]);
-  expect(output.text).toContain("STATE"); expect(output.text).toContain("not applied");
-  expect(output.text).toContain("retained backups"); expect(output.text).toContain(retained);
-  const header = output.text!.split("\n")[0]!;
+  expect(output.text).toContain("Changes"); expect(output.text).toContain("not applied");
+  expect(output.text).toContain("Retained backups"); expect(output.text).toContain(retained);
+  const header = output.text!.split("\n").find(line => line.includes("failed after writing"))!;
   expect(header).toContain("alpha"); expect(header).not.toContain("beta");
 }, 30_000);
 
@@ -155,9 +155,9 @@ test("a non-drift partial rollback marks only the outstanding move path and pres
   expect(existsSync(output.renamedTarget)).toBe(false);
   expect(receipt.retainedBackups).toHaveLength(1);
   expect(readFileSync(join(f.root, receipt.retainedBackups![0]!), "utf8")).toBe(f.original);
-  const header = output.text!.split("\n")[0]!;
+  const header = output.text!.split("\n").find(line => line.includes("failed after writing"))!;
   expect(header).toContain("notes/alpha.md"); expect(header).not.toContain("apricot"); expect(header).not.toContain("beta");
-  expect(output.text).toContain("STATE"); expect(output.text).toContain("not applied");
+  expect(output.text).toContain("Changes"); expect(output.text).toContain("not applied");
 }, 30_000);
 
 test("a created note removed by rollback before post-unlink drift never claims a backup exists", () => {

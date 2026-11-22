@@ -137,7 +137,7 @@ test("AC4 CLI and MCP expose the same closed two-step merge and deterministic pr
   try {
   const f = fixture(), command = ["merge", "test", "keep", "absorb"], json = run([...command, "--json"], f.env), preview = JSON.parse(json.text) as WriteReceipt;
   expect(json.code).toBe(0); expect(preview.merge!.body).toContain("Merged from [[absorb]]");
-  const human = run(command, f.env); expect(human.text).toContain("merged body:"); expect(human.text).toContain("INBOUND LINKS"); expect(human.text).toContain("--confirm --fingerprint");
+  const human = run(command, f.env); expect(human.text).toContain("Merged body bytes:"); expect(human.text).toContain("Inbound links"); expect(human.text).toContain("--confirm --fingerprint");
   expect(() => run([...command, "--unknown"], f.env)).toThrow(/unknown.*--unknown/);
   expect(() => run(["merge", "test", "keep"], f.env)).toThrow(/merge: takes/);
   const tools = createVaultMcp(f.home, {}).tools, tool = tools.find(tool => tool.name === "vmem_merge")!;

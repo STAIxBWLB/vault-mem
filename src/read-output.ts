@@ -59,9 +59,10 @@ export function logReadText(r: LogReadResult, o: TextOptions, c: { command: "tai
 }
 
 export function logAppendText(r: LogReceipt, o: TextOptions, c: { vault: string; type: string }): string {
-  const line = r.ok && r.appended ? status("ok", `appended ${clean(c.type)} to the ${clean(c.vault)} log${r.bytesWritten ? ` (${plural(r.bytesWritten, "byte")})` : ""}`, o)
-    : status("fail", `log append: ${clean(c.type)} not appended${r.rolledBack ? " (rolled back)" : ""}`, o);
-  return blocks(line, issueTable(r.issues, o));
+  const out = report("log append", o);
+  if (r.issues.length) { out.section("Problems"); for (const issue of r.issues) out.bullet(issue.severity === "error" ? "fail" : "warn", `${issue.code}: ${issue.message}`); }
+  out.section("Result").bullet(r.ok && r.appended ? "ok" : "fail", r.ok && r.appended ? `appended ${c.type} to the ${c.vault} log${r.bytesWritten ? ` (${plural(r.bytesWritten, "byte")})` : ""}` : `log append: ${c.type} not appended${r.rolledBack ? " (rolled back)" : ""}`);
+  return done(out, o);
 }
 
 const LEVELS: Record<LintCode, "error" | "warn"> = { L01: "error", L02: "error", L03: "warn", L09: "warn", L10: "warn", L11: "warn", L12: "warn", L13: "error", L14: "warn", L15: "warn", L16: "warn", L17: "warn", L18: "warn", L19: "warn" };
