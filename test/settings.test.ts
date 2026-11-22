@@ -25,6 +25,9 @@ test("settings preview is read-only and confirmation binds the current configura
     expect(() => changeSettings(home, { vault: "mine", changes: { graphResolution: 0 } })).toThrow(/resolution/);
     expect(() => changeSettings(home, { vault: "missing", changes })).toThrow(/registered/);
     expect(JSON.parse(run(["settings", "mine", "--json"], { VMEM_HOME: home }).text).graphResolution).toBe(2);
+    const human = run(["settings", "mine", "--color=never"], { VMEM_HOME: home, LC_ALL: "C", COLUMNS: "80" }).text;
+    expect(human).toContain("Graph resolution:");
+    expect(human.trimStart().startsWith("{")).toBe(false);
     expect(() => run(["settings", "mine", "--unknown"], { VMEM_HOME: home })).toThrow();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

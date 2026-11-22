@@ -1,4 +1,4 @@
-import { markerCell } from "@staix/cli-output";
+import { Report, markerCell } from "@staix/cli-output";
 /**
  * Text renderers for the registry, health, setup and manifest commands (#114). Each is a pure function of the
  * command's JSON result; `--json` never comes through here, and the text shows no more than that JSON carries.
@@ -6,10 +6,10 @@ import { markerCell } from "@staix/cli-output";
 import { effectiveDomains, PII_SURFACES, type SpecSourceSpec, type VaultSpec } from "./config.ts";
 import type { ResolvedHome } from "./home.ts";
 import type { PiiMatrix, PiiRow } from "./pii.ts";
-import { effectivePii, type RecoveryReport } from "./registry.ts";
+import { effectivePii, type RecoveryReport, type SettingsResult, type SettingsSnapshot } from "./registry.ts";
 import type { SetupReport } from "./setup.ts";
 import type { SkillInstallReport } from "./skills-install.ts";
-import { blocks, clean, fields, heading, issueTable, nextCommand, paragraph as formatParagraph, plural, shellWord, status, table, tone, type CellInput, type TextOptions, type Tone } from "./text-output.ts";
+import { blocks, fields, heading, issueTable, paragraph as formatParagraph, plural, shellWord, type TextOptions, type Tone } from "./text-output.ts";
 import { MAX_RATIO_NOTES } from "./vault-index.ts";
 import type { VaultStats } from "./vault-stats.ts";
 
@@ -20,21 +20,24 @@ export type SpecRow = SpecSourceSpec & { healthy?: boolean; issue?: string };
 export interface StatusResult extends ResolvedHome { version: string; agentMem?: { version: string; hostApi: number; hostApiMin: number }; healthy: boolean; vaults: VaultRow[]; specs?: SpecRow[] }
 export interface Manifest { name: string; version: string; configVersion: number; mcp: { server: string; tools: (string | { name: string; readOnly: boolean })[] }; commands: string[] }
 
-const statuses = (o: TextOptions) => {
-  const plain = { ...o, color: false };
-  return { OK: tone(`${markerCell("ok", plain.ascii === true)} ok`, "ok"), WARN: tone(`${markerCell("warn", plain.ascii === true)} warn`, "warn"), FAIL: tone(`${markerCell("fail", plain.ascii === true)} fail`, "fail") };
-};
 const paragraph = (text: string, o: TextOptions, toneName?: Tone, indent = "") => formatParagraph(toneName === "ok" || toneName === "warn" || toneName === "fail" ? `${markerCell(toneName, o.ascii === true)} ${text}` : text, o, toneName, indent);
-const homeLine = (r: StatusResult, o: TextOptions) => `${heading(`vmem ${r.version}`, o)}  home ${clean(r.home)} (${r.source})${r.agentMem ? `  agent-mem ${clean(r.agentMem.version)} (host API ${r.agentMem.hostApi})` : ""}`;
-const NO_VAULTS = "no vaults registered; add one with vmem vaults add <id> <absolute-path> --kind personal|org --write mcp|cli|none";
+const report = (name: string, o: TextOptions) => new Report(o.columns, o.ascii).header("vmem", name);
+const render = (r: Report, o: TextOptions) => r.render(o.color).join("\n");
+const NO_VAULTS = "no vaults registered";
+const plainReason = (reason: string) => reason.replace(/`(vmem [^`]+)`/g, "$1");
 
 export function renderStatus(r: StatusResult, o: TextOptions): string {
-  const { OK, FAIL } = statuses(o);
-  const title = `${homeLine(r, o)}  ${status(r.healthy ? "ok" : "fail", r.healthy ? "healthy" : "unhealthy", o)}`;
-  const vaults = r.vaults.length ? table(["VAULT", "KIND", "WRITE", "PII", "HEALTH", "PATH"], r.vaults.map(v => [v.id, v.kind, v.write, v.pii, v.healthy ? OK : FAIL, v.path]), o) : paragraph(NO_VAULTS, o);
-  const issues = r.vaults.filter(v => v.issue).map(v => paragraph(`${v.id}: ${v.issue}`, o, "fail")).join("\n");
-  const specs = r.specs?.length ? table(["SOURCE", "WRITE", "PII", "PATH"], r.specs.map(s => [s.id, s.write, s.pii, s.path]), o) : undefined;
-  return blocks(title, issues ? `${vaults}\n${issues}` : vaults, specs);
+  const out = report("status", o);
+  const issues = r.vaults.filter(v => v.issue);
+  if (issues.length) { out.section("Problems"); for (const v of issues) out.bullet("fail", `${v.id}: ${v.issue}`); }
+  out.section("Home").kv([["Version", r.version], ["Home", r.home], ["Source", r.source], ["Health", r.healthy ? "healthy" : "unhealthy"], ["agent-mem", r.agentMem?.version], ["Host API", r.agentMem?.hostApi]]);
+  out.section("Vaults");
+  if (r.vaults.length) out.table(["Vault", "Kind", "Write", "PII", "Health", "Path"], r.vaults.map(v => [v.id, v.kind, v.write, v.pii, v.healthy ? "ok" : "failed", v.path]));
+  else out.note(NO_VAULTS).next("vmem help vaults add");
+  out.section("Spec sources");
+  if (r.specs?.length) out.table(["Source", "Write", "PII", "Path"], r.specs.map(s => [s.id, s.write, s.pii, s.path]));
+  else out.note("no spec sources registered").next("vmem help specs add");
+  return render(out, o);
 }
 
 function tidyFinding(t: NonNullable<VaultRow["tidy"]>): string {
@@ -42,27 +45,23 @@ function tidyFinding(t: NonNullable<VaultRow["tidy"]>): string {
   return [`${plural(t.notes, "note")} to migrate${pending ? ` (${pending})` : ""}`, t.unparsable.length ? `${plural(t.unparsable.length, "unparsable note")} skipped` : ""].filter(Boolean).join("; ");
 }
 export function renderDoctor(r: StatusResult, o: TextOptions): string {
-  const { OK, WARN, FAIL } = statuses(o);
-  let failed = 0;
-  const vaults = r.vaults.map(v => {
-    const rows: CellInput[][] = [[v.healthy ? OK : FAIL, "path", v.healthy ? v.path : `${v.path}: ${v.issue ?? "unavailable"}`]];
-    if (!v.healthy) failed++;
-    for (const [name, check] of Object.entries(v.checks ?? {})) {
-      if (!check.ok) failed++;
-      rows.push([check.ok ? OK : FAIL, name, check.ok ? (name === "remote" ? v.remote : name === "registry" ? v.registry : "ok") : check.issue]);
-    }
-    if (v.tidy) rows.push([WARN, "tidy", tidyFinding(v.tidy)]);
-    const next = v.tidy ? `\n${nextCommand("next", `vmem tidy ${shellWord(v.id)} --all`, o)}, then confirm its fingerprint to apply the migration` : "";
-    return `${heading(`Vault ${v.id}`, o)}\n${table(["LEVEL", "CHECK", "FINDING"], rows, o)}${next}`;
-  });
-  const specs = (r.specs ?? []).map(s => {
-    if (s.healthy === false) failed++;
-    return `${heading(`Spec source ${s.id}`, o)}\n${table(["LEVEL", "CHECK", "FINDING"], [[s.healthy === false ? FAIL : OK, "root", s.healthy === false ? s.issue : s.path]], o)}`;
-  });
-  const checked = [plural(r.vaults.length, "vault"), ...(r.specs ? [plural(r.specs.length, "spec source")] : [])].join(" and ");
-  const verdict = r.healthy ? paragraph(`healthy: ${checked} checked`, o, "ok")
-    : paragraph(`unhealthy: ${plural(failed, "failed check")}; fix the findings above, then run vmem doctor again`, o, "fail");
-  return blocks(homeLine(r, o), r.vaults.length ? undefined : paragraph(NO_VAULTS, o), ...vaults, ...specs, verdict);
+  const out = report("doctor", o);
+  const findings: { marker: "ok" | "fail" | "warn"; text: string; next?: string }[] = [];
+  for (const v of r.vaults) {
+    findings.push({ marker: v.healthy ? "ok" : "fail", text: `${v.id} path: ${v.healthy ? v.path : `${v.path}: ${v.issue ?? "unavailable"}`}` });
+    for (const [name, check] of Object.entries(v.checks ?? {})) findings.push({ marker: check.ok ? "ok" : "fail", text: `${v.id} ${name}: ${check.ok ? (name === "remote" ? v.remote : name === "registry" ? v.registry : "ok") : (name === "remote" ? (check.issue ?? "unavailable").replace("; nothing was fetched or pushed", "") : check.issue ?? "unavailable")}`,
+      ...(!check.ok && name === "remote" ? { next: `git -C ${shellWord(v.path)} remote -v` } : {}) });
+    if (v.tidy) findings.push({ marker: "warn", text: `${v.id} tidy: ${tidyFinding(v.tidy)}`, next: `vmem tidy ${shellWord(v.id)} --all` });
+  }
+  for (const s of r.specs ?? []) findings.push({ marker: s.healthy === false ? "fail" : "ok", text: `${s.id} root: ${s.healthy === false ? s.issue : s.path}` });
+  out.section("Findings");
+  if (!findings.length) out.note(NO_VAULTS);
+  for (const finding of findings.sort((a, b) => ({ fail: 0, warn: 1, ok: 2 }[a.marker] - { fail: 0, warn: 1, ok: 2 }[b.marker]))) {
+    out.bullet(finding.marker, finding.text); if (finding.next) out.next(finding.next);
+  }
+  out.section("Home").kv([["Version", r.version], ["Home", r.home], ["Source", r.source], ["agent-mem", r.agentMem?.version], ["Host API", r.agentMem?.hostApi]]);
+  out.summary({ failed: findings.filter(f => f.marker === "fail").length, warnings: findings.filter(f => f.marker === "warn").length, ok: findings.filter(f => f.marker === "ok").length, unknown: findings.length ? 0 : 1 });
+  return render(out, o);
 }
 
 export function renderStats(r: VaultStats, o: TextOptions): string {
@@ -91,78 +90,102 @@ export function renderStats(r: VaultStats, o: TextOptions): string {
 }
 
 export function renderRecover(r: RecoveryReport, o: TextOptions): string {
-  const owner = r.lock.owner ? `pid ${r.lock.owner.pid} on ${r.lock.owner.host} since ${r.lock.owner.created}` : undefined;
-  const detail = fields([["lock", r.lock.path], ["state", r.lock.state], ["owner", owner], ["temporary files", r.temporaryFiles.join(", ")]], o);
-  if (r.blocked) return blocks(paragraph(`recovery blocked: ${r.blocked}`, o, "fail"), detail);
-  if (r.applied) {
-    const done = [r.lock.removed ? "the stale registry lock" : "", r.removedTemporaryFiles.length ? plural(r.removedTemporaryFiles.length, "temporary config file") : ""].filter(Boolean);
-    return paragraph(done.length ? `recovered: removed ${done.join(" and ")}` : "nothing to recover: no stale lock and no temporary config files", o, done.length ? "ok" : undefined);
-  }
-  const work = [r.lock.state === "stale" ? "the stale registry lock" : "", r.temporaryFiles.length ? plural(r.temporaryFiles.length, "temporary config file") : ""].filter(Boolean);
-  if (!work.length) return paragraph("nothing to recover: no stale lock and no temporary config files", o);
-  return blocks(paragraph(`dry run: would remove ${work.join(" and ")}`, o), detail, nextCommand("confirm", "vmem recover --confirm", o));
+  const out = report("recover", o).section("Registry");
+  if (r.blocked) out.bullet("fail", `recovery blocked: ${r.blocked}`);
+  else if (r.applied) out.bullet("ok", r.lock.removed || r.removedTemporaryFiles.length ? "recovery applied" : "nothing to recover");
+  else if (r.lock.state === "stale" || r.temporaryFiles.length) { out.bullet("pending", "dry run: recovery is available"); out.next("vmem recover --confirm"); }
+  else out.note("nothing to recover");
+  out.kv([["Lock", r.lock.path], ["State", r.lock.state], ["Owner", r.lock.owner ? `pid ${r.lock.owner.pid} on ${r.lock.owner.host} since ${r.lock.owner.created}` : null], ["Temporary files", r.temporaryFiles.join(", ")], ["Removed temporary files", r.removedTemporaryFiles.join(", ")]]);
+  return render(out, o);
 }
 
 export function renderVaultsList(vaults: VaultRow[], o: TextOptions): string {
-  return vaults.length ? table(["VAULT", "KIND", "WRITE", "PII", "DOMAINS", "PATH"], vaults.map(v => [v.id, v.kind, v.write, v.pii, effectiveDomains(v).join(", "), v.path]), o) : paragraph(NO_VAULTS, o);
+  const out = report("vaults", o).section("Vaults");
+  if (vaults.length) out.table(["Vault", "Kind", "Write", "PII", "Domains", "Path"], vaults.map(v => [v.id, v.kind, v.write, v.pii, effectiveDomains(v).join(", "), v.path]), 4);
+  else out.note(NO_VAULTS).next("vmem help vaults add");
+  return render(out, o);
 }
 export function renderVaultAdd(r: { vault: VaultSpec }, o: TextOptions): string {
-  const v = r.vault;
-  return paragraph(`registered vault ${v.id}: ${v.kind}, write ${v.write}, PII ${effectivePii(v)}, at ${v.path}`, o, "ok");
+  const v = r.vault, out = report("vaults add", o).section("Vault").bullet("ok", `registered ${v.id}`).kv([["Kind", v.kind], ["Write", v.write], ["PII", effectivePii(v)], ["Path", v.path]]);
+  return render(out, o);
 }
 export function renderSpecsList(specs: SpecSourceSpec[], o: TextOptions): string {
-  return specs.length ? table(["SOURCE", "WRITE", "PII", "PATH"], specs.map(s => [s.id, s.write, s.pii, s.path]), o)
-    : paragraph("no spec sources registered; add one with vmem specs add <id> <absolute-path>", o);
+  const out = report("specs", o).section("Spec sources");
+  if (specs.length) out.table(["Source", "Write", "PII", "Path"], specs.map(s => [s.id, s.write, s.pii, s.path])); else out.note("no spec sources registered").next("vmem help specs add");
+  return render(out, o);
 }
 export function renderSpecAdd(r: { spec: SpecSourceSpec }, o: TextOptions): string {
-  return paragraph(`registered spec source ${r.spec.id}: write ${r.spec.write}, PII ${r.spec.pii}, at ${r.spec.path}`, o, "ok");
+  return render(report("specs add", o).section("Spec source").bullet("ok", `registered ${r.spec.id}`).kv([["Write", r.spec.write], ["PII", r.spec.pii], ["Path", r.spec.path]]), o);
 }
-/** `vaults remove` and `specs remove`: unregistering only, so the files are always said to stay. */
 export function renderRemove(group: "vaults" | "specs", r: { applied: boolean; vault?: { id: string; path: string }; spec?: { id: string; path: string } }, o: TextOptions): string {
-  const entry = (r.vault ?? r.spec)!, what = `${group === "vaults" ? "vault" : "spec source"} ${entry.id} at ${entry.path}`;
-  const stays = group === "vaults" ? "its files stay on disk" : "the repository stays on disk";
-  if (r.applied) return paragraph(`unregistered ${what}; ${stays}`, o, "ok");
-  return blocks(paragraph(`dry run: would unregister ${what}; ${stays}`, o), nextCommand("confirm", `vmem ${group} remove ${shellWord(entry.id)} --confirm`, o));
+  const entry = (r.vault ?? r.spec)!, out = report(`${group} remove`, o).section("Registration");
+  out.bullet(r.applied ? "ok" : "pending", `${r.applied ? "unregistered" : "dry run: would unregister"} ${entry.id}; ${group === "vaults" ? "its files stay on disk" : "the repository stays on disk"}`).kv([["Path", entry.path]]);
+  if (!r.applied) out.next(`vmem ${group} remove ${shellWord(entry.id)} --confirm`);
+  return render(out, o);
 }
 
 export interface PiiResult { vault: string; pii: string; piiPolicy: PiiMatrix; applied?: boolean; changed?: boolean; loosened?: string[]; preview?: true }
-/** `confirm` is the exact command that applies a preview; the result itself does not carry the `--set` value. */
 export function renderVaultPii(r: PiiResult, o: TextOptions, confirm?: string): string {
-  const row = (name: string, cells: PiiRow): CellInput[] => [name, ...PII_SURFACES.map(surface => cells[surface])];
-  const matrix = table(["CATEGORY", "NOTES", "LOG", "PROMOTION"], [row("email", r.piiPolicy.email), row("phone", r.piiPolicy.phone), row("custom", r.piiPolicy.custom),
-    ...r.piiPolicy.patterns.map(p => row(`pattern ${p.name}`, p.action))], o);
-  const allow = r.piiPolicy.allow.length ? paragraph(`allow list: ${plural(r.piiPolicy.allow.length, "entry", "entries")} (shown with --json)`, o) : undefined;
-  const title = r.changed === undefined ? `Vault ${r.vault} PII policy: ${r.pii}`
-    : !r.changed ? `unchanged: vault ${r.vault} already has this PII policy (${r.pii})`
-    : r.applied ? `set the PII policy of vault ${r.vault} to ${r.pii}` : `dry run: would set the PII policy of vault ${r.vault} to ${r.pii}`;
-  const loosened = r.loosened?.length ? r.loosened.map(cell => paragraph(`loosens ${cell}`, o, "warn")).join("\n") : undefined;
-  const next = r.preview && r.changed && confirm ? nextCommand("confirm", confirm, o) : undefined;
-  return blocks(paragraph(title, o, r.applied ? "ok" : undefined), matrix, allow, loosened, next);
+  const out = report("vaults pii", o).section("Policy");
+  for (const cell of r.loosened ?? []) out.bullet("warn", `loosens ${cell}`);
+  out.kv([["Vault", r.vault], ["Policy", r.pii], ["State", r.changed === undefined ? "current" : !r.changed ? "unchanged" : r.applied ? "applied" : "preview"], ["Allow list", r.piiPolicy.allow.length]]);
+  const row = (name: string, cells: PiiRow): string[] => [name, ...PII_SURFACES.map(surface => cells[surface])];
+  out.section("Categories").table(["Category", "Notes", "Log", "Promotion"], [row("email", r.piiPolicy.email), row("phone", r.piiPolicy.phone), row("custom", r.piiPolicy.custom), ...r.piiPolicy.patterns.map(p => row(`pattern ${p.name}`, p.action))]);
+  if (r.preview && r.changed && confirm) out.next(confirm);
+  return render(out, o);
 }
 
 export function renderManifest(m: Manifest, o: TextOptions): string {
-  const tools = m.mcp.tools.map(t => typeof t === "string" ? [t, "may write"] : [t.name, tone("read-only", "muted")]);
-  return blocks(`${heading(`${m.name} ${m.version}`, o)}  config format ${m.configVersion}`,
-    `${heading(`MCP server ${m.mcp.server}`, o)}: ${plural(tools.length, "tool")}\n${table(["TOOL", "ACCESS"], tools, o)}`,
-    `${heading("Commands", o)}: ${m.commands.length}\n${paragraph(m.commands.join(", "), o, undefined, "  ")}`);
+  const out = report("manifest", o).section("Package").kv([["Name", m.name], ["Version", m.version], ["Config format", m.configVersion]]);
+  out.section("MCP").kv([["Server", m.mcp.server]]).table(["Tool", "Access"], m.mcp.tools.map(t => typeof t === "string" ? [t, "may write"] : [t.name, "read-only"]));
+  out.section("Commands"); for (const command of m.commands) out.bullet("absent", command);
+  return render(out, o);
 }
 
-/** `apply` is the exact command that applies a dry run. */
+// Full confirmation commands remain on one line pending STAIxBWLB/cli-output#15.
+export function renderSettings(result: SettingsSnapshot | SettingsResult, o: TextOptions, next?: string): string {
+  const out = report("settings", o).section("Settings");
+  if ("changes" in result) {
+    out.bullet(result.applied ? "ok" : "pending", result.applied ? "settings applied" : "settings preview");
+    out.kv(Object.entries(result.changes).map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : value]));
+    out.kv([["Fingerprint", result.fingerprint]]); if (next) out.next(next);
+  } else out.kv([["Vault", result.vault], ["Home", result.home], ["Default vault", result.defaultVault], ["Default explicit", result.defaultVaultExplicit], ["Write", result.write], ["PII patterns", result.piiPatterns.join(", ")], ["Graph resolution", result.graphResolution], ["Enrichment enabled", result.enrichmentEnabled]]);
+  return render(out, o);
+}
+
 export function renderSetup(r: SetupReport, o: TextOptions, apply?: string): string {
-  const rows = [...r.actions.map(a => ({ host: a.target, ...a })), ...(r.console ? [{ host: "console", ...r.console }] : []), ...(r.skills ?? []).flatMap(s => s.report ? s.report.actions.map(a => ({ host: `${s.target} skill`, file: a.path, change: a.change, reason: a.reason })) : [{ host: `${s.target} skill`, file: "-", change: s.refused ? "refused" : "none", reason: s.reason }])];
-  const reasons = rows.some(a => a.reason), refused = rows.filter(a => a.change === "refused").length, pending = rows.some(a => !["none", "unchanged", "absent", "refused", "foreign", "modified"].includes(a.change));
-  const title = r.mode === "dry-run" ? "dry run: nothing written" : r.applied ? (r.mode === "apply" ? "setup applied" : "setup undone") : "unchanged: nothing to do";
-  const changeTone = (change: string) => ["refused", "foreign", "modified"].includes(change) ? "fail" : ["none", "unchanged"].includes(change) ? "muted" : "info";
-  return blocks(paragraph(title, o, r.applied ? "ok" : undefined),
-    fields([["server", [r.entry.command, ...r.entry.args].map(shellWord).join(" ")], ["root", r.root ? `${r.root.path} (${r.root.version})` : undefined]], o),
-    rows.length ? table(["HOST", "CHANGE", "PATH", ...(reasons ? ["REASON"] : [])], rows.map(a => [a.host, tone(a.change, changeTone(a.change)), a.file, a.reason]), o) : undefined,
-    r.notes.map(note => paragraph(note, o)).join("\n"),
-    refused ? paragraph(`${plural(refused, "host")} refused; see REASON.`, o, "fail") : undefined,
-    r.mode === "dry-run" && pending && apply ? nextCommand("apply", apply, o) : undefined);
+  const out = report("setup", o);
+  const rows = [...r.actions.map(a => ({ host: a.target, file: a.file, change: a.change, reason: a.reason })), ...(r.console ? [{ host: "console", file: r.console.file, change: r.console.change, reason: r.console.reason }] : [])];
+  const problems = [...rows.filter(a => a.change === "refused").map(a => `${a.host}: ${plainReason(a.reason ?? "refused")}`), ...(r.skills ?? []).flatMap(s => s.refused ? [`${s.target} skills: ${plainReason(s.reason ?? "refused")}`] : (s.report?.actions ?? []).filter(a => ["refused", "foreign", "modified"].includes(a.change)).map(a => `${s.target} ${a.name}: ${plainReason(a.reason ?? a.change)}`))];
+  if (problems.length) { out.section("Problems"); for (const problem of problems) out.bullet("fail", problem); }
+  out.section("Server").kv([["Command", [r.entry.command, ...r.entry.args].map(shellWord).join(" ")], ["Root", r.root ? `${r.root.path} (${r.root.version})` : null], ["Mode", r.mode]]);
+  out.section("Hosts");
+  for (const a of [...rows].sort((a,b) => Number(b.change === "refused") - Number(a.change === "refused"))) out.bullet(a.change === "refused" ? "fail" : a.change === "none" || a.change === "unchanged" ? "absent" : "ok", `${a.host}: ${a.change} ${a.file}${a.reason ? `; ${plainReason(a.reason)}` : ""}`);
+  for (const skill of r.skills ?? []) {
+    out.section(`${skill.target} skills`);
+    if (!skill.report) out.bullet(skill.refused ? "fail" : "absent", `${skill.refused ? "refused" : "none"}${skill.reason ? `: ${plainReason(skill.reason)}` : ""}`);
+    else for (const a of [...skill.report.actions].sort((a, b) => Number(["refused", "foreign", "modified"].includes(b.change)) - Number(["refused", "foreign", "modified"].includes(a.change)))) {
+      out.bullet(["refused", "foreign", "modified"].includes(a.change) ? "fail" : ["none", "unchanged", "absent"].includes(a.change) ? "absent" : "ok", `${a.name}: ${a.change} ${a.path}${a.reason ? `; ${a.reason.replace(/`(vmem [^`]+)`/g, "$1")}` : ""}`);
+    }
+  }
+  const allChanges = [...rows.map(a => a.change), ...(r.skills ?? []).flatMap(s => s.report ? s.report.actions.map(a => a.change) : [s.refused ? "refused" : "none"])];
+  const failed = allChanges.filter(c => ["refused", "foreign", "modified"].includes(c)).length;
+  const changed = allChanges.filter(c => !["none", "unchanged", "absent", "refused", "foreign", "modified"].includes(c)).length;
+  if (changed && r.mode !== "undo") {
+    out.section("Notes");
+    if (rows.some(a => a.host !== "console" && ["add", "replace"].includes(a.change))) out.note("Restart the host session to load the vmem MCP server.");
+    if (rows.some(a => a.host === "console" && ["add", "replace"].includes(a.change))) out.note("Run setup again after upgrading vmem to refresh the console plugin.");
+    if (r.notes.some(note => note.includes("user-level hosts"))) out.note("The all target covers user-level hosts; run vmem setup agy inside a workspace for Antigravity.");
+  }
+  if (r.mode === "dry-run" && changed && apply) out.next(apply);
+  out.summary({ failed, ok: allChanges.length - failed, unknown: allChanges.length ? 0 : 1 });
+  return render(out, o);
 }
 
-/** Human-readable summary for an exported skill tree. */
-export function renderSkillsExport(report: SkillInstallReport, o: TextOptions): string {
-  const color = (change: string): Tone => ["foreign", "modified", "refused"].includes(change) ? "fail" : ["unchanged", "absent"].includes(change) ? "muted" : "info";
-  return blocks(heading(`skills export: ${clean(report.root)}`, o), table(["NAME", "CHANGE", "PATH", "REASON"], report.actions.map(action => [action.name, tone(action.change, color(action.change)), action.path, action.reason]), o));
+export function renderSkillsExport(r: SkillInstallReport, o: TextOptions): string {
+  const out = report("skills export", o).section("Skills").kv([["Root", r.root]]);
+  for (const a of [...r.actions].sort((a, b) => Number(["refused", "foreign", "modified"].includes(b.change)) - Number(["refused", "foreign", "modified"].includes(a.change)))) {
+    out.bullet(["refused", "foreign", "modified"].includes(a.change) ? "fail" : ["unchanged", "absent"].includes(a.change) ? "absent" : "ok", `${a.name}: ${a.change} ${a.path}${a.reason ? `; ${a.reason.replace(/`(vmem [^`]+)`/g, "$1")}` : ""}`);
+  }
+  return render(out, o);
 }

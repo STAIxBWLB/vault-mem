@@ -195,7 +195,7 @@ test("replacement and undo restore the original when post-rename inspection fail
 });
 
 
-test("export uses a human table by default and keeps JSON and color modes", async () => {
+test("export uses a human report by default and keeps JSON and color modes", async () => {
   const { runAsync } = await import("../src/cli.ts");
   const { stripTerminal } = await import("../src/text-output.ts");
   const f = fixture();
@@ -203,8 +203,8 @@ test("export uses a human table by default and keeps JSON and color modes", asyn
     const target = join(f.root, "export space");
     const text = await runAsync(["skills", "export", target, "--color=never"], {});
     expect(text.code).toBe(0);
-    expect(text.text).toContain("skills export:");
-    for (const field of ["NAME", "CHANGE", "PATH", "REASON", "vault-connect"]) expect(text.text).toContain(field);
+    expect(text.text).toContain("vmem skills export");
+    for (const field of ["Root:", "vault-connect", "install"]) expect(text.text).toContain(field);
     expect(text.text.trimStart().startsWith("{")).toBe(false);
     const json = await runAsync(["skills", "export", target, "--json"], {});
     expect(JSON.parse(json.text).actions).toHaveLength(14);

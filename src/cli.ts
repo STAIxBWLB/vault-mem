@@ -23,7 +23,7 @@ import { piiPolicy } from "./pii.ts";
 import { vaultStats } from "./vault-stats.ts";
 import { errorLine, paint, EXIT } from "@staix/cli-output";
 import { PLAIN, UsageError, clean, shellWord, takeColorFlag, textOptions, type TextOptions } from "./text-output.ts";
-import { renderDoctor, renderManifest, renderRecover, renderSkillsExport, renderRemove, renderSetup, renderSpecAdd, renderSpecsList, renderStats, renderStatus, renderVaultAdd, renderVaultPii, renderVaultsList, type StatusResult } from "./cli-output.ts";
+import { renderDoctor, renderManifest, renderRecover, renderSettings, renderSkillsExport, renderRemove, renderSetup, renderSpecAdd, renderSpecsList, renderStats, renderStatus, renderVaultAdd, renderVaultPii, renderVaultsList, type StatusResult } from "./cli-output.ts";
 function parse(args: string[], allowed: string[], values: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -93,14 +93,15 @@ function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLA
     const home = resolveHome(env).home, value = flags["--set"];
     if (value === undefined) {
       if (flags["--confirm"] || flags["--fingerprint"]) throw new UsageError("settings: confirmation requires changes; use --set JSON with a preview fingerprint");
-      return { text: JSON.stringify(settingsSnapshot(home, positional[0]!), null, flags["--json"] ? undefined : 2), code: 0 };
+      const result = settingsSnapshot(home, positional[0]!);
+      return { text: flags["--json"] ? JSON.stringify(result) : renderSettings(result, text), code: 0 };
     }
     let changes: unknown;
     try { changes = JSON.parse(String(value)); } catch { throw new UsageError("settings: invalid JSON; supply an object to --set"); }
     if (Boolean(flags["--confirm"]) !== Boolean(flags["--fingerprint"])) throw new UsageError("settings: --confirm and --fingerprint must be supplied together; preview first");
     const result = changeSettings(home, { vault: positional[0]!, changes: changes as import("./registry.ts").SettingsChanges, confirm: flags["--confirm"] === true, ...(typeof flags["--fingerprint"] === "string" ? { fingerprint: flags["--fingerprint"] } : {}) });
     const next = result.applied ? undefined : ["vmem", "settings", positional[0]!, "--set", String(value), "--confirm", "--fingerprint", result.fingerprint].map(shellWord).join(" ");
-    return { text: JSON.stringify({ ...result, ...(next ? { next } : {}) }, null, flags["--json"] ? undefined : 2), code: 0 };
+    return { text: flags["--json"] ? JSON.stringify({ ...result, ...(next ? { next } : {}) }) : renderSettings(result, text, next), code: 0 };
   }
   if (args[0] === "spec") return runSpecCommand(args.slice(1), env, text);
   if (args[0] === "proposal") return runProposalCommand(args.slice(1), resolveHome(env).home, env, text);
