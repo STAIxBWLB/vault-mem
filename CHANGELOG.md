@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed: the Graph panel says no vault is selected when none is, instead of an empty unknown-vault id, and offers First page next to a page error.
+
 - Add a Graph console panel with revision-bound, byte-bounded snapshot pages, unresolved-link placeholders, and existing neighborhood and path queries.
 
 - `vmem skills mine` skips host-injected `UserPromptSubmit` envelopes (`<task-notification>`, `<channel `, `<agent-message `), counted as `dropped.synthetic`, and no longer fails over 20,000 records or 64 MiB: it keeps the newest records, counts the rest in `dropped.overCap` and names the narrowing step in the report. CLI flags and MCP arguments are unchanged.

@@ -60,7 +60,7 @@ test("provider graph pages, neighborhoods, paths and refusals", async () => {
     expect(await p.snapshot({ panel: "graph", vault: "mine", after: first.cursor as number })).toEqual({ changed: false, cursor: first.cursor });
     const second = await p.snapshot({ panel: "graph", vault: "mine", page: first.next, after: 0 }) as Record<string, unknown>;
     expect(second).toMatchObject({ kind: "edges", offset: 0, count: 2, next: null });
-    expect(await p.snapshot({ panel: "graph", vault: "nope", after: 0 })).toMatchObject({ error: expect.stringContaining("unknown vault") });
+    expect(await p.snapshot({ panel: "graph", vault: "nope", after: 0 })).toMatchObject({ error: expect.stringContaining("unknown vault nope;") });
     expect(await p.snapshot({ panel: "graph", vault: "mine", page: "bad", after: 0 })).toMatchObject({ error: expect.stringContaining("restart from the first page") });
     expect(await p.snapshot({ panel: "graph", vault: "mine", neighbors: "notes/a.md", hops: 1, limit: 5, relation: "wiki_link", after: 0 })).toMatchObject({ neighborhood: { start: "a" } });
     expect(await p.snapshot({ panel: "graph", vault: "mine", from: "notes/a.md", to: "notes/b.md", maxHops: 2, viaHubs: true, relation: "wiki_link", after: 0 })).toMatchObject({ path: { found: true } });
@@ -68,6 +68,13 @@ test("provider graph pages, neighborhoods, paths and refusals", async () => {
     expect(await p.snapshot({ panel: "graph", vault: "mine", neighbors: "notes/a.md", relation: "invalid", after: 0 })).toMatchObject({ error: expect.stringContaining("invalid input") });
     expect(await p.snapshot({ panel: "graph", vault: "mine", from: "notes/a.md", after: 0 })).toMatchObject({ error: expect.stringContaining("invalid input") });
   } finally { await p.close?.(); }
+});
+test("provider graph without any registered vault asks to select one", async () => {
+  process.env.VMEM_HOME = join(root, "empty-home"); process.env.AGENTHUB_HOME = join(root, "family-empty");
+  mkdirSync(process.env.VMEM_HOME, { recursive: true });
+  const p = await plugin.open({ home: process.env.AGENTHUB_HOME, log: () => {} });
+  try { expect(await p.snapshot({ panel: "graph", after: 0 })).toEqual({ vault: null, error: "graph: no selected vault; select a registered vault" }); }
+  finally { await p.close?.(); }
 });
 test("kit graph summary and page navigation", async () => {
   const source = await Bun.file(new URL("../src/ui/panel.js", import.meta.url)).text();
@@ -91,6 +98,14 @@ test("kit graph summary and page navigation", async () => {
     panel.show("graph", { vault: "mine", page: "next-token" });
     receive({ vault: "mine", revision: "rev", totals: { nodes: 2, edges: 1, placeholders: 0, placeholdersOmitted: 0 }, graph: { partitioner: "leiden", resolution: 1, modularity: 0, iterations: 1, max_iterations: 256 }, kind: "edges", offset: 0, count: 1, next: null });
     expect(JSON.stringify(root.children)).toContain("edges · offset 0 · 1 of 1 rows · last page");
+    receive({ error: "graph page expired; restart from the first page" });
+    const first = root.children.find(c => c.kind === "div")!.children.find(b => b.props.label === "First page")!;
+    expect(JSON.stringify(root.children)).toContain("restart from the first page");
+    navigated = undefined; (first.props.onClick as () => void)();
+    expect(navigated).toEqual({ vault: "mine" });
+    panel.show("graph", { vault: "mine" });
+    receive({ error: "graph: no selected vault; select a registered vault" });
+    expect(JSON.stringify(root.children)).not.toContain("First page");
   } finally { if (saved) Object.defineProperty(globalThis, "document", saved); else delete (globalThis as { document?: unknown }).document; }
 });
 test("maximum graph provider replies stay within the transport limit", async () => {
