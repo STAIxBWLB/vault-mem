@@ -45,6 +45,7 @@ export function createGraphSnapshotCache(revision: () => number, load: (vault: s
       }
       if (!entry) throw new Error("graph changed while assembling; restart from the first page");
       cache.delete(vault); cache.set(vault, entry);
+      while (cache.size > 2) cache.delete(cache.keys().next().value!);
       if (args.page !== undefined && typeof args.page !== "string") throw new Error("graph page is invalid; restart from the first page");
       const page = resolveGraphPage(entry.assembly, args.page as string | undefined);
       const key = `${page.kind}:${page.offset}`;

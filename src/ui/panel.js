@@ -28,7 +28,7 @@ export default (host) => {
         h("p", { text: `Revision: ${s.revision}` }),
         h("p", { text: `Nodes: ${totals.nodes} · edges: ${totals.edges} · placeholders: ${totals.placeholders} · omitted: ${totals.placeholdersOmitted}` }),
         h("p", { text: `${graph.partitioner} · resolution ${graph.resolution} · modularity ${graph.modularity} · iterations ${graph.iterations}/${graph.max_iterations}` }),
-        h("p", { text: `${s.kind} · ${s.count} rows at offset ${s.offset}` })),
+        h("p", { text: `${s.kind} · offset ${s.offset} · ${s.count} of ${totals[s.kind]} rows · ${s.next !== null ? "more pages follow" : "last page"}` })),
         h("div", { class: "vmem-bar" }, ...(params.page ? [ui.button("First page", () => go("graph"))] : []), ...(s.next ? [ui.button("Next page", () => go("graph", { page: s.next }))] : []))];
     },
     settings(s) {

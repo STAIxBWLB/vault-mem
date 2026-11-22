@@ -30,6 +30,19 @@ test("graph cache single flight, freshness, conditional cursors and LRU", async 
   content = "[[other]]"; stamp++;
   await expect(cache.snapshot("a", { page: oldNext })).rejects.toThrow("restart from the first page");
 });
+test("a write during assembly triggers a fresh build", async () => {
+  let stamp = 1, loads = 0, release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const cache = createGraphSnapshotCache(() => stamp, async vault => {
+    const captured = ++loads === 1 ? "[[b]]" : "[[missing]]";
+    if (loads === 1) await gate;
+    return assembleGraphSnapshot(input(captured), vault);
+  });
+  const pending = cache.snapshot("a", {}); stamp++; release();
+  const result = await pending;
+  expect(loads).toBe(2);
+  expect(result.totals).toMatchObject({ placeholders: 1 });
+});
 const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-graph-ui-")));
 const home = join(root, "home"), vault = join(root, "vault");
 const saved = { VMEM_HOME: process.env.VMEM_HOME, AGENTHUB_HOME: process.env.AGENTHUB_HOME };
@@ -49,9 +62,10 @@ test("provider graph pages, neighborhoods, paths and refusals", async () => {
     expect(second).toMatchObject({ kind: "edges", offset: 0, count: 2, next: null });
     expect(await p.snapshot({ panel: "graph", vault: "nope", after: 0 })).toMatchObject({ error: expect.stringContaining("unknown vault") });
     expect(await p.snapshot({ panel: "graph", vault: "mine", page: "bad", after: 0 })).toMatchObject({ error: expect.stringContaining("restart from the first page") });
-    expect(await p.snapshot({ panel: "graph", vault: "mine", neighbors: "notes/a.md", hops: 1, limit: 5, after: 0 })).toMatchObject({ neighborhood: { start: "a" } });
-    expect(await p.snapshot({ panel: "graph", vault: "mine", from: "notes/a.md", to: "notes/b.md", maxHops: 2, viaHubs: true, after: 0 })).toMatchObject({ path: { found: true } });
+    expect(await p.snapshot({ panel: "graph", vault: "mine", neighbors: "notes/a.md", hops: 1, limit: 5, relation: "wiki_link", after: 0 })).toMatchObject({ neighborhood: { start: "a" } });
+    expect(await p.snapshot({ panel: "graph", vault: "mine", from: "notes/a.md", to: "notes/b.md", maxHops: 2, viaHubs: true, relation: "wiki_link", after: 0 })).toMatchObject({ path: { found: true } });
     expect(await p.snapshot({ panel: "graph", vault: "mine", neighbors: "notes/a.md", hops: 9, after: 0 })).toMatchObject({ error: expect.stringContaining("invalid input") });
+    expect(await p.snapshot({ panel: "graph", vault: "mine", neighbors: "notes/a.md", relation: "invalid", after: 0 })).toMatchObject({ error: expect.stringContaining("invalid input") });
     expect(await p.snapshot({ panel: "graph", vault: "mine", from: "notes/a.md", after: 0 })).toMatchObject({ error: expect.stringContaining("invalid input") });
   } finally { await p.close?.(); }
 });
@@ -70,9 +84,13 @@ test("kit graph summary and page navigation", async () => {
     const panel = mod.default(host); panel.show("graph", { vault: "mine" });
     receive({ vault: "mine", revision: "rev", totals: { nodes: 2, edges: 1, placeholders: 0, placeholdersOmitted: 0 }, graph: { partitioner: "leiden", resolution: 1, modularity: 0, iterations: 1, max_iterations: 256 }, kind: "nodes", offset: 0, count: 2, next: "next-token" });
     expect(JSON.stringify(root.children)).toContain("Revision: rev");
+    expect(JSON.stringify(root.children)).toContain("nodes · offset 0 · 2 of 2 rows · more pages follow");
     const buttons = root.children.find(c => c.kind === "div")!.children;
     (buttons.find(b => b.props.label === "Next page")!.props.onClick as () => void)();
     expect(navigated).toEqual({ vault: "mine", page: "next-token" });
+    panel.show("graph", { vault: "mine", page: "next-token" });
+    receive({ vault: "mine", revision: "rev", totals: { nodes: 2, edges: 1, placeholders: 0, placeholdersOmitted: 0 }, graph: { partitioner: "leiden", resolution: 1, modularity: 0, iterations: 1, max_iterations: 256 }, kind: "edges", offset: 0, count: 1, next: null });
+    expect(JSON.stringify(root.children)).toContain("edges · offset 0 · 1 of 1 rows · last page");
   } finally { if (saved) Object.defineProperty(globalThis, "document", saved); else delete (globalThis as { document?: unknown }).document; }
 });
 test("maximum graph provider replies stay within the transport limit", async () => {
