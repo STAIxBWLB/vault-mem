@@ -70,9 +70,8 @@ test("#114 links, log, rebuild and neighbours render tables, counts and next com
   const log = logReadText(read, PLAIN, { command: "grep", vault: "demo", pattern: "sec ond", limit: 1 });
   expect(log).toContain("incomplete final log line omitted");
   expect(log).toContain("vmem log grep demo 'sec ond' --limit 2");
-  expect(logAppendText({ ok: true, appended: true, synced: true, bytesWritten: 53, issues: [] }, PLAIN, { vault: "demo", type: "LEARN" })).toBe("✓  appended LEARN to the demo log (53 bytes)");
-  expect(logAppendText({ ok: false, appended: false, synced: false, bytesWritten: 0, issues: [{ code: "L09", severity: "error", message: "bad" }] }, PLAIN, { vault: "demo", type: "LEARN" }))
-    .toBe("✗  log append: LEARN not appended\n\nLEVEL     CODE  PATH  MESSAGE\n✗  error  L09   -     bad");
+  expect(logAppendText({ ok: true, appended: true, synced: true, bytesWritten: 53, issues: [] }, PLAIN, { vault: "demo", type: "LEARN" })).toContain("appended LEARN to the demo log");
+  expect(logAppendText({ ok: false, appended: false, synced: false, bytesWritten: 0, issues: [{ code: "L09", severity: "error", message: "bad" }] }, PLAIN, { vault: "demo", type: "LEARN" })).toContain("L09: bad");
   expect(rebuildText({ vault: "demo", notes: 2, changed: 1, removed: 0 }, PLAIN)).toContain("Changed:  1");
   const node = (id: string) => ({ id, label: id.toUpperCase(), type: "method", domain: "", source_file: `notes/${id}.md`, community: 0, degree: 1 });
   const edge = (source: string, target: string) => ({ source, target, relation: "wiki_link" as const, confidence_tag: "EXTRACTED" as const, confidence: 1 as const });

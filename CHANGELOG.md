@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Standardize write, preview, promotion and sync human reports while keeping JSON receipts and exit codes unchanged.
+
 - Standardize read and analysis human reports, including brief and skills mine; JSON and stored lint reports are unchanged.
 
 - Standardize registry and setup human reports, including a readable settings view; JSON output and exit codes are unchanged.
