@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { paint, Report, resolveColor, ROLE_SGR, SGR_RESET } from "@staix/cli-output";
-import { outputWidth, shellWord, takeColorFlag, textOptions, wrap } from "../src/text-output.ts";
+import { paint, Report, resolveColor, ROLE_SGR, SGR_RESET, streamWidth, wrap } from "@staix/cli-output";
+import { shellWord, takeColorFlag, textOptions } from "../src/text-output.ts";
 import { run } from "../src/cli.ts";
 
 test("#114 AC2: --color is taken once from anywhere before --, and auto follows the TTY, NO_COLOR and TERM", () => {
@@ -19,9 +19,9 @@ test("#114 AC2: --color is taken once from anywhere before --, and auto follows 
   expect(resolveColor(undefined, { isTTY: false }, "vmem")).toBe(false);
   expect(resolveColor("sometimes", { isTTY: true }, "vmem")).toBeInstanceOf(Error);
   expect(textOptions("always", {}, { isTTY: false })).toEqual({ color: true, ascii: true });
-  expect(outputWidth({ isTTY: true, columns: 60 })).toBe(60);
-  expect(outputWidth({ isTTY: false, COLUMNS: "100" })).toBe(100);
-  expect(outputWidth({ isTTY: false })).toBeUndefined();
+  expect(streamWidth(true, 60, {})).toBe(60);
+  expect(streamWidth(false, undefined, { COLUMNS: "100" })).toBe(100);
+  expect(streamWidth(false, undefined, {})).toBeUndefined();
   expect(() => run(["--version", "--color=sometimes"])).toThrow("--color=auto");
 });
 
@@ -30,7 +30,7 @@ test("package report supplies table and field layout", () => {
   const plain = out.render(false).join("\n");
   expect(plain).toContain("Vault:"); expect(plain).toContain("(unset)"); expect(plain).toContain("notes/a.md");
   expect(paint([{ text: "ok", role: "success" }], true)).toBe(ROLE_SGR.success + "ok" + SGR_RESET);
-  expect(wrap("abcdefghijklmnop", 10)).toEqual(["abcdefghij", "klmnop"]);
+  expect(wrap("abcdefghijklmnop", 10, 0)).toEqual(["abcdefghij", "klmnop"]);
   expect(shellWord("notes/a.md")).toBe("notes/a.md"); expect(shellWord("it's here")).toBe(`'it'"'"'s here'`);
 });
 

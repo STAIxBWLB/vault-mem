@@ -1,10 +1,11 @@
+import { terminalText } from "@staix/cli-output";
 import { expect, test } from "bun:test";
 import { lintDetails } from "../src/vault-lint.ts";
 import { analysisCorpus } from "./fixtures/analysis-corpus.ts";
 import { lintText, searchText, showText } from "../src/read-output.ts";
 import { renderMineText, type MineResult } from "../src/skills-mine.ts";
 import { renderBrief } from "../src/vault-brief.ts";
-import { stripTerminal, width } from "../src/text-output.ts";
+import { cellWidth as width } from "@staix/cli-output";
 
 const plain = { color: false, ascii: true, columns: 80 };
 test("read and analysis reports retain content, ASCII layout and semantic color", () => {
@@ -13,7 +14,7 @@ test("read and analysis reports retain content, ASCII layout and semantic color"
   const expected = [" vmem search", "", "> Results", "  Vault:    demo", "  Query:    synthetic", "  Results:  1", "  -  synthetic.md: Synthetic title (method)", "  synthetic excerpt"].join("\n");
   expect(searchText(hits, plain, context)).toBe(expected);
   const colored = searchText(hits, { ...plain, color: true }, context);
-  expect(stripTerminal(colored)).toBe(expected);
+  expect(terminalText(colored)).toBe(expected);
   expect(colored).not.toBe(expected);
   const details = lintDetails(analysisCorpus());
   const original = JSON.stringify(details.report);
@@ -37,7 +38,7 @@ test("brief preserves byte cap including color and only reports omitted matches 
   const large = { ...empty, lines: ["notes/a.md | " + "a".repeat(180), "notes/b.md | " + "b".repeat(180)] };
   const text = renderBrief(large, { ...plain, color: true }, 256);
   expect(Buffer.byteLength(text) + 1).toBeLessThanOrEqual(256);
-  expect(stripTerminal(text)).toContain("matches omitted");
+  expect(terminalText(text)).toContain("matches omitted");
 });
 
 
@@ -47,7 +48,7 @@ test("skills mine human report has ASCII and color without changing Markdown", (
   expect(text).toContain("> Candidates");
   expect(text).not.toContain("# Original Markdown");
   expect(result.report).toBe("# Original Markdown\n");
-  expect(stripTerminal(colored)).toBe(text);
+  expect(terminalText(colored)).toBe(text);
   expect(colored).not.toBe(text);
   for (const line of text.split("\n")) expect(width(line)).toBeLessThanOrEqual(80);
 });

@@ -21,8 +21,8 @@ import { resolveHome } from "./home.ts";
 import { changeSettings, settingsSnapshot, addVault, addSpec, removeSpec, specStatus, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault, setVaultPii } from "./registry.ts";
 import { piiPolicy } from "./pii.ts";
 import { vaultStats } from "./vault-stats.ts";
-import { errorLine, paint, EXIT } from "@staix/cli-output";
-import { PLAIN, UsageError, clean, shellWord, takeColorFlag, textOptions, type TextOptions } from "./text-output.ts";
+import { errorLine, paint, EXIT, terminalText } from "@staix/cli-output";
+import { PLAIN, UsageError, shellWord, takeColorFlag, textOptions, type TextOptions } from "./text-output.ts";
 import { renderDoctor, renderManifest, renderRecover, renderSettings, renderSkillsExport, renderRemove, renderSetup, renderSpecAdd, renderSpecsList, renderStats, renderStatus, renderVaultAdd, renderVaultPii, renderVaultsList, type StatusResult } from "./cli-output.ts";
 function parse(args: string[], allowed: string[], values: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
@@ -278,7 +278,7 @@ export function reportError(error: unknown, args: string[]): number {
   try { ({ color, ascii = false } = takeColorFlag(args)); } catch { color = "never"; }
   let options: TextOptions;
   try { options = textOptions(color, process.env, process.stderr, ascii); } catch { options = PLAIN; }
-  const line = errorLine("vmem", clean(error instanceof Error ? error.message : "operation failed"), "", { tty: process.stderr.isTTY === true, ascii: options.ascii === true })[0]!;
+  const line = errorLine("vmem", terminalText(error instanceof Error ? error.message : "operation failed", { singleLine: true }), "", { tty: process.stderr.isTTY === true, ascii: options.ascii === true })[0]!;
   console.error(paint([{ text: line, role: "error" }], options.color));
   if (!(error instanceof UsageError)) return EXIT.fail;
   let words = args;

@@ -1,7 +1,7 @@
-import { Report } from "@staix/cli-output";
+import { Report, terminalText } from "@staix/cli-output";
 /**
  * Text renderers for `vmem spec get|graph|grep|validate` (#114). Each one reads the same result object `--json` prints
- * and never adds content to it; data goes through `clean()` in tables and fields, and bodies keep their lines with
+ * and never adds content to it; table and field values are sanitized, and bodies keep their lines with
  * terminal escape sequences stripped.
  */
 import type { SpecDeleteResult, SpecWriteResult } from "./spec-write.ts";
@@ -9,7 +9,7 @@ import type { SpecCommand } from "./spec-command-table.ts";
 import type { SpecEdge, SpecNode } from "./spec-graph.ts";
 import type { SpecFreshnessEntry } from "./spec-freshness.ts";
 import type { SpecValidationIssue, SpecValidationReport } from "./spec-validate.ts";
-import { plural, shellWord, type TextOptions, stripTerminal } from "./text-output.ts";
+import { plural, shellWord, type TextOptions } from "./text-output.ts";
 
 /** What the renderers need from the command line: the spec arguments (`get root --body`) and their parsed values. */
 export interface SpecTextContext { args: readonly string[]; values: Record<string, unknown>; repo?: string }
@@ -43,7 +43,7 @@ export function renderSpecGet(r: SpecGetResult, o: TextOptions, context: SpecTex
   if (r.headings?.length) { out.section("Headings"); for (const heading of r.headings) out.bullet("absent", heading); if (r.headingsTruncated) out.note("more headings"); }
   if (r.body === undefined) return done(out, o);
   out.section("Content");
-  const body = stripTerminal(r.body).replace(/\n+$/, "");
+  const body = terminalText(r.body).replace(/\n+$/, "");
   if (!r.bodyTruncated || r.nextOffset === undefined) return `${done(out, o)}\n${body}`;
   const tail = new Report(o.columns, o.ascii).section("Continuation").next(offsetCommand(context.args, r.nextOffset));
   return `${done(out, o)}\n${body}\n\n${done(tail, o)}`;
@@ -71,7 +71,7 @@ export function renderSpecGraph(r: SpecGraphResult, o: TextOptions, context: Spe
 export function renderSpecGrep(r: SpecGrepResult, o: TextOptions, context: SpecTextContext): string {
   const out = report("spec grep", o).section("Results").kv([["Offset", r.offset], ["Hits", r.hits.length]]);
   if (!r.hits.length) out.note(r.offset ? `no more hits after offset ${r.offset}` : "no specs matched");
-  for (const hit of r.hits) { out.bullet("absent", `${hit.id}: ${hit.title} (${hit.type}, ${hit.status ?? "unknown"})`); const snippet = stripTerminal(hit.snippet).replace(/\s+/g, " ").trim(); if (snippet) out.note(snippet); }
+  for (const hit of r.hits) { out.bullet("absent", `${hit.id}: ${hit.title} (${hit.type}, ${hit.status ?? "unknown"})`); const snippet = terminalText(hit.snippet).replace(/\s+/g, " ").trim(); if (snippet) out.note(snippet); }
   if (r.truncated && r.nextOffset !== undefined) out.next(offsetCommand(context.args, r.nextOffset));
   return done(out, o);
 }

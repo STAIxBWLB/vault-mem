@@ -9,7 +9,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { codePointCompare as compare, labelCommunities } from "./vault-graph.ts";
 import { SECRET_PATTERNS } from "./write-validation.ts";
-import { PLAIN, UsageError, stripTerminal, type TextOptions } from "./text-output.ts";
+import { PLAIN, UsageError, type TextOptions } from "./text-output.ts";
 
 /**
  * `vmem skills mine`: read-only skill-candidate mining over amem memory and vault notes, a port of the skill-mine

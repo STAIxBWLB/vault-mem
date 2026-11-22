@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { errorLine, paint, markerCell, Report, resolveColor, ROLE_SGR, SGR_RESET, type Role } from "@staix/cli-output";
-import { stripTerminal, textOptions, width } from "../src/text-output.ts";
+import { terminalText, errorLine, paint, markerCell, Report, resolveColor, ROLE_SGR, SGR_RESET, type Role } from "@staix/cli-output";
+import { textOptions } from "../src/text-output.ts";
+import { cellWidth as width } from "@staix/cli-output";
 import { run } from "../src/cli.ts";
 import { evidenceText } from "../src/read-output.ts";
 import { renderStatus } from "../src/cli-output.ts";
@@ -10,7 +11,7 @@ const color = { color: true, ascii: true };
 test("shared roles and markers render a report with and without color", () => {
   const report = (o: typeof plain) => [paint([{ text: "vmem report", role: "header" }], o.color), `${paint([{ text: markerCell("ok", o.ascii), role: "success" }], o.color)} healthy`, `${paint([{ text: markerCell("fail", o.ascii), role: "error" }], o.color)} failed`].join("\n");
   expect(report(plain)).toBe("vmem report\nok healthy\nx  failed");
-  expect(stripTerminal(report(color))).toBe(report(plain));
+  expect(terminalText(report(color))).toBe(report(plain));
   expect(report(color)).toBe([paint([{ text: "vmem report", role: "header" }], color.color), `${paint([{ text: "ok", role: "success" }], color.color)} healthy`, `${paint([{ text: "x ", role: "error" }], color.color)} failed`].join("\n"));
   const roles = Object.keys(ROLE_SGR) as Role[];
   for (const role of roles) expect(paint([{ text: "sample", role }], color.color)).toBe(ROLE_SGR[role] ? `${ROLE_SGR[role]}sample${SGR_RESET}` : "sample");
@@ -20,7 +21,7 @@ test("status report is golden with color off and on", () => {
   const expected = [" vmem status", "", "> Home", "  Version:    9.0.0", "  Home:       /synthetic", "  Source:     VMEM_HOME", "  Health:     healthy", "  agent-mem:  (unset)", "  Host API:   (unset)", "", "> Vaults", "  no vaults registered", "    -> vmem help vaults add", "", "> Spec sources", "  no spec sources registered", "    -> vmem help specs add"].join("\n");
   expect(renderStatus(report, plain)).toBe(expected);
   const colored = renderStatus(report, color);
-  expect(stripTerminal(colored)).toBe(expected);
+  expect(terminalText(colored)).toBe(expected);
   expect(colored).not.toBe(expected);
 });
 test("color precedence and JSON on pipes", () => {
@@ -33,7 +34,7 @@ test("color precedence and JSON on pipes", () => {
   expect(resolveColor("auto", { isTTY: false, CLICOLOR_FORCE: "1", CLICOLOR: "0" }, "vmem")).toBe(true);
   expect(resolveColor("auto", { isTTY: true, CLICOLOR: "0" }, "vmem")).toBe(false);
   const json = run(["manifest", "--json", "--color=always"], { FORCE_COLOR: "1", LANG: "C" }).text;
-  expect(stripTerminal(json)).toBe(json);
+  expect(terminalText(json)).toBe(json);
   expect(JSON.parse(json).name).toBe("@staix/vault-mem");
 });
 test("80-column reports cap columns", () => {
@@ -58,7 +59,7 @@ test("stderr decides color independently of stdout", () => {
   expect(errorLine("vmem", "failed", "", { tty: false, ascii: stdout.ascii })[0]).toBe("vmem: failed");
   const forced = textOptions("auto", { ...env, FORCE_COLOR: "1" }, { isTTY: false });
   expect(paint([{ text: errorLine("vmem", "failed", "", { tty: false, ascii: forced.ascii })[0]!, role: "error" }], forced.color)).not.toBe(errorLine("vmem", "failed", "", { tty: false, ascii: stdout.ascii })[0]);
-  expect(stripTerminal(paint([{ text: errorLine("vmem", "failed", "", { tty: false, ascii: forced.ascii })[0]!, role: "error" }], forced.color))).toBe("vmem: failed");
+  expect(terminalText(paint([{ text: errorLine("vmem", "failed", "", { tty: false, ascii: forced.ascii })[0]!, role: "error" }], forced.color))).toBe("vmem: failed");
 });
 
 test("usage and operation failures have distinct process exits", () => {
@@ -91,6 +92,6 @@ test("evidence states use semantic markers and colors", () => {
   const report = { schemaVersion: 1 as const, vault: "v", note: { path: "notes/a.md", sha256: "abc" }, truncated: false as const, evidence: [{ index: 0, source: "notes/b.md", kind: "path" as const, expectedSha256: "abc", status: "verified" as const }] };
   expect(evidenceText(report, plain)).toContain("ok 0: verified");
   const colored = evidenceText(report, color);
-  expect(stripTerminal(colored)).toContain("ok 0: verified");
+  expect(terminalText(colored)).toContain("ok 0: verified");
   expect([...colored.matchAll(/\[([0-9;]+)m/g)].map(match => match[1])).toContain("1;32");
 });

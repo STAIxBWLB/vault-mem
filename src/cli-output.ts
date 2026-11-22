@@ -138,7 +138,6 @@ export function renderManifest(m: Manifest, o: TextOptions): string {
   return render(out, o);
 }
 
-// Full confirmation commands remain on one line pending STAIxBWLB/cli-output#15.
 export function renderSettings(result: SettingsSnapshot | SettingsResult, o: TextOptions, next?: string): string {
   const out = report("settings", o).section("Settings");
   if ("changes" in result) {
