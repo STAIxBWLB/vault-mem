@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-22
+
 - Add directed `supersedes` and `superseded_by` frontmatter edges to Graph console snapshots. CLI and MCP graph outputs keep their existing behavior.
 
 - Add an opt-in two-step mode to `vmem_link` (`preview`, `confirm`, `fingerprint`; a stale fingerprint returns a fresh preview) and a console `link` action that previews both notes, the relation and the log event before confirming; an existing link is a no-op. Calls without `preview` or `confirm` write in one step as before.
