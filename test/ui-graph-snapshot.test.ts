@@ -6,6 +6,30 @@ import type { GraphNodeColumns, GraphEdgeColumns } from "../src/ui/panel-types.t
 const input = (notes: AnalysisSnapshot["notes"]): AnalysisSnapshot => ({ notes, today: "2026-01-01", logPath: "log", log: null, registryIds: null, reports: {} });
 const note = (id: string, source: string) => ({ path: `notes/${id}.md`, source });
 describe("graph snapshot", () => {
+  test("supersedes frontmatter adds directed snapshot edges without changing the legacy graph", () => {
+    const s = input([
+      note("a", '---\ntype: decision\nsupersedes: "[[b]]"\n---\n[[b]]'),
+      note("b", '---\ntype: decision\nsupersedes: ["[[c]]", "[[missing#detail|label]]"]\n---\n'),
+      note("c", '---\ntype: decision\nsuperseded_by: "[[notes/b.md]]"\n---\n'),
+    ]);
+    const graph = buildGraph(s), a = assembleGraphSnapshot(s, "v");
+    expect(graph.edges).toHaveLength(1); expect(graph.edges[0]!.relation).toBe("wiki_link");
+    const nodes = a.pages.find(p => p.kind === "nodes")!.columns as GraphNodeColumns;
+    const rows = a.pages.filter(p => p.kind === "edges").flatMap(p => {
+      const c = p.columns as GraphEdgeColumns;
+      return c.source.map((source, i) => ({ source: nodes.id[source], target: nodes.id[c.target[i]!], relation: c.relations[c.relation[i]!], field: c.field[i], tag: Array.isArray(c.confidence_tag) ? c.confidence_tag[i] : c.confidence_tag }));
+    });
+    expect(rows).toEqual([
+      { source: "a", target: "b", relation: "wiki_link", field: null, tag: "EXTRACTED" },
+      { source: "a", target: "b", relation: "supersedes", field: "supersedes", tag: "EXTRACTED" },
+      { source: "b", target: "c", relation: "supersedes", field: "supersedes", tag: "EXTRACTED" },
+      { source: "c", target: "b", relation: "supersedes", field: "superseded_by", tag: "EXTRACTED" },
+      { source: "b", target: "missing", relation: "supersedes", field: "supersedes", tag: "EXTRACTED" },
+    ]);
+    expect(a.pages[0]!.totals).toMatchObject({ nodes: 4, edges: 5, placeholders: 1 });
+    expect(nodes.degree[nodes.id.indexOf("missing")]).toBe(1);
+    for (const page of a.pages) expect(Buffer.byteLength(JSON.stringify(page)) + 32).toBeLessThanOrEqual(1_048_576);
+  });
   test("unresolved links preserve resolved graph, metadata and pagination", () => {
     const s = input([note("a", "---\ncreated: 2024-01-01\nupdated: 2025-01-01\n---\n[[b]] [[missing]] [[missing]]"), note("b", "---\ndate: 2023-02-01\nupdated: [bad]\n---\n[[missing]]")]);
     const before = JSON.stringify(buildGraph(s));
@@ -87,5 +111,14 @@ describe("graph snapshot", () => {
       if (p.kind === "edges") { const c = p.columns as GraphEdgeColumns; expect(c.source.every(v => v >= 0 && v < n)).toBe(true); expect(c.target.every(v => v >= 0 && v < n)).toBe(true); }
     }
     expect(offsets).toEqual({ nodes: n, edges: 100_000 });
+  });
+  test("resolved supersedes edges count toward the existing edge limit", () => {
+    const n = 10_000;
+    const notes = Array.from({ length: n }, (_, i) => note(`n${String(i).padStart(5, "0")}`, `${i === 0 ? '---\nsupersedes: "[[n00001]]"\n---\n' : ""}${Array.from({ length: 10 }, (_, j) => `[[n${String((i + j + 1) % n).padStart(5, "0")}]]`).join(" ")}`));
+    expect(() => assembleGraphSnapshot(input(notes), "v")).toThrow("graph: exceeds 100000 edges");
+    const m = 9_999;
+    const fullEdges = Array.from({ length: m }, (_, i) => note(`n${String(i).padStart(5, "0")}`, `${i === 0 ? '---\nsupersedes: "[[missing]]"\n---\n' : ""}${Array.from({ length: i === 0 ? 20 : 10 }, (_, j) => `[[n${String((i + j + 1) % m).padStart(5, "0")}]]`).join(" ")}`));
+    const graph = assembleGraphSnapshot(input(fullEdges), "v");
+    expect(graph.pages[0]!.totals).toMatchObject({ edges: 100_000, placeholders: 0, placeholdersOmitted: 1 });
   });
 });

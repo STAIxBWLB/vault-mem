@@ -1,5 +1,5 @@
 import type { AnalysisSnapshot } from "./analysis-types.ts";
-import { authoredLinkOffsets, LINK_RELATIONS } from "./links.ts";
+import { authoredLinkOffsets, LINK_RELATIONS, noteKey } from "./links.ts";
 export { LINK_RELATIONS };
 import { AnalysisYamlUnsupported, parseAnalysisYaml, scalarText, yamlTruthy } from "./analysis-yaml.ts";
 
@@ -136,6 +136,32 @@ export function collectUnresolvedGraph(snapshot: AnalysisSnapshot): GraphEdge[] 
     }
   }
   return [...edges.values()].sort((a, b) => compare(a.target, b.target) || compare(a.source, b.source));
+}
+/** Directed frontmatter references for the console snapshot; the legacy graph stays unchanged. */
+export function collectSupersedesEdges(snapshot: AnalysisSnapshot): GraphEdge[] {
+  const sources = [...snapshot.notes].sort((a, b) => compare(a.path, b.path));
+  const ids = new Map<string, string>();
+  for (const note of sources) {
+    const id = note.path.replace(/^notes\//, "").slice(0, -3);
+    ids.set(noteKey(note.path), id);
+  }
+  const edges: GraphEdge[] = [];
+  for (const note of sources) {
+    const source = note.path.replace(/^notes\//, "").slice(0, -3), fm = parse(note.source).fm;
+    for (const field of ["supersedes", "superseded_by"] as const) {
+      const values = Array.isArray(fm[field]) ? fm[field] : [fm[field]];
+      for (const value of values) {
+        if (typeof value !== "string") continue;
+        for (const match of value.matchAll(LEGACY_LINK)) {
+          const raw = match[1]!.split("#", 1)[0]!.trim(), key = noteKey(raw);
+          if (!key) continue;
+          const target = ids.get(key) ?? ids.get(noteKey(legacyTarget(key))) ?? legacyTarget(key);
+          edges.push({ source, target, relation: "supersedes", field, confidence_tag: "EXTRACTED", confidence: 1 });
+        }
+      }
+    }
+  }
+  return edges;
 }
 function adjacency(graph: Pick<VaultGraph, "nodes" | "edges">): Map<string, Set<string>> {
   const neighbors = new Map(graph.nodes.map(node => [node.id, new Set<string>()]));
