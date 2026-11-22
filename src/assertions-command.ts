@@ -1,9 +1,10 @@
 /** CLI surface for the shared assertion read provider. */
+import { Report } from "@staix/cli-output";
 import { readAssertions } from "./assertion-read.ts";
 import { assertionCoverageWarnings } from "./assertion-coverage.ts";
 import { scanAssertionExposure, writeReplaceFile, type ExposureReceipt } from "./assertion-exposure.ts";
 import { purgeAssertions, type PurgeReceipt } from "./assertions.ts";
-import { blocks, clean, heading, issueTable, nextCommand, paragraph, plural, status, table, PLAIN, UsageError, type TextOptions } from "./text-output.ts";
+import { plural, shellWord, PLAIN, UsageError, type TextOptions } from "./text-output.ts";
 import { confirmCommand } from "./write-output.ts";
 
 export function runAssertionsCommand(args: string[], home: string, env: NodeJS.ProcessEnv, text: TextOptions): { text: string; code: number } {
@@ -32,29 +33,34 @@ export function runAssertionsCommand(args: string[], home: string, env: NodeJS.P
     ...(typeof flags["--cursor"] === "string" ? { cursor: flags["--cursor"] } : {}),
     ...(flags["--history"] === true ? { history: true } : {}) }, { env });
   if (flags["--json"]) return { text: JSON.stringify(result), code: 0 };
-  const rows = result.items.map(item => [clean(item.subject), clean(item.relation), item.answer ?? "-", typeof item.value === "string" ? clean(item.value) : item.value ? "withheld" : "-", item.id]);
-  return { text: blocks(heading(`Assertions in ${clean(result.vault)}`, text), table(["SUBJECT", "RELATION", "ANSWER", "VALUE", "ID"], rows, text),
-    result.truncated ? status("pending", `more results: rerun with --cursor ${result.continuation}`, text) : status("ok", `${result.items.length} assertion(s) shown`, text),
-    ...assertionCoverageWarnings(result.coverage).map(w => status(w.tone === "err" ? "fail" : w.tone === "warn" ? "warn" : "unknown", w.message, text))), code: 0 };
+  const out = new Report(text.columns, text.ascii).header("vmem", "assertions");
+  const coverage = assertionCoverageWarnings(result.coverage);
+  if (coverage.length) {
+    out.section("Coverage");
+    for (const warning of coverage) out.bullet(warning.tone === "err" ? "fail" : warning.tone === "warn" ? "warn" : "unknown", warning.message.replaceAll("`", "").replace("vmem assertions <vault>", `vmem assertions ${shellWord(result.vault)}`).replace("vmem sync to", `vmem sync ${shellWord(result.vault)} to`));
+  }
+  out.section("Assertions").kv([["Vault", result.vault], ["Shown", result.items.length]]);
+  for (const item of result.items) out.bullet("absent", `${item.subject}: ${item.relation}, ${item.answer ?? "-"}, ${typeof item.value === "string" ? item.value : item.value ? "withheld" : "-"}, ${item.id}`);
+  if (result.truncated && result.continuation) {
+    const args = ["vmem", "assertions", result.vault, ...values.filter(flag => flag !== "--cursor" && typeof flags[flag] === "string").flatMap(flag => [flag, String(flags[flag])]), ...(flags["--history"] === true ? ["--history"] : []), "--cursor", result.continuation];
+    out.next(args.map(shellWord).join(" "));
+  }
+  return { text: out.render(text.color).join("\n"), code: 0 };
 }
 
 /** What a purge receipt means in words; `argv` is the command without `vmem`, so the confirm line is pasteable. */
 export function purgeText(r: PurgeReceipt, o: TextOptions, c: { argv: string[]; vault: string }): string {
-  const entries = plural(r.entries.length, "entry", "entries"), segments = plural(r.segments.length, "segment");
-  const verdict = r.preview
-    ? (r.ok ? status("ok", `purge preview for ${clean(r.assertion)} in ${clean(c.vault)}: ${entries} in ${segments} would keep their hashes and lose their payloads; nothing written`, o)
-      : status("fail", `purge refused for ${clean(c.vault)}; nothing written`, o))
-    : r.applied
-      ? (r.ok ? status("ok", `purged ${clean(r.assertion)} in ${clean(c.vault)} at ${r.at}: ${entries} rewritten in ${segments}; payloads removed, chain unchanged`, o)
-        : status("fail", `${clean(r.assertion)} was rewritten in ${clean(c.vault)} but a later step failed; request a fresh preview and confirm again`, o))
-      : status("fail", `purge refused for ${clean(c.vault)}; nothing written`, o);
-  const rows = r.entries.length ? table(["SEGMENT", "SEQ", "OP", "HASH"], r.entries.map(e => [e.segment, e.seq, e.op, e.hash.slice(0, 12)]), o) : undefined;
-  const already = r.alreadyPurged ? paragraph(`${plural(r.alreadyPurged, "entry", "entries")} already carried a purge marker and were left as they are.`, o, "muted") : undefined;
-  const omitted = r.omitted ? paragraph(`${r.omitted} more ${r.omitted === 1 ? "entry is" : "entries are"} affected but not listed; confirm rewrites all of them.`, o, "muted") : undefined;
-  const recovery = r.recovery.length ? ["recovery:", ...r.recovery.map(note => `  - ${clean(note)}`)].join("\n") : undefined;
-  const confirm = r.preview && r.ok ? nextCommand("confirm", confirmCommand(["assertions", ...c.argv], r.fingerprint), o) : undefined;
-  const scope = r.applied ? paragraph("bytes in Git history, other clones or remotes are unchanged; erasing them needs a history rewrite outside vmem", o, "muted") : undefined;
-  return blocks(verdict, rows, already, omitted, recovery, issueTable(r.issues, o), scope, confirm);
+  const entries = plural(r.entries.length, "entry", "entries"), segments = plural(r.segments.length, "segment"), out = new Report(o.columns, o.ascii).header("vmem", "assertions purge");
+  if (r.issues.length) { out.section("Problems"); for (const issue of r.issues) out.bullet(issue.severity === "error" ? "fail" : "warn", `${issue.code}${issue.path ? ` ${issue.path}` : ""}: ${issue.message}`); }
+  const verdict = r.preview ? r.ok ? `purge preview for ${r.assertion} in ${c.vault}: ${entries} in ${segments} would keep their hashes and lose their payloads; nothing written` : `purge refused for ${c.vault}; nothing written` : r.applied ? r.ok ? `purged ${r.assertion} in ${c.vault} at ${r.at}: ${entries} rewritten in ${segments}; payloads removed, chain unchanged` : `${r.assertion} was rewritten in ${c.vault} but a later step failed; request a fresh preview and confirm again` : `purge refused for ${c.vault}; nothing written`;
+  out.section("Result").bullet(r.ok ? r.preview ? "pending" : "ok" : "fail", verdict);
+  if (r.entries.length) out.section("Entries").table(["Segment", "Seq", "Op", "Hash"], r.entries.map(e => [e.segment, String(e.seq), e.op, e.hash.slice(0, 12)]));
+  if (r.alreadyPurged) out.note(`${plural(r.alreadyPurged, "entry", "entries")} already carried a purge marker and were left as they are.`);
+  if (r.omitted) out.note(`${r.omitted} more ${r.omitted === 1 ? "entry is" : "entries are"} affected but not listed; confirm rewrites all of them.`);
+  if (r.recovery.length) { out.section("Recovery"); for (const note of r.recovery) out.bullet("warn", note); }
+  if (r.applied) out.section("Scope").note("bytes in Git history, other clones or remotes are unchanged; erasing them needs a history rewrite outside vmem");
+  if (r.preview && r.ok) out.next(confirmCommand(["assertions", ...c.argv], r.fingerprint));
+  return out.render(o.color).join("\n");
 }
 
 /** `vmem assertions purge <vault> <id> --reason TEXT [--confirm --fingerprint SHA] [--json]`. */
@@ -81,26 +87,19 @@ export function runPurgeCommand(args: string[], home: string, env: NodeJS.Proces
 
 /** What an exposure receipt means in words; the scan prints position and hash, never payload text. */
 export function exposureText(r: ExposureReceipt, o: TextOptions): string {
-  const scanned = `${plural(r.scanned.commits, "commit")}, ${plural(r.scanned.blobs, "blob")}, ${r.scanned.bytes} bytes`;
-  const verdict = r.clean === true ? status("ok", `${clean(r.vault)}: no purged payload is reachable in this repository's history (${scanned})`, o)
-    : r.clean === false ? status(r.exposed.length ? "fail" : "warn", r.exposed.length
-      ? `${clean(r.vault)}: ${plural(r.exposed.length, "purged entry", "purged entries")} still hold a payload in reachable history (${scanned})`
-      : `${clean(r.vault)}: the scan is incomplete, so it is not reported clean (${scanned})`, o)
-      : status("unknown", `${clean(r.vault)}: the history scan could not run`, o);
-  const rows = r.exposed.length
-    ? table(["ASSERTION", "SEGMENT", "SEQ", "COMMITS", "REFS", "HASH"], r.exposed.map(row => [row.assertion, row.segment, row.seq, row.commits.count, row.refs.length, row.hash.slice(0, 12)]), o)
-    : undefined;
-  const refs = r.refsOmitted ? paragraph("refs are omitted from this reply to stay inside the 48 KiB bound", o, "muted") : undefined;
-  const held = r.refsOmitted ? undefined : r.exposed.filter(row => row.refs.length);
-  const heldText = held && held.length ? ["held by:", ...held.map(row => `  - ${row.assertion} ${row.segment}:${row.seq}: ${row.refs.join(", ")}`)].join("\n") : undefined;
-  const omitted = r.omitted ? paragraph(`${r.omitted} more exposed ${r.omitted === 1 ? "entry is" : "entries are"} omitted from this reply to stay inside the 48 KiB bound`, o, "muted") : undefined;
-  const truncated = r.truncated ? status("warn", `partial scan: stopped at the ${r.truncated}; a partial scan is never reported clean`, o) : undefined;
+  const out = new Report(o.columns, o.ascii).header("vmem", "assertions exposure");
+  if (r.issues.length || r.truncated) { out.section("Problems"); for (const issue of r.issues) out.bullet("warn", issue); if (r.truncated) out.bullet("warn", `partial scan: stopped at the ${r.truncated}; a partial scan is never reported clean`); }
+  out.section("Scan").kv([["Vault", r.vault], ["Commits", r.scanned.commits], ["Blobs", r.scanned.blobs], ["Bytes", r.scanned.bytes], ["Clean", r.clean === null ? "unknown" : r.clean]]);
+  if (r.exposed.length) { out.section("Exposed"); for (const row of r.exposed) out.bullet("fail", `${row.assertion} ${row.segment}:${row.seq}: ${row.commits.count} commits, ${row.refs.length} refs, hash ${row.hash.slice(0, 12)}`); }
+  if (r.refsOmitted) out.note("refs are omitted from this reply to stay inside the 48 KiB bound");
+  else { const held = r.exposed.filter(row => row.refs.length); if (held.length) { out.section("Held by"); for (const row of held) out.bullet("warn", `${row.assertion} ${row.segment}:${row.seq}: ${row.refs.join(", ")}`); } }
+  if (r.omitted) out.note(`${r.omitted} more ${r.omitted === 1 ? "entry is" : "entries are"} omitted from this reply to stay inside the 48 KiB bound`);
   const manual = r.exposed.filter(row => row.manual !== undefined);
-  const manualText = manual.length ? ["manual step:", ...manual.map(row => `  - ${row.assertion} ${row.segment}:${row.seq}: ${row.manual}`)].join("\n") : undefined;
-  const file = r.replaceFile ? paragraph(`replace file ${clean(r.replaceFile.path)}: ${plural(r.replaceFile.lines, "expression")}, ${r.replaceFile.unreplaceable} unreplaceable. ${r.replaceFile.delete}`, o, "warn") : undefined;
-  const issues = r.issues.length ? ["issues:", ...r.issues.map(item => `  - ${clean(item)}`)].join("\n") : undefined;
-  const scope = r.clean === false ? paragraph("vmem never runs the rewrite: git-filter-repo, the force push, reflog expire and gc stay with you; see docs/reference/writes.md", o, "muted") : undefined;
-  return blocks(verdict, rows, heldText, omitted, refs, truncated, manualText, file, issues, scope);
+  if (manual.length) { out.section("Manual step"); for (const row of manual) out.bullet("warn", `${row.assertion} ${row.segment}:${row.seq}: ${row.manual}`); }
+  if (r.replaceFile) out.section("Replace file").bullet("warn", `${r.replaceFile.path}: ${plural(r.replaceFile.lines, "expression")}, ${r.replaceFile.unreplaceable} unreplaceable. ${r.replaceFile.delete}`);
+  if (r.clean === false) out.section("Scope").note("vmem never runs the rewrite: git-filter-repo, the force push, reflog expire and gc stay with you; see docs/reference/writes.md");
+  out.summary({ failed: r.exposed.length, warnings: !r.exposed.length && r.clean === false ? 1 : 0, unknown: r.clean === null ? 1 : 0, ok: r.clean === true ? 1 : 0 });
+  return out.render(o.color).join("\n");
 }
 
 /** `vmem assertions exposure <vault> [<assertion-id>] [--replace-file PATH] [--json]`. */

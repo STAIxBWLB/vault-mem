@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { paint, resolveColor, ROLE_SGR, SGR_RESET } from "@staix/cli-output";
-import { fields, issueTable, outputWidth, PLAIN, shellWord, table, takeColorFlag, textOptions, tone, wrap } from "../src/text-output.ts";
+import { paint, Report, resolveColor, ROLE_SGR, SGR_RESET } from "@staix/cli-output";
+import { outputWidth, shellWord, takeColorFlag, textOptions, wrap } from "../src/text-output.ts";
 import { run } from "../src/cli.ts";
 
 test("#114 AC2: --color is taken once from anywhere before --, and auto follows the TTY, NO_COLOR and TERM", () => {
@@ -25,24 +25,13 @@ test("#114 AC2: --color is taken once from anywhere before --, and auto follows 
   expect(() => run(["--version", "--color=sometimes"])).toThrow("--color=auto");
 });
 
-test("tables size columns by display width, wrap the last column only when a width is known, and strip control characters", () => {
-  const rows = [["사업단", "ok", "한글 제목"], ["notes/a.md", tone("fail", "fail"), "x\u001b[31my"]];
-  expect(table(["PATH", "LEVEL", "TITLE"], rows, PLAIN)).toBe(["PATH        LEVEL  TITLE", "사업단      ok     한글 제목", "notes/a.md  fail   x [31my"].join("\n"));
-  const wrapped = table(["A", "B"], [["x", "one two three four five six"]], { color: false, columns: 23 }).split("\n");
-  expect(wrapped).toEqual(["A  B", "x  one two three four", "   five six"]);
+test("package report supplies table and field layout", () => {
+  const out = new Report(40, true).header("vmem", "example").section("Fields").kv([["Vault", "personal"], ["Remote", ""]]).section("Rows").table(["Path", "Title"], [["notes/a.md", "Synthetic note"]]);
+  const plain = out.render(false).join("\n");
+  expect(plain).toContain("Vault:"); expect(plain).toContain("(unset)"); expect(plain).toContain("notes/a.md");
   expect(paint([{ text: "ok", role: "success" }], true)).toBe(ROLE_SGR.success + "ok" + SGR_RESET);
-  expect(table(["A"], [[tone("ok", "ok")]], { color: true })).toContain("\u001b[1;32mok\u001b[0m");
-});
-
-test("fields align labels, skip empty values and hang wrapped values; issues sort errors first", () => {
-  expect(fields([["vault", "personal"], ["remote", ""], ["write policy", "mcp"]], PLAIN)).toBe("  vault         personal\n  write policy  mcp");
-  expect(fields([["note", "alpha beta gamma delta"]], { color: false, columns: 20 })).toBe("  note  alpha beta\n        gamma delta");
   expect(wrap("abcdefghijklmnop", 10)).toEqual(["abcdefghij", "klmnop"]);
-  expect(issueTable([{ code: "V02", severity: "warning", message: "w" }, { code: "V01", severity: "error", path: "notes/a.md", message: "e" }], PLAIN))
-    .toBe(["LEVEL       CODE  PATH        MESSAGE", "✗  error    V01   notes/a.md  e", "⚠  warning  V02   -           w"].join("\n"));
-  expect(issueTable([], PLAIN)).toBeUndefined();
-  expect(shellWord("notes/a.md")).toBe("notes/a.md");
-  expect(shellWord("it's here")).toBe(`'it'"'"'s here'`);
+  expect(shellWord("notes/a.md")).toBe("notes/a.md"); expect(shellWord("it's here")).toBe(`'it'"'"'s here'`);
 });
 
 test("#114 the executable dispatches on the command even when --color comes first", async () => {

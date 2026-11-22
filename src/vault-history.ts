@@ -1,4 +1,4 @@
-import { paint } from "@staix/cli-output";
+import { Report } from "@staix/cli-output";
 /**
  * Read-only Git snapshot history for a registered vault (#235). Git commits are snapshot boundaries; this provider
  * never writes, checks out, fetches or reads commit messages/authors. Every object id is a full SHA-1/SHA-256 commit
@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { isDenied, memoryGitArgv, memoryGitEnv } from "./platform.ts";
 import { VaultIndex, MAX_NOTE_BYTES, MAX_READ_BYTES, h2Sections, headingMetadata, readPage } from "./vault-index.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { blocks, clean, fields, heading, nextCommand, plural, shellWord, status, stripTerminal, summary, table, tone, type TextOptions } from "./text-output.ts";
+import { plural, shellWord, stripTerminal, type TextOptions } from "./text-output.ts";
 import type { VaultSpec } from "./config.ts";
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
@@ -601,63 +601,35 @@ export function readChanges(request: ChangesRequest, limits: SnapshotLimits = {}
 }
 
 const command = (...words: string[]) => ["vmem", ...words].map(shellWord).join(" ");
-function basisFields(result: SnapshotBase, o: TextOptions, extra: [string, number | string | undefined][] = []) {
-  return fields([["basis", result.basis], ["head", result.head ? result.head.slice(0, 12) : undefined],
-    ["dirty notes", result.dirtyNotes === null ? (result.dirtyNotesReason ?? "unavailable") : String(result.dirtyNotes)],
-    ["coverage", result.coverage.complete ? "complete" : `incomplete: ${result.coverage.reason ?? "unknown"}`], ...extra], o);
+function basisRows(result: SnapshotBase): [string, unknown][] {
+  return [["Basis", result.basis], ["Head", result.head?.slice(0, 12)], ["Dirty notes", result.dirtyNotes === null ? result.dirtyNotesReason ?? "unavailable" : result.dirtyNotes], ["Coverage", result.coverage.complete ? "complete" : `incomplete: ${result.coverage.reason ?? "unknown"}`]];
 }
-
-/** Plain-text history: the pinned HEAD, the page of revisions and the exact continuation command. */
 export function historyText(result: HistoryResult, o: TextOptions, c: { vault: string; note: string; limit?: number; cursor?: string }): string {
-  const head = heading(`history ${c.vault} ${result.path}`, o) + "\n" + basisFields(result, o, [
-    ["scanned commits", result.scanned], ["page limit", result.pageLimit], ["skipped symlinks", result.skippedSymlink || undefined],
-  ]);
-  if (!result.revisions.length) {
-    const why = result.capability ? status("warn", `no snapshot history: ${result.capability}`, o)
-      : status("absent", `no recorded revisions of ${result.path} on the first-parent history`, o);
-    return blocks(head, why);
-  }
-  const rows = result.revisions.map(revision => [revision.revision.slice(0, 12), revision.blob.slice(0, 12), revision.bytes, revision.committedAt]);
-  const more = result.continuation ? nextCommand("next", command("history", c.vault, result.path, ...(c.limit !== undefined ? ["--limit", String(c.limit)] : []), "--cursor", result.continuation), o) : undefined;
-  const stop = result.stopReason === "scan_limit" ? status("warn", `stopped after the ${result.scanLimit}-commit scan limit; continue from the cursor`, o)
-    : result.stopReason === "transport_limit" ? status("warn", "result reached the 48 KiB transport bound; page with a smaller --limit", o) : undefined;
-  const counts = summary({ ok: result.revisions.length, warnings: result.skippedSymlink }, o);
-  return blocks(head, table(["REVISION", "BLOB", "BYTES", "COMMITTED (GIT METADATA)"], rows, o), [counts, stop, more].filter(Boolean).join("\n"));
+  const out = new Report(o.columns, o.ascii).header("vmem", "history");
+  if (result.stopReason === "scan_limit" || result.stopReason === "transport_limit") out.section("Coverage").bullet("warn", result.stopReason === "scan_limit" ? `stopped after the ${result.scanLimit}-commit scan limit; continue from the cursor` : "result reached the 48 KiB transport bound; page with a smaller --limit");
+  out.section("History").kv([["Vault", c.vault], ["Path", result.path], ...basisRows(result), ["Scanned commits", result.scanned], ["Page limit", result.pageLimit], ["Skipped symlinks", result.skippedSymlink]]);
+  if (!result.revisions.length) out.note(result.capability ? `no snapshot history: ${result.capability}` : `no recorded revisions of ${result.path} on the first-parent history`);
+  else out.table(["Revision", "Blob", "Bytes", "Committed (Git metadata)"], result.revisions.map(item => [item.revision.slice(0,12), item.blob.slice(0,12), String(item.bytes), item.committedAt]));
+  if (result.continuation) out.next(command("history", c.vault, result.path, ...(c.limit !== undefined ? ["--limit", String(c.limit)] : []), "--cursor", result.continuation));
+  return out.render(o.color).join("\n");
 }
-
-/** Plain-text historical read: commit, blob and content hashes, then the paged content. */
 export function revisionText(result: RevisionResult, o: TextOptions, c: { vault: string; note: string; revision: string; maxBytes?: number }): string {
-  const where = result.revision ? result.revision.slice(0, 12) : c.revision.slice(0, 12);
-  const head = heading(`show ${c.vault} ${result.path} at ${where}`, o) + "\n" + fields([
-    ["revision", result.revision], ["blob", result.blob], ["sha256", result.sha256?.slice(0, 12)], ["bytes", result.bytes],
-    ["offset", result.offset], ["dirty notes", result.dirtyNotes === null ? (result.dirtyNotesReason ?? "unavailable") : String(result.dirtyNotes)],
-    ["coverage", result.coverage.complete ? "complete" : `incomplete: ${result.coverage.reason ?? "unknown"}`],
-  ], o);
-  if (!result.found) {
-    const why = result.capability ? status("warn", `no historical content: ${result.capability}`, o)
-      : status("absent", `the note did not exist at ${where}`, o);
-    return blocks(head, why);
-  }
-  const body = stripTerminal(result.content ?? "").replace(/\n+$/, "");
-  if (!result.truncated) return blocks(head, body);
-  const words = ["show", c.vault, c.note, "--revision", result.revision ?? c.revision, ...(result.section ? ["--section", result.section] : []),
-    ...(c.maxBytes !== undefined ? ["--max-bytes", String(c.maxBytes)] : []), "--offset", String(result.nextOffset)];
-  const tail = [status("warn", result.transportLimited ? "truncated at the 48 KiB transport bound" : "truncated", o),
-    ...(result.nextOffset !== undefined ? [nextCommand("next", command(...words), o)] : [])];
-  const headings = result.headings?.length ? ["H2 headings (read one with --section):", ...result.headings.map(name => `  ${clean(name)}`), ...(result.headingsTruncated ? [paint([{ text: "  ... more headings", role: "hint" }], o.color)] : [])].join("\n") : undefined;
-  return blocks(head, body, tail.join("\n"), headings);
+  const where = result.revision ? result.revision.slice(0, 12) : c.revision.slice(0, 12), out = new Report(o.columns, o.ascii).header("vmem", "show");
+  out.section("Revision").kv([["Vault", c.vault], ["Path", result.path], ["Revision", result.revision ?? c.revision], ["Blob", result.blob], ["SHA256", result.sha256?.slice(0,12)], ["Bytes", result.bytes], ["Offset", result.offset], ...basisRows(result)]);
+  if (!result.found) { out.note(result.capability ? `no historical content: ${result.capability}` : `the note did not exist at ${where}`); return out.render(o.color).join("\n"); }
+  out.section("Content"); const body = stripTerminal(result.content ?? "").replace(/\n+$/, ""), head = out.render(o.color).join("\n");
+  if (!result.truncated) return `${head}\n${body}`;
+  const tail = new Report(o.columns, o.ascii).section("Continuation").bullet("warn", result.transportLimited ? "truncated at the 48 KiB transport bound" : "truncated");
+  if (result.nextOffset !== undefined) tail.next(command("show", c.vault, c.note, "--revision", result.revision ?? c.revision, ...(result.section ? ["--section", result.section] : []), ...(c.maxBytes !== undefined ? ["--max-bytes", String(c.maxBytes)] : []), "--offset", String(result.nextOffset)));
+  if (result.headings?.length) { tail.section("H2 headings"); for (const heading of result.headings) tail.bullet("absent", heading); if (result.headingsTruncated) tail.note("more headings"); }
+  return `${head}\n${body}\n\n${tail.render(o.color).join("\n")}`;
 }
-
-/** Plain-text tree comparison. */
 export function changesText(result: ChangesResult, o: TextOptions, c: { vault: string; from: string; to: string; limit?: number }): string {
-  const head = heading(`changes ${c.vault} ${result.from.slice(0, 12)}..${result.to.slice(0, 12)}`, o) + "\n" + basisFields(result, o, [
-    ["total changes", result.total], ["skipped denied", result.skippedDenied || undefined], ["skipped symlinks", result.skippedSymlink || undefined],
-  ]);
-  if (!result.changed.length) return blocks(head, status("absent", `no note changes between ${result.from.slice(0, 12)} and ${result.to.slice(0, 12)}`, o));
-  const rows = result.changed.map(item => [tone(item.status, item.status === "D" ? "warn" : "ok"), item.path, item.before?.slice(0, 12) ?? "-", item.after?.slice(0, 12) ?? "-"]);
-  const more = result.continuation ? nextCommand("next", command("changes", c.vault, "--from", result.from, "--to", result.to, ...(c.limit !== undefined ? ["--limit", String(c.limit)] : []), "--cursor", result.continuation), o) : undefined;
-  const denied = result.skippedDenied ? status("warn", `${plural(result.skippedDenied, "denied path")} left out by current policy`, o) : undefined;
-  const symlinked = result.skippedSymlink ? status("warn", `${plural(result.skippedSymlink, "symlinked or non-file entry")} left out`, o) : undefined;
-  const counts = summary({ ok: result.changed.length, warnings: result.skippedDenied + result.skippedSymlink }, o);
-  return blocks(head, table(["ST", "PATH", "BEFORE", "AFTER"], rows, o), [counts, denied, symlinked, more].filter(Boolean).join("\n"));
+  const out = new Report(o.columns, o.ascii).header("vmem", "changes");
+  if (result.skippedDenied || result.skippedSymlink) { out.section("Coverage"); if (result.skippedDenied) out.bullet("warn", `${plural(result.skippedDenied, "denied path")} left out by current policy`); if (result.skippedSymlink) out.bullet("warn", `${plural(result.skippedSymlink, "symlinked or non-file entry")} left out`); }
+  out.section("Changes").kv([["Vault", c.vault], ["From", result.from.slice(0,12)], ["To", result.to.slice(0,12)], ...basisRows(result), ["Total changes", result.total]]);
+  if (!result.changed.length) out.note(`no note changes between ${result.from.slice(0,12)} and ${result.to.slice(0,12)}`);
+  else out.table(["ST", "Path", "Before", "After"], result.changed.map(item => [item.status, item.path, item.before?.slice(0,12) ?? "", item.after?.slice(0,12) ?? ""]));
+  if (result.continuation) out.next(command("changes", c.vault, "--from", result.from, "--to", result.to, ...(c.limit !== undefined ? ["--limit", String(c.limit)] : []), "--cursor", result.continuation));
+  return out.render(o.color).join("\n");
 }

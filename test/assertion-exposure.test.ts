@@ -229,7 +229,7 @@ test("X3: a line carrying \"==>\" is unreplaceable and lists the manual step", (
   expect(JSON.stringify(receipt)).not.toContain("chair==>stool");
   expect(thrown(() => f.exposure(["--replace-file", join(f.outside, "replace.txt")]))).toContain("no exposed line can be written");
   expect(existsSync(join(f.outside, "replace.txt"))).toBe(false);
-  expect(run(["assertions", "exposure", "test"], f.env).text).toContain("manual step:");
+  expect(run(["assertions", "exposure", "test"], f.env).text).toContain("Manual step");
 });
 
 test("X4: the write policy, denyPaths and read permissions refuse exposure as they refuse vmem assertions", () => {

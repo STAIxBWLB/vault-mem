@@ -44,6 +44,7 @@ test("CLI submits, pages, applies and rejects through one provider", () => {
     const shown = JSON.parse(run(["proposal", "show", "test", submitted.id, "--json"], f.env).text);
     expect(JSON.parse(shown.content)).toMatchObject({ ...first, path: "notes/candidate.md" });
     expect(shown.agentLabelUnverified).toBe("test-agent");
+    expect(run(["proposal", "show", "test", submitted.id], f.env).text.endsWith(shown.content)).toBe(true);
     const preview = JSON.parse(run(["proposal", "apply", "test", submitted.id, "--json"], f.env).text);
     const applied = run(["proposal", "apply", "test", submitted.id, "--confirm", "--fingerprint", preview.fingerprint, "--json"], f.env);
     expect(JSON.parse(applied.text)).toMatchObject({ ok: true, applied: true, state: "applied" });

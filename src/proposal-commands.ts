@@ -1,11 +1,19 @@
+import { Report } from "@staix/cli-output";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry } from "./registry.ts";
 import { applyProposal, confirmProposalReconciliation, listProposals, previewProposalApply, previewProposalReject, reconcileProposal, rejectProposal, showProposal, submitProposal, type ProposalContext } from "./proposal-provider.ts";
 import { MAX_PROPOSAL_RECORD_BYTES } from "./proposals.ts";
-import { blocks, fields, heading, issueTable, nextCommand, PLAIN, shellWord, status, stripTerminal, table, UsageError, type TextOptions } from "./text-output.ts";
+import { PLAIN, shellWord, stripTerminal, UsageError, type TextOptions } from "./text-output.ts";
 
 const command = (...args: string[]) => ["vmem", "proposal", ...args].map(shellWord).join(" ");
+const report = (action: string, o: TextOptions) => new Report(o.columns, o.ascii).header("vmem", `proposal ${action}`);
+const done = (out: Report, o: TextOptions) => out.render(o.color).join("\n");
+function problems(out: Report, issues: readonly { code: string; severity: "error" | "warning"; path?: string; message: string }[]): void {
+  if (!issues.length) return; out.section("Problems");
+  for (const issue of [...issues].sort((a,b) => Number(b.severity === "error") - Number(a.severity === "error"))) out.bullet(issue.severity === "error" ? "fail" : "warn", `${issue.code}${issue.path ? ` ${issue.path}` : ""}: ${issue.message}`);
+}
+
 function input(file: string, home: string): unknown {
   if (file !== "-" && isDenied(canonicalPath(file), loadRegistry(home).denyPaths)) throw new Error("proposal: input file is denied; choose an allowed file");
   const fd = file === "-" ? 0 : openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -51,7 +59,9 @@ export function runProposalCommand(args: string[], home: string, env: NodeJS.Pro
     if (label !== undefined && (!label.trim() || Buffer.byteLength(label) > 256 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(label))) throw new UsageError("proposal submit: --agent-label needs nonempty text without controls, at most 256 bytes");
     const result = submitProposal(home, { vault, operation: input(target!, home), ...(label !== undefined ? { agentLabel: label } : {}) }, ctx);
     const message = result.stored ? `submitted proposal ${result.id}${result.path ? ` for ${result.path}` : "; inspect current policy"}` : `proposal ${result.id}: ${result.stored === false ? "not stored" : "storage outcome unknown"}`;
-    return { text: json ? JSON.stringify(result) : blocks(status(result.ok && !result.issues.length ? "ok" : result.stored ? "warn" : result.stored === false ? "fail" : "unknown", message, text), issueTable(result.issues, text)), code: result.ok ? 0 : 1 };
+    if (json) return { text: JSON.stringify(result), code: result.ok ? 0 : 1 };
+    const out = report("submit", text); problems(out, result.issues); out.section("Result").bullet(result.ok && !result.issues.length ? "ok" : result.stored ? "warn" : result.stored === false ? "fail" : "unknown", message);
+    return { text: done(out, text), code: result.ok ? 0 : 1 };
   }
   if (action === "list") {
     const state = value("--state");
@@ -59,25 +69,36 @@ export function runProposalCommand(args: string[], home: string, env: NodeJS.Pro
     const after = value("--after");
     if (after !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(after)) throw new UsageError("proposal list: --after needs a returned cursor");
     const result = listProposals(home, { vault, ...(state ? { state: state as "pending" | "applied" | "rejected" | "apply_unknown" } : {}), limit: number(flags["--limit"], "--limit", 1, 100), after }, ctx);
-    const rows = result.items.length ? result.items.map(item => blocks(status(item.state === "applied" ? "ok" : item.state === "rejected" ? "absent" : item.state === "pending" ? "pending" : "unknown", `${item.state} ${item.id}`, text), fields([["path", item.path], ["created", item.createdAt]], text))).join("\n\n") : "no proposals found";
-    const next = result.nextCursor ? nextCommand("next", command("list", vault, ...(state ? ["--state", state] : []), ...(flags["--limit"] ? ["--limit", String(flags["--limit"])] : []), "--after", result.nextCursor), text) : undefined;
-    return { text: json ? JSON.stringify(result) : blocks(rows, issueTable(result.issues, text), next), code: 0 };
+    if (json) return { text: JSON.stringify(result), code: 0 };
+    const out = report("list", text); problems(out, result.issues); out.section("Proposals");
+    if (!result.items.length) out.note("no proposals found");
+    for (const item of result.items) out.bullet(item.state === "applied" ? "ok" : item.state === "rejected" ? "absent" : item.state === "pending" ? "pending" : "unknown", `${item.state} ${item.id}: ${item.path ?? "-"}, ${item.createdAt}`);
+    if (result.nextCursor) out.next(command("list", vault, ...(state ? ["--state", state] : []), ...(flags["--limit"] ? ["--limit", String(flags["--limit"])] : []), "--after", result.nextCursor));
+    return { text: done(out, text), code: 0 };
   }
   if (action === "show") {
     const result = showProposal(home, { vault, id: target!, offset: number(flags["--offset"], "--offset", 0, MAX_PROPOSAL_RECORD_BYTES), maxBytes: number(flags["--max-bytes"], "--max-bytes", 1, 16384) }, ctx);
-    const next = result.nextOffset !== null && nextCommand("next", command("show", vault, target!, "--offset", String(result.nextOffset), ...(flags["--max-bytes"] ? ["--max-bytes", String(flags["--max-bytes"])] : [])), text);
-    return { text: json ? JSON.stringify(result) : blocks(heading(`proposal ${result.id}: ${result.state}`, text), fields([["vault", result.vault], ["path", result.path], ["agent label (unverified)", result.agentLabelUnverified], ["reason", result.decisionReason]], text), issueTable(result.issues, text), stripTerminal(result.content), next), code: 0 };
+    if (json) return { text: JSON.stringify(result), code: 0 };
+    const out = report("show", text); problems(out, result.issues); out.section("Proposal").kv([["ID", result.id], ["State", result.state], ["Vault", result.vault], ["Path", result.path], ["Agent label (unverified)", result.agentLabelUnverified], ["Reason", result.decisionReason]]).section("Content");
+    const body = stripTerminal(result.content), head = done(out, text);
+    if (result.nextOffset === null) return { text: `${head}\n${body}`, code: 0 };
+    const tail = new Report(text.columns, text.ascii).section("Continuation").next(command("show", vault, target!, "--offset", String(result.nextOffset), ...(flags["--max-bytes"] ? ["--max-bytes", String(flags["--max-bytes"])] : [])));
+    return { text: `${head}\n${body}\n\n${done(tail, text)}`, code: 0 };
   }
   if (action === "reconcile") {
     const confirm = flags["--confirm"] === true, fingerprint = value("--fingerprint");
     if ((confirm && !fingerprint) || (!confirm && fingerprint) || (fingerprint !== undefined && !/^[a-f0-9]{64}$/.test(fingerprint))) throw new UsageError("proposal reconcile: --confirm and a preview fingerprint must be supplied together");
     if (confirm) {
       const result = confirmProposalReconciliation(home, { vault, id: target!, fingerprint: fingerprint! }, ctx);
-      return { text: json ? JSON.stringify(result) : blocks(status(result.resolved ? result.ok ? "ok" : "warn" : "unknown", `proposal ${target}: ${result.state}`, text), issueTable(result.issues, text)), code: result.ok ? 0 : 1 };
+      if (json) return { text: JSON.stringify(result), code: result.ok ? 0 : 1 };
+      const out = report("reconcile", text); problems(out, result.issues); out.section("Result").bullet(result.resolved ? result.ok ? "ok" : "warn" : "unknown", `proposal ${target}: ${result.state}`);
+      return { text: done(out, text), code: result.ok ? 0 : 1 };
     }
     const result = reconcileProposal(home, { vault, id: target! }, ctx);
-    const next = result.fingerprint ? nextCommand("confirm", command("reconcile", vault, target!, "--confirm", "--fingerprint", result.fingerprint), text) : undefined;
-    return { text: json ? JSON.stringify(result) : blocks(status("unknown", `proposal ${result.id}: apply outcome unknown`, text), fields([["before", result.beforeSha ?? "-"], ["after", result.afterSha ?? "-"], ["observed", result.observedSha ?? "-"], ["receipt evidence", result.receiptEvidence]], text), issueTable(result.issues, text), result.explanation, next), code: 0 };
+    if (json) return { text: JSON.stringify(result), code: 0 };
+    const out = report("reconcile", text); problems(out, result.issues); out.section("Result").bullet("unknown", `proposal ${result.id}: apply outcome unknown`).kv([["Before", result.beforeSha], ["After", result.afterSha], ["Observed", result.observedSha], ["Receipt evidence", result.receiptEvidence]]).note(result.explanation);
+    if (result.fingerprint) out.next(command("reconcile", vault, target!, "--confirm", "--fingerprint", result.fingerprint));
+    return { text: done(out, text), code: 0 };
   }
   const confirm = flags["--confirm"] === true, fingerprint = value("--fingerprint"), reason = value("--reason");
   if ((confirm && !fingerprint) || (!confirm && fingerprint)) throw new UsageError(`proposal ${action}: --confirm and --fingerprint must be supplied together`);
@@ -85,16 +106,26 @@ export function runProposalCommand(args: string[], home: string, env: NodeJS.Pro
   if (action === "apply") {
     if (!confirm) {
       const result = previewProposalApply(home, { vault, id: target! }, ctx);
-      return { text: json ? JSON.stringify(result) : blocks(heading(`proposal ${result.id}: apply preview`, text), table(["PATH", "BEFORE", "AFTER", "BYTES"], result.changes.map(change => [change.path, change.beforeSha ?? "-", change.sha256 ?? "-", change.bytes]), text), issueTable(result.issues, text), nextCommand("confirm", command("apply", vault, target!, "--confirm", "--fingerprint", result.fingerprint), text)), code: 0 };
+      if (json) return { text: JSON.stringify(result), code: 0 };
+      const out = report("apply", text); problems(out, result.issues); out.section("Preview").kv([["ID", result.id]]);
+      if (result.changes.length) out.table(["Path", "Before", "After", "Bytes"], result.changes.map(change => [change.path, change.beforeSha ?? "", change.sha256 ?? "", String(change.bytes)]));
+      out.next(command("apply", vault, target!, "--confirm", "--fingerprint", result.fingerprint));
+      return { text: done(out, text), code: 0 };
     }
     const result = applyProposal(home, { vault, id: target!, fingerprint: fingerprint! }, ctx);
-    return { text: json ? JSON.stringify(result) : blocks(status(result.state === "apply_unknown" ? "unknown" : result.applied ? result.ok && !result.issues.length ? "ok" : "warn" : "fail", `proposal ${target}: ${result.state}${result.logged === false ? "; log not recorded" : ""}`, text), issueTable(result.issues, text)), code: result.ok ? 0 : 1 };
+    if (json) return { text: JSON.stringify(result), code: result.ok ? 0 : 1 };
+    const out = report("apply", text); problems(out, result.issues); out.section("Result").bullet(result.state === "apply_unknown" ? "unknown" : result.applied ? result.ok && !result.issues.length ? "ok" : "warn" : "fail", `proposal ${target}: ${result.state}${result.logged === false ? "; log not recorded" : ""}`);
+    return { text: done(out, text), code: result.ok ? 0 : 1 };
   }
   if (!reason?.trim() || Buffer.byteLength(reason, "utf8") > 4096) throw new UsageError("proposal reject: --reason must be nonempty and at most 4096 bytes");
   if (!confirm) {
     const result = previewProposalReject(home, { vault, id: target!, reason }, ctx);
-    return { text: json ? JSON.stringify(result) : blocks(heading(`proposal ${result.id}: rejection preview`, text), fields([["reason", result.reason]], text), issueTable(result.issues, text), nextCommand("confirm", command("reject", vault, target!, "--reason", reason, "--confirm", "--fingerprint", result.fingerprint), text)), code: 0 };
+    if (json) return { text: JSON.stringify(result), code: 0 };
+    const out = report("reject", text); problems(out, result.issues); out.section("Preview").kv([["ID", result.id], ["Reason", result.reason]]).next(command("reject", vault, target!, "--reason", reason, "--confirm", "--fingerprint", result.fingerprint));
+    return { text: done(out, text), code: 0 };
   }
   const result = rejectProposal(home, { vault, id: target!, reason, fingerprint: fingerprint! }, ctx);
-  return { text: json ? JSON.stringify(result) : blocks(status(result.rejected ? result.ok && !result.issues.length ? "ok" : "warn" : "fail", `proposal ${target}: ${result.rejected ? "rejected" : "not rejected"}`, text), issueTable(result.issues, text)), code: result.ok ? 0 : 1 };
+  if (json) return { text: JSON.stringify(result), code: result.ok ? 0 : 1 };
+  const out = report("reject", text); problems(out, result.issues); out.section("Result").bullet(result.rejected ? result.ok && !result.issues.length ? "ok" : "warn" : "fail", `proposal ${target}: ${result.rejected ? "rejected" : "not rejected"}`);
+  return { text: done(out, text), code: result.ok ? 0 : 1 };
 }
