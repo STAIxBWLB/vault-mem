@@ -16,6 +16,7 @@ import type { GraphSnapshotAssembly } from "./graph-snapshot.ts";
 import { assertionCoverageWarnings } from "./panel-types.ts";
 import type { AssertionsReadResult } from "../assertion-read.ts";
 import { createInboxSnapshot } from "./inbox.ts";
+import { LINK_RELATIONS } from "../links.ts";
 import { lintVault } from "../vault-lint.ts";
 import { readLogSince } from "../vault-log.ts";
 import type { LintCode } from "../analysis-types.ts";
@@ -132,7 +133,7 @@ export const plugin: ConsolePlugin = {
       { id: "history", title: "History", order: 10 },
       { id: "graph", title: "Graph", order: 11, maxAgeMs: REUSE_MS },
     ],
-    capabilities: { actions: ["delete", "move", "promote", "promote-from-amem", "settings", "proposal-apply", "proposal-reject"], confirm: true, inbox: true, inboxMaxAgeMs: REUSE_MS, search: true },
+    capabilities: { actions: ["delete", "move", "promote", "promote-from-amem", "settings", "proposal-apply", "proposal-reject", "link"], confirm: true, inbox: true, inboxMaxAgeMs: REUSE_MS, search: true },
   },
   async open(ctx): Promise<ConsoleProvider> {
     const home = resolveHome().home;
@@ -204,11 +205,17 @@ export const plugin: ConsolePlugin = {
       if (typeof args === "string") return { ok: false, error: args };
       const preview = await call(tool, args);
       if (preview.refused || preview.ok === false || typeof preview.fingerprint !== "string") return { ok: false, error: firstIssue(preview) };
+      if (preview.unchanged === true) return { ok: true, message: `${describe(preview).verb}: already done, nothing changed` };
       if (!confirmed || fingerprint !== preview.fingerprint) {
         const d = describe(preview);
         return { ok: false, needsConfirm: true, fingerprint: preview.fingerprint, verb: d.verb, preview: d.preview, changes: d.changes, ...(d.warnings.length ? { warnings: d.warnings } : {}) };
       }
       const done = await call(tool, { ...args, confirm: true, fingerprint });
+      // A tool that answers a stale fingerprint with a fresh preview (vmem_link) gets a new confirmation, never a write.
+      if (done.stale === true && typeof done.fingerprint === "string") {
+        const d = describe(done);
+        return { ok: false, needsConfirm: true, fingerprint: done.fingerprint, verb: d.verb, preview: d.preview, changes: d.changes, warnings: ["the notes changed since the preview; review the fresh preview", ...d.warnings] };
+      }
       if (done.applied === true) { lintCache.clear(); revision.invalidate(); inbox.invalidate(); }
       return confirmedOutcome(done, describe(preview).verb);
     }
@@ -369,6 +376,14 @@ export const plugin: ConsolePlugin = {
               return { verb: "Delete note", preview: [`delete ${path}`], changes: changesOf(p),
                 warnings: backlinks.length ? [`${backlinks.length} links point here: ${[...new Set(backlinks.map(b => b.source))].slice(0, 5).join(", ")}`] : [] };
             });
+          }
+          case "link": {
+            const from = str(args.from), to = str(args.to), relation = str(args.relation);
+            if (!from || !to || !relation) return { ok: false, error: "link: from, to and relation are required; pick both notes and a relation" };
+            if (!(LINK_RELATIONS as readonly string[]).includes(relation)) return { ok: false, error: `link: invalid relation ${relation}; use one of ${LINK_RELATIONS.join(", ")}` };
+            const both = args.bidirectional !== false && args.bidirectional !== "false";
+            return twoStep("vmem_link", forward("vmem_link", args, { preview: true, bidirectional: both }), confirmed, fingerprint, p => ({ verb: "Link notes",
+              preview: [`link ${from} → ${to} (${relation})${both ? ", both directions" : ", one way"}`, ...(p.logEvent ? [`log: ${JSON.stringify(p.logEvent)}`] : [])], changes: changesOf(p), warnings: [] }));
           }
           case "move": {
             const from = str(args.from), to = str(args.to);

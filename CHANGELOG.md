@@ -4,6 +4,8 @@
 
 - Add directed `supersedes` and `superseded_by` frontmatter edges to Graph console snapshots. CLI and MCP graph outputs keep their existing behavior.
 
+- Add an opt-in two-step mode to `vmem_link` (`preview`, `confirm`, `fingerprint`; a stale fingerprint returns a fresh preview) and a console `link` action that previews both notes, the relation and the log event before confirming; an existing link is a no-op. Calls without `preview` or `confirm` write in one step as before.
+
 ## [0.13.0] - 2026-11-22
 
 - N-1: 0.12.1 and 0.13.0 share the note and spec index files and config format 6. The 0.13.0 CLI adds assertion coverage lines and changes skills-mine filtering and cap reporting; the 0.12.1 CLI keeps its previous behavior. MCP tool names and arguments are unchanged; `vmem_assertions` coverage and `vmem_skills_mine` dropped counts gain additive fields, which 0.12.1 clients may ignore; for an unsupported entry inside an incomplete batch, `coverage.unsupported[].seq` now identifies the first excluded batch entry, as `untrusted[].seq` already did. In 0.12.1 it identifies the unsupported line; `failedSeq` now retains that value. The 0.13.0 console provider adds the Graph panel; an older provider remains usable without it.
