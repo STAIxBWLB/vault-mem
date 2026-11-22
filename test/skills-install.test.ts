@@ -11,7 +11,8 @@ test("a linked profile root is rechecked immediately before publication", () => 
     const home = join(f.root, "home"), profile = join(f.root, "profile"), target = join(home, ".codex", "skills"), foreign = join(f.root, "foreign");
     mkdirSync(target, { recursive: true }); mkdirSync(profile); mkdirSync(foreign);
     const link = join(profile, "skills"); symlinkSync(target, link);
-    const root = resolveHostSkillRoot("codex", { HOME: home, CODEX_HOME: profile })!;
+    const root = resolveHostSkillRoot("codex", { HOME: home, CODEX_HOME: profile });
+    if (!root || !("root" in root)) throw new Error("expected an allowed profile link");
     let calls = 0;
     const result = installSkills(root.root, "apply", undefined, undefined, undefined, () => {
       if (++calls === 3) { unlinkSync(link); symlinkSync(foreign, link); }
@@ -28,7 +29,8 @@ test("a removed default root is not recreated after the profile link changes", (
     const home = join(f.root, "home"), profile = join(f.root, "profile"), target = join(home, ".codex", "skills"), foreign = join(f.root, "foreign");
     mkdirSync(target, { recursive: true }); mkdirSync(profile); mkdirSync(foreign);
     const link = join(profile, "skills"); symlinkSync(target, link);
-    const root = resolveHostSkillRoot("codex", { HOME: home, CODEX_HOME: profile })!;
+    const root = resolveHostSkillRoot("codex", { HOME: home, CODEX_HOME: profile });
+    if (!root || !("root" in root)) throw new Error("expected an allowed profile link");
     rmSync(target, { recursive: true }); unlinkSync(link); symlinkSync(foreign, link);
     expect(() => installSkills(root.root, "apply", undefined, undefined, undefined, root.recheck)).toThrow("link changed");
     expect(existsSync(target)).toBe(false);
@@ -41,7 +43,8 @@ test("a linked profile root is rechecked before undo", () => {
     const home = join(f.root, "home"), profile = join(f.root, "profile"), target = join(home, ".codex", "skills"), foreign = join(f.root, "foreign");
     mkdirSync(target, { recursive: true }); mkdirSync(profile); mkdirSync(foreign);
     const link = join(profile, "skills"); symlinkSync(target, link);
-    const root = resolveHostSkillRoot("codex", { HOME: home, CODEX_HOME: profile })!;
+    const root = resolveHostSkillRoot("codex", { HOME: home, CODEX_HOME: profile });
+    if (!root || !("root" in root)) throw new Error("expected an allowed profile link");
     expect(installSkills(root.root, "apply", undefined, undefined, undefined, root.recheck).actions.every(item => item.change === "install")).toBe(true);
     let calls = 0;
     const result = installSkills(root.root, "undo", undefined, undefined, undefined, () => {

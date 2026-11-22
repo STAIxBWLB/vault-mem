@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed: setup reports an unfollowed linked skill root as not installed instead of refusing the host, and points to skill export.
+
 ## [0.14.1] - 2026-11-23
 
 - Fixed: setup accepts an override profile skill root linked to the host's real default skill root; other links remain refused.

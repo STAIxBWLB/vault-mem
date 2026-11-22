@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -58,22 +59,29 @@ test("host profiles may link skills only to their real default root", () => {
   }
 });
 
-test("foreign and default-root links are refused, real profile directories remain supported", () => {
+test("foreign and default-root links are skipped, real profile directories remain supported", () => {
   const f = fixture(), profile = join(f.root, "profile"), foreign = join(f.root, "foreign"), host = join(f.home, ".qwen"), defaultRoot = join(host, "skills");
   mkdirSync(profile); mkdirSync(foreign); mkdirSync(host);
   symlinkSync(foreign, defaultRoot); symlinkSync(defaultRoot, join(profile, "skills"));
   const env = { ...f.env, AGENTHUB_HOME: join(f.root, "agenthub"), QWEN_HOME: profile };
   const setup = (e: NodeJS.ProcessEnv, mode: "dry-run" | "apply" | "undo") => runSetup("qwen", mode, { home: f.state, env: e, cwd: f.work, entry }).skills![0]!;
+  const skipped = (result: ReturnType<typeof setup>, target: string) => {
+    expect(result).toEqual({ target: "qwen", reason: expect.stringContaining(target) });
+    expect(result.reason).toContain("skills not installed"); expect(result.reason).toContain("vmem skills export <dir>");
+  };
   for (const mode of ["dry-run", "apply", "undo"] as const) {
-    expect(setup(env, mode)).toMatchObject({ refused: true, reason: expect.stringContaining(defaultRoot) });
-    expect(setup({ ...f.env, AGENTHUB_HOME: join(f.root, "agenthub") }, mode)).toMatchObject({ refused: true, reason: expect.stringContaining(foreign) });
+    skipped(setup(env, mode), defaultRoot);
+    skipped(setup({ ...f.env, AGENTHUB_HOME: join(f.root, "agenthub") }, mode), foreign);
   }
+  expect(readdirSync(foreign)).toEqual([]);
   const otherProfile = join(f.root, "other-profile"), realDefault = join(f.home, ".codex", "skills");
   mkdirSync(otherProfile); mkdirSync(realDefault, { recursive: true }); symlinkSync(foreign, join(otherProfile, "skills"));
   for (const mode of ["dry-run", "apply", "undo"] as const) {
     const bad = runSetup("codex", mode, { home: f.state, env: { ...f.env, AGENTHUB_HOME: join(f.root, "agenthub"), CODEX_HOME: otherProfile }, cwd: f.work, entry }).skills![0]!;
-    expect(bad).toMatchObject({ refused: true, reason: expect.stringContaining(foreign) });
+    expect(bad).toEqual({ target: "codex", reason: expect.stringContaining(foreign) });
+    expect(bad.reason).toContain("vmem skills export <dir>");
   }
+  expect(readdirSync(foreign)).toEqual([]);
   const real = join(f.root, "real-profile"); mkdirSync(join(real, "skills"), { recursive: true });
   expect(runSetup("codex", "dry-run", { home: f.state, env: { ...f.env, AGENTHUB_HOME: join(f.root, "agenthub"), CODEX_HOME: real }, cwd: f.work, entry }).skills![0]!.report!.root).toBe(join(real, "skills"));
 });
@@ -357,14 +365,41 @@ test("skill conflicts are reported without blocking a successful MCP install", (
   expect(readFileSync(join(foreign, "keep"), "utf8")).toBe("user data");
 });
 
-test("a refused skill root exits nonzero when setup changes nothing", () => {
+test("a non-directory skill root exits nonzero when setup changes nothing", () => {
   const f = fixture();
   run(["setup", "codex", "--apply"], f.env);
   const root = join(f.home, ".codex", "skills"), other = join(f.root, "other");
-  rmSync(root, { recursive: true }); mkdirSync(other); symlinkSync(other, root);
+  rmSync(root, { recursive: true }); mkdirSync(other); writeFileSync(root, "not a directory");
   const result = run(["setup", "codex", "--apply", "--json"], f.env), report = JSON.parse(result.text);
   expect(result.code).toBe(1);
   expect(report.skills[0]).toMatchObject({ target: "codex", refused: true });
+});
+
+test("setup all succeeds when a default skill root is an unfollowed link", () => {
+  const f = fixture(), foreign = join(f.root, "foreign"), qwen = join(f.home, ".qwen");
+  mkdirSync(foreign); writeFileSync(join(foreign, "keep"), "synthetic"); mkdirSync(qwen); symlinkSync(foreign, join(qwen, "skills"));
+  const env = { ...f.env, AGENTHUB_HOME: join(f.root, "agenthub") };
+  const result = run(["setup", "all", "--apply", "--json"], env), report = JSON.parse(result.text);
+  expect(result.code).toBe(0);
+  expect(report.skills.find((s: { target: string }) => s.target === "qwen")).toEqual({ target: "qwen", reason: expect.stringContaining(foreign) });
+  const plain = run(["setup", "all", "--apply"], env);
+  expect(plain.code).toBe(0); expect(plain.text).toMatch(/qwen skill\s+none/);
+  expect(plain.text).toContain(foreign); expect(plain.text).toContain("vmem skills export <dir>");
+  expect(readFileSync(join(foreign, "keep"), "utf8")).toBe("synthetic");
+  expect(readdirSync(foreign)).toEqual(["keep"]);
+});
+
+test("an uninspectable default root is still refused", () => {
+  const f = fixture(), profile = join(f.root, "profile"), defaultRoot = join(f.home, ".codex", "skills");
+  mkdirSync(profile); mkdirSync(defaultRoot, { recursive: true }); symlinkSync(defaultRoot, join(profile, "skills"));
+  const env = { ...f.env, AGENTHUB_HOME: join(f.root, "agenthub"), CODEX_HOME: profile }, original = fs.lstatSync;
+  const spy = spyOn(fs, "lstatSync").mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+    if (String(args[0]) === defaultRoot) throw Object.assign(new Error("synthetic denied"), { code: "EACCES" });
+    return original(...args);
+  }) as typeof fs.lstatSync);
+  try {
+    expect(runSetup("codex", "dry-run", { home: f.state, env, cwd: f.work, entry }).skills![0]).toMatchObject({ target: "codex", refused: true, reason: expect.stringContaining("cannot be inspected") });
+  } finally { spy.mockRestore(); }
 });
 
 test("hosts without automatic skill roots report the export path", () => {

@@ -304,6 +304,7 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
     try {
       const resolved = resolveHostSkillRoot(name, env);
       if (!resolved) { report.skills!.push({ target: name, reason: "skills are not installed for this host; use vmem skills export <dir>" }); continue; }
+      if ("reason" in resolved) { report.skills!.push({ target: name, reason: resolved.reason }); continue; }
       const skills = installSkills(resolved.root, mode, root?.path, root?.version, ["vmem", "setup", name, ...(root ? ["--root", root.path] : []), mode === "undo" ? "--undo" : "--apply"].map(shellWord).join(" "), resolved.recheck);
       if (resolved.linkedFrom) for (const item of skills.actions) item.reason = `via linked root ${resolved.linkedFrom} to ${skills.root}${item.reason ? `; ${item.reason}` : ""}`;
       report.skills!.push({ target: name, report: skills });
