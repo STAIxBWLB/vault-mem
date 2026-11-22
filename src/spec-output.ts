@@ -1,3 +1,4 @@
+import { markerCell } from "@staix/cli-output";
 /**
  * Text renderers for `vmem spec get|graph|grep|validate` (#114). Each one reads the same result object `--json` prints
  * and never adds content to it; data goes through `clean()` in tables and fields, and bodies keep their lines with
@@ -9,7 +10,7 @@ import type { SpecEdge, SpecNode } from "./spec-graph.ts";
 import type { SpecFreshnessEntry } from "./spec-freshness.ts";
 import type { SpecValidationIssue, SpecValidationReport } from "./spec-validate.ts";
 import type { SpecDiagnostic } from "./spec-source.ts";
-import { blocks, fields, heading, issueTable, marker, nextCommand, paragraph, plural, shellWord, status, table, tableParts, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
+import { blocks, fields, heading, issueTable, nextCommand, paragraph, plural, shellWord, status, table, tableParts, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
 
 /** What the renderers need from the command line: the spec arguments (`get root --body`) and their parsed values. */
 export interface SpecTextContext { args: readonly string[]; values: Record<string, unknown>; repo?: string }
@@ -25,7 +26,7 @@ export interface SpecGrepResult { source: string; worktree: string; hits: SpecGr
 export type SpecValidateResult = SpecValidationReport & { source?: string; worktree?: string };
 
 const value = (data: unknown): string => typeof data === "string" ? data : Array.isArray(data) ? data.map(value).join(", ") : data === undefined || data === null ? "" : JSON.stringify(data);
-const markedCell = (name: "ok" | "warn" | "fail", text: string, o: TextOptions) => tone(`${marker(name, { ...o, color: false })} ${text}`, name);
+const markedCell = (name: "ok" | "warn" | "fail", text: string, o: TextOptions) => tone(`${markerCell(name, o.ascii === true)} ${text}`, name);
 const statusTone = (value: string | undefined, o: TextOptions): CellInput => value === "active" ? markedCell("ok", value, o) : value === "deprecated" ? markedCell("warn", value, o) : value ?? "-";
 const counted = (shown: number, total: number) => shown < total ? ` (${shown} of ${total})` : "";
 /** The same command with `--offset` set, inserted before a `--` separator so it stays an option. */

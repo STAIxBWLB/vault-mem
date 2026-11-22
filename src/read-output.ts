@@ -1,3 +1,5 @@
+import { markerCell } from "@staix/cli-output";
+import { paint } from "@staix/cli-output";
 /**
  * Text views for the read, log and analysis commands (#114). Each renderer is pure, takes the same result the
  * command prints with `--json`, and never shows more than that result carries.
@@ -10,7 +12,7 @@ import type { GraphNeighborhood, GraphPath } from "./vault-graph.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
 import type { EvidenceReport } from "./evidence.ts";
 import type { GraphExplanation } from "./graph-evidence.ts";
-import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paint, paragraph, plural, shellWord, status, summary, table, tableParts, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
+import { blocks, clean, fields, heading, issueTable, nextCommand, paragraph, plural, shellWord, status, summary, table, tableParts, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
 
 const command = (...words: string[]) => ["vmem", ...words].map(shellWord).join(" ");
 
@@ -30,7 +32,7 @@ export function showText(r: NoteReadResult, o: TextOptions, c: { vault: string; 
   if (!r.truncated) return blocks(head, stripTerminal(r.content).replace(/\n+$/, ""));
   const words = ["show", c.vault, c.target, ...(r.section ? ["--section", r.section] : []), ...(c.maxBytes !== undefined ? ["--max-bytes", String(c.maxBytes)] : []), "--offset", String(r.nextOffset)];
   const tail = [status("warn", "truncated", o), ...(r.nextOffset !== undefined ? [nextCommand("next", command(...words), o)] : [])];
-  const headings = r.headings?.length ? ["H2 headings (read one with --section):", ...r.headings.map(h => `  ${clean(h)}`), ...(r.headingsTruncated ? [paint("  ... more headings", "muted", o)] : [])].join("\n") : undefined;
+  const headings = r.headings?.length ? ["H2 headings (read one with --section):", ...r.headings.map(h => `  ${clean(h)}`), ...(r.headingsTruncated ? [paint([{ text: "  ... more headings", role: "hint" }], o.color)] : [])].join("\n") : undefined;
   return blocks(head, stripTerminal(r.content).replace(/\n+$/, ""), tail.join("\n"), headings);
 }
 
@@ -40,7 +42,7 @@ export function linksText(links: SuggestedLink[], o: TextOptions, c: { vault: st
   const count = `${plural(links.length, "link")} from ${clean(from)}`;
   if (!links.length) return count;
   const target = (l: ResolvedLink) => l.target + (l.heading !== null ? `#${l.heading}` : "") + (l.block !== null ? `#^${l.block}` : "");
-  const resolution = (l: SuggestedLink): CellInput => l.resolved ?? tone(`${marker("warn", { ...o, color: false })} ${l.reason ?? "unresolved"}${l.suggested ? `; suggested ${clean(l.suggested.path)} (${l.suggested.score.toFixed(3)})` : ""}`, "warn");
+  const resolution = (l: SuggestedLink): CellInput => l.resolved ?? tone(`${markerCell("warn", o.ascii === true)} ${l.reason ?? "unresolved"}${l.suggested ? `; suggested ${clean(l.suggested.path)} (${l.suggested.score.toFixed(3)})` : ""}`, "warn");
   const rows = links.map(l => [target(l), resolution(l), l.line]);
   const more = links.length >= c.limit && c.limit < 500 ? nextCommand("next", command("links", c.vault, c.target, "--limit", String(Math.min(500, c.limit * 2))), o) : undefined;
   return blocks(heading("OUT", o) + "\n" + table(["TARGET", "RESOLVED", "LINE"], rows, o), [count, more].filter(Boolean).join("\n"));
@@ -65,11 +67,11 @@ export function logAppendText(r: LogReceipt, o: TextOptions, c: { vault: string;
 }
 
 const LEVELS: Record<LintCode, "error" | "warn"> = { L01: "error", L02: "error", L03: "warn", L09: "warn", L10: "warn", L11: "warn", L12: "warn", L13: "error", L14: "warn", L15: "warn", L16: "warn", L17: "warn", L18: "warn", L19: "warn" };
-const verdict = (r: { errors: number; warnings: number; summary: string }, o: TextOptions) => paint(clean(r.summary), r.errors ? "fail" : r.warnings ? "warn" : "ok", o);
+const verdict = (r: { errors: number; warnings: number; summary: string }, o: TextOptions) => paint([{ text: clean(r.summary), role: r.errors ? "error" : r.warnings ? "warning" : "success" }], o.color);
 export function lintText(d: { report: LintReport; notes: number; titles: Record<LintCode, string>; info: Partial<Record<LintCode, string>> }, o: TextOptions, c: { vault: string; note?: string }): string {
   const rows = (Object.keys(d.report.findings) as LintCode[]).flatMap(code => {
     const check = d.titles[code].replace(" — ", " "), found = d.report.findings[code];
-    return [...(found.length ? found.map(f => [tone(`${marker(LEVELS[code] === "error" ? "fail" : "warn", { ...o, color: false })} ${LEVELS[code]}`, LEVELS[code] === "error" ? "fail" : "warn"), check, f]) : [[tone(`${marker("ok", { ...o, color: false })} ok`, "ok"), check, "위반 없음"]]),
+    return [...(found.length ? found.map(f => [tone(`${markerCell(LEVELS[code] === "error" ? "fail" : "warn", o.ascii === true)} ${LEVELS[code]}`, LEVELS[code] === "error" ? "fail" : "warn"), check, f]) : [[tone(`${markerCell("ok", o.ascii === true)} ok`, "ok"), check, "위반 없음"]]),
       ...(d.info[code] ? [[tone("info", "muted"), check, d.info[code]]] : [])];
   });
   const ok = (Object.keys(d.report.findings) as LintCode[]).filter(code => !d.report.findings[code].length).length;
@@ -118,11 +120,11 @@ export function pathText(r: GraphPath, o: TextOptions, c: { vault: string; maxHo
 /** `vmem evidence`: one row per entry with status, reason and byte offsets. Quotes are not echoed. */
 export function evidenceText(r: EvidenceReport, o: TextOptions): string {
   const head = heading(`evidence ${r.vault} ${r.note.path}: ${plural(r.evidence.length, "entry", "entries")}`, o);
-  if (!r.evidence.length) return blocks(head, paint("no evidence metadata", "muted", o));
+  if (!r.evidence.length) return blocks(head, paint([{ text: "no evidence metadata", role: "hint" }], o.color));
   const t = (s: EvidenceReport["evidence"][number]["status"]) => s === "verified" ? "ok" : s === "unverified_external" ? "muted" : s === "unsupported" ? "fail" : "warn";
   const rows = r.evidence.map(e => {
     const name = t(e.status), glyph = name === "muted" ? "unknown" : name;
-    return [String(e.index), tone(`${marker(glyph, { ...o, color: false })} ${e.status}`, name), e.reason ?? "", e.match ? `${e.match.start}..${e.match.end}` : "", e.source ?? ""];
+    return [String(e.index), tone(`${markerCell(glyph, o.ascii === true)} ${e.status}`, name), e.reason ?? "", e.match ? `${e.match.start}..${e.match.end}` : "", e.source ?? ""];
   });
   return blocks(head, table(["#", "STATUS", "REASON", "BYTES", "SOURCE"], rows, o));
 }
@@ -132,9 +134,9 @@ export function explainText(r: GraphExplanation, o: TextOptions, c: { vault: str
   if (!r.path.found) return `no path from ${clean(r.path.from)} to ${clean(r.path.to)} within ${plural(r.path.options.maxHops, "hop")}`;
   const parts = r.hops.map(hop => {
     const head = heading(`hop ${hop.index + 1}: ${hop.from} -> ${hop.to} (structural ${hop.edge.rel ?? hop.edge.relation})`, o);
-    const rows = hop.occurrences.map(x => [x.kind === "legacy_graph_match" && x.authored ? tone(`${marker("ok", { ...o, color: false })} link`, "ok") : tone(`${marker("unknown", { ...o, color: false })} ${x.kind === "legacy_graph_match" ? "legacy" : "note"}`, "muted"),
+    const rows = hop.occurrences.map(x => [x.kind === "legacy_graph_match" && x.authored ? tone(`${markerCell("ok", o.ascii === true)} link`, "ok") : tone(`${markerCell("unknown", o.ascii === true)} ${x.kind === "legacy_graph_match" ? "legacy" : "note"}`, "muted"),
       x.relation, x.traversal, `${x.origin.path}:${x.line}`, `${x.bytes.start}..${x.bytes.end}`, x.source === "frontmatter" ? `frontmatter ${x.field ?? ""}` : "body"]);
-    return blocks(head, rows.length ? table(["KIND", "RELATION", "WALK", "AT", "BYTES", "SOURCE"], rows, o) : paint("no occurrences found", "warn", o), hop.omitted ? status("warn", `${plural(hop.omitted, "occurrence")} omitted`, o) : undefined);
+    return blocks(head, rows.length ? table(["KIND", "RELATION", "WALK", "AT", "BYTES", "SOURCE"], rows, o) : paint([{ text: "no occurrences found", role: "warning" }], o.color), hop.omitted ? status("warn", `${plural(hop.omitted, "occurrence")} omitted`, o) : undefined);
   });
   return blocks(...parts, `explained path ${clean(r.path.from)} to ${clean(r.path.to)} in ${clean(c.vault)}: ${plural(r.path.length, "hop")}${r.truncated ? " (truncated)" : ""}`);
 }

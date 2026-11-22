@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Adopt `@staix/cli-output` 0.1.0 for CLI output standard v1; Bun 1.4.4 is now the minimum supported version.
+
 ## [0.14.2] - 2026-11-23
 
 - Fixed: setup reports an unfollowed linked skill root as not installed instead of refusing the host, and points to skill export.

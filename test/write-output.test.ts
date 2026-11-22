@@ -57,9 +57,9 @@ test("a multi-file change prints a CHANGES table and a refusal prints the issue 
   expect(renderWriteReceipt(receipt({ applied: false, unchanged: true }), PLAIN, ctx("link", "test", "a", "b"))).toBe("unchanged: links already present");
   const logFailed = receipt({ changes: [{ path: "notes/a.md", beforeSha: SHA, sha256: SHA, bytes: 9 }], log: { ok: false, appended: null, synced: false, bytesWritten: null, issues: [{ code: "LOG_IO", severity: "error", message: "log append failed" }] } });
   expect(renderWriteReceipt(logFailed, PLAIN, ctx("patch", "test", "a"))).toContain("✓  patched notes/a.md\n  sha256  " + SHA + "\n\n✗  log: not appended\n\nLEVEL     CODE    PATH  MESSAGE\n✗  error  LOG_IO  -     log append failed");
-  expect(renderWriteReceipt(receipt({ preview: true, applied: false }), PLAIN, ctx("check", "test", "-", "--path", "x"))).toBe("✓  ok: the note passes validation\n\n✓  1 ok");
+  expect(renderWriteReceipt(receipt({ preview: true, applied: false }), PLAIN, ctx("check", "test", "-", "--path", "x"))).toBe("✓  ok: the note passes validation\n\n✓ 1 ok");
   expect(renderWriteReceipt(receipt({ ok: false, applied: false, preview: true, issues: [{ code: "V01", severity: "error", path: "notes/x.md", message: "bad" }] }), PLAIN, ctx("check", "test", "-")))
-    .toBe("LEVEL     CODE  PATH        MESSAGE\n✗  error  V01   notes/x.md  bad\n\n✗  fail: notes/x.md has 1 error\n\n✗  1 failed");
+    .toBe("LEVEL     CODE  PATH        MESSAGE\n✗  error  V01   notes/x.md  bad\n\n✗  fail: notes/x.md has 1 error\n\n✗ 1 failed");
 });
 
 test("#114 AC4: a move preview prints the plan and a confirm command that applies with the same fingerprint", () => {

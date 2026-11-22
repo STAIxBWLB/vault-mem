@@ -1,3 +1,4 @@
+import { markerCell } from "@staix/cli-output";
 /**
  * Text renderers for the registry, health, setup and manifest commands (#114). Each is a pure function of the
  * command's JSON result; `--json` never comes through here, and the text shows no more than that JSON carries.
@@ -8,7 +9,7 @@ import type { PiiMatrix, PiiRow } from "./pii.ts";
 import { effectivePii, type RecoveryReport } from "./registry.ts";
 import type { SetupReport } from "./setup.ts";
 import type { SkillInstallReport } from "./skills-install.ts";
-import { blocks, clean, fields, heading, issueTable, marker, nextCommand, paragraph as formatParagraph, plural, shellWord, status, table, tone, type CellInput, type TextOptions, type Tone } from "./text-output.ts";
+import { blocks, clean, fields, heading, issueTable, nextCommand, paragraph as formatParagraph, plural, shellWord, status, table, tone, type CellInput, type TextOptions, type Tone } from "./text-output.ts";
 import { MAX_RATIO_NOTES } from "./vault-index.ts";
 import type { VaultStats } from "./vault-stats.ts";
 
@@ -21,9 +22,9 @@ export interface Manifest { name: string; version: string; configVersion: number
 
 const statuses = (o: TextOptions) => {
   const plain = { ...o, color: false };
-  return { OK: tone(`${marker("ok", plain)} ok`, "ok"), WARN: tone(`${marker("warn", plain)} warn`, "warn"), FAIL: tone(`${marker("fail", plain)} fail`, "fail") };
+  return { OK: tone(`${markerCell("ok", plain.ascii === true)} ok`, "ok"), WARN: tone(`${markerCell("warn", plain.ascii === true)} warn`, "warn"), FAIL: tone(`${markerCell("fail", plain.ascii === true)} fail`, "fail") };
 };
-const paragraph = (text: string, o: TextOptions, toneName?: Tone, indent = "") => formatParagraph(toneName === "ok" || toneName === "warn" || toneName === "fail" ? `${marker(toneName, { ...o, color: false })} ${text}` : text, o, toneName, indent);
+const paragraph = (text: string, o: TextOptions, toneName?: Tone, indent = "") => formatParagraph(toneName === "ok" || toneName === "warn" || toneName === "fail" ? `${markerCell(toneName, o.ascii === true)} ${text}` : text, o, toneName, indent);
 const homeLine = (r: StatusResult, o: TextOptions) => `${heading(`vmem ${r.version}`, o)}  home ${clean(r.home)} (${r.source})${r.agentMem ? `  agent-mem ${clean(r.agentMem.version)} (host API ${r.agentMem.hostApi})` : ""}`;
 const NO_VAULTS = "no vaults registered; add one with vmem vaults add <id> <absolute-path> --kind personal|org --write mcp|cli|none";
 

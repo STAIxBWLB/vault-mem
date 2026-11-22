@@ -21,7 +21,8 @@ import { resolveHome } from "./home.ts";
 import { changeSettings, settingsSnapshot, addVault, addSpec, removeSpec, specStatus, effectivePii, loadRegistry, recoverRegistry, registryStatus, removeVault, setVaultPii } from "./registry.ts";
 import { piiPolicy } from "./pii.ts";
 import { vaultStats } from "./vault-stats.ts";
-import { PLAIN, UsageError, errorLine, shellWord, takeColorFlag, textOptions, type TextOptions } from "./text-output.ts";
+import { errorLine, paint, EXIT } from "@staix/cli-output";
+import { PLAIN, UsageError, clean, shellWord, takeColorFlag, textOptions, type TextOptions } from "./text-output.ts";
 import { renderDoctor, renderManifest, renderRecover, renderSkillsExport, renderRemove, renderSetup, renderSpecAdd, renderSpecsList, renderStats, renderStatus, renderVaultAdd, renderVaultPii, renderVaultsList, type StatusResult } from "./cli-output.ts";
 function parse(args: string[], allowed: string[], values: string[]) {
   const flags: Record<string, string | boolean> = {}, positional: string[] = [];
@@ -276,12 +277,13 @@ export function reportError(error: unknown, args: string[]): number {
   try { color = takeColorFlag(args).color; } catch { color = "never"; }
   let options: TextOptions;
   try { options = textOptions(color, process.env, process.stderr); } catch { options = PLAIN; }
-  console.error(errorLine(error instanceof Error ? error.message : "operation failed", options, process.stderr.isTTY === true));
-  if (!(error instanceof UsageError)) return 1;
+  const line = errorLine("vmem", clean(error instanceof Error ? error.message : "operation failed"), "", { tty: process.stderr.isTTY === true, ascii: options.ascii === true })[0]!;
+  console.error(paint([{ text: line, role: "error" }], options.color));
+  if (!(error instanceof UsageError)) return EXIT.fail;
   let words = args;
   try { words = takeColorFlag(args).args; } catch { /* invalid color still receives a general usage */ }
   const entry = [...COMMANDS].sort((a, b) => b.name.length - a.name.length).find(item => item.name.split(" ").every((word, i) => words[i] === word));
   console.error(`Usage: vmem ${entry?.usage ?? "<command> [args]"}`);
   console.error(`Run 'vmem help${entry ? ` ${entry.name}` : ""}' for details.`);
-  return 2;
+  return EXIT.usage;
 }

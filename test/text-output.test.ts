@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fields, issueTable, outputWidth, paint, PLAIN, resolveColor, shellWord, table, takeColorFlag, textOptions, tone, wrap } from "../src/text-output.ts";
+import { paint, resolveColor, ROLE_SGR, SGR_RESET } from "@staix/cli-output";
+import { fields, issueTable, outputWidth, PLAIN, shellWord, table, takeColorFlag, textOptions, tone, wrap } from "../src/text-output.ts";
 import { run } from "../src/cli.ts";
 
 test("#114 AC2: --color is taken once from anywhere before --, and auto follows the TTY, NO_COLOR and TERM", () => {
@@ -10,13 +11,13 @@ test("#114 AC2: --color is taken once from anywhere before --, and auto follows 
   expect(takeColorFlag(["show", "v", "--", "--color=always"])).toEqual({ args: ["show", "v", "--", "--color=always"] });
   expect(() => takeColorFlag(["status", "--color"])).toThrow("--color=auto");
   expect(() => takeColorFlag(["status", "--color=never", "--color=always"])).toThrow("given once");
-  expect(resolveColor("always", { isTTY: false })).toBe(true);
-  expect(resolveColor("never", { isTTY: true })).toBe(false);
-  expect(resolveColor(undefined, { isTTY: true })).toBe(true);
-  expect(resolveColor("auto", { isTTY: true, NO_COLOR: "1" })).toBe(false);
-  expect(resolveColor(undefined, { isTTY: true, TERM: "dumb" })).toBe(false);
-  expect(resolveColor(undefined, { isTTY: false })).toBe(false);
-  expect(() => resolveColor("sometimes", { isTTY: true })).toThrow("--color=auto");
+  expect(resolveColor("always", { isTTY: false }, "vmem")).toBe(true);
+  expect(resolveColor("never", { isTTY: true }, "vmem")).toBe(false);
+  expect(resolveColor(undefined, { isTTY: true }, "vmem")).toBe(true);
+  expect(resolveColor("auto", { isTTY: true, NO_COLOR: "1" }, "vmem")).toBe(false);
+  expect(resolveColor(undefined, { isTTY: true, TERM: "dumb" }, "vmem")).toBe(false);
+  expect(resolveColor(undefined, { isTTY: false }, "vmem")).toBe(false);
+  expect(resolveColor("sometimes", { isTTY: true }, "vmem")).toBeInstanceOf(Error);
   expect(textOptions("always", {}, { isTTY: false })).toEqual({ color: true, ascii: true });
   expect(outputWidth({ isTTY: true, columns: 60 })).toBe(60);
   expect(outputWidth({ isTTY: false, COLUMNS: "100" })).toBe(100);
@@ -29,7 +30,7 @@ test("tables size columns by display width, wrap the last column only when a wid
   expect(table(["PATH", "LEVEL", "TITLE"], rows, PLAIN)).toBe(["PATH        LEVEL  TITLE", "사업단      ok     한글 제목", "notes/a.md  fail   x [31my"].join("\n"));
   const wrapped = table(["A", "B"], [["x", "one two three four five six"]], { color: false, columns: 23 }).split("\n");
   expect(wrapped).toEqual(["A  B", "x  one two three four", "   five six"]);
-  expect(paint("ok", "ok", { color: true })).toBe("\u001b[1;32mok\u001b[0m");
+  expect(paint([{ text: "ok", role: "success" }], true)).toBe(ROLE_SGR.success + "ok" + SGR_RESET);
   expect(table(["A"], [[tone("ok", "ok")]], { color: true })).toContain("\u001b[1;32mok\u001b[0m");
 });
 

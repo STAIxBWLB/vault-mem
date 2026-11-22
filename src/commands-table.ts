@@ -1,6 +1,7 @@
+import { paint } from "@staix/cli-output";
 import { SPEC_COMMANDS, type SpecCommand } from "./spec-command-table.ts";
 import { version } from "../package.json";
-import { paint, paragraph, width, wrap, type TextOptions } from "./text-output.ts";
+import { paragraph, width, wrap, type TextOptions } from "./text-output.ts";
 /** One-line help per spec command; the longer SPEC_COMMANDS descriptions are the MCP tool descriptions. */
 const SPEC_HELP: Record<SpecCommand, string> = {
   get: "read a spec's metadata, links and freshness; optionally page its body",
@@ -146,12 +147,12 @@ function entryLines(entry: { usage: string; description: string }, o: TextOption
 }
 function sectionsText(entries: readonly { section: string; usage: string; description: string }[], o: TextOptions): string {
   return HELP_SECTIONS.map(section => entries.filter(entry => entry.section === section)).filter(group => group.length)
-    .map(group => [paint(group[0]!.section, "bold", o), ...group.flatMap(entry => entryLines(entry, o))].join("\n")).join("\n\n");
+    .map(group => [paint([{ text: group[0]!.section, role: "header" }], o.color), ...group.flatMap(entry => entryLines(entry, o))].join("\n")).join("\n\n");
 }
 /** `vmem help`: the tagline, then every command by section with its description. */
 export function help(o: TextOptions = { color: false }): string {
   return [paragraph(`vmem ${version}: validated knowledge vaults for agents and people`, o), sectionsText([...COMMANDS, ...EXTRA_HELP], o),
-    paint("Output", "bold", o) + "\n" + paragraph(OUTPUT_NOTE, o, undefined, "  ")].join("\n\n");
+    paint([{ text: "Output", role: "header" }], o.color) + "\n" + paragraph(OUTPUT_NOTE, o, undefined, "  ")].join("\n\n");
 }
 /** `vmem help <command>` and `<command> --help`: the entries of that command or command group, or undefined when none match. */
 export function commandUsage(name: string, o: TextOptions = { color: false }): string | undefined {

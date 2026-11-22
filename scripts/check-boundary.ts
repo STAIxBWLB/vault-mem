@@ -21,6 +21,7 @@ function inspect(dir: string) {
         else {
           const name = spec.text;
           const allowed = name.startsWith(".") || builtins.has(name) || name.startsWith("bun:") ||
+            name === "@staix/cli-output" ||
             (name === "@staix/agent-mem/platform" && relative(root, file) === "src/platform.ts") ||
             (name === "@staix/agent-mem" && relative(root, file) === "src/amem/seam.ts") ||
             // The console contract is types only; the import is erased at runtime.
@@ -45,6 +46,6 @@ function inspectSkills(dir: string) {
 }
 inspectSkills(join(root, "skills"));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-if (JSON.stringify(pkg.dependencies) !== JSON.stringify({ "@staix/agent-mem": ">=0.33.0 <1.0.0" })) errors.push("runtime dependency must be exactly @staix/agent-mem >=0.33.0 <1.0.0");
+if (JSON.stringify(pkg.dependencies) !== JSON.stringify({ "@staix/agent-mem": ">=0.33.0 <1.0.0", "@staix/cli-output": "0.1.0" })) errors.push("runtime dependencies must be exactly @staix/agent-mem >=0.33.0 <1.0.0 and @staix/cli-output 0.1.0");
 if (errors.length) { console.error(errors.join("\n")); process.exit(1); }
 console.log("boundary: ok");

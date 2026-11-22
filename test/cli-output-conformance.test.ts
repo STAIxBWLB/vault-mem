@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { errorLine, paint, marker, resolveColor, stripTerminal, table, textOptions, width } from "../src/text-output.ts";
+import { errorLine, paint, markerCell, resolveColor, ROLE_SGR, SGR_RESET, type Role } from "@staix/cli-output";
+import { stripTerminal, table, textOptions, width } from "../src/text-output.ts";
 import { run } from "../src/cli.ts";
 import { evidenceText } from "../src/read-output.ts";
 import { renderStatus } from "../src/cli-output.ts";
@@ -7,14 +8,12 @@ import { renderStatus } from "../src/cli-output.ts";
 const plain = { color: false, ascii: true };
 const color = { color: true, ascii: true };
 test("shared roles and markers render a report with and without color", () => {
-  const report = (o: typeof plain) => [paint("vmem report", "header", o), `${marker("ok", o)} healthy`, `${marker("fail", o)} failed`].join("\n");
+  const report = (o: typeof plain) => [paint([{ text: "vmem report", role: "header" }], o.color), `${paint([{ text: markerCell("ok", o.ascii), role: "success" }], o.color)} healthy`, `${paint([{ text: markerCell("fail", o.ascii), role: "error" }], o.color)} failed`].join("\n");
   expect(report(plain)).toBe("vmem report\nok healthy\nx  failed");
   expect(stripTerminal(report(color))).toBe(report(plain));
-  expect(report(color)).toBe([paint("vmem report", "header", color), `${paint("ok", "success", color)} healthy`, `${paint("x ", "error", color)} failed`].join("\n"));
-  expect(new Set(["header", "section", "key", "success", "warning", "error", "hint", "accent"].map(role => paint("x", role as "header", color))).size).toBe(8);
-  const roles = ["header", "section", "key", "value", "success", "warning", "error", "hint", "accent"] as const;
-  const codes = roles.map(role => paint("sample", role, color).match(/\[([0-9;]+)m/)?.[1] ?? "default");
-  expect(codes).toEqual(["1;34", "1;35", "34", "default", "1;32", "1;33", "1;31", "90", "36"]);
+  expect(report(color)).toBe([paint([{ text: "vmem report", role: "header" }], color.color), `${paint([{ text: "ok", role: "success" }], color.color)} healthy`, `${paint([{ text: "x ", role: "error" }], color.color)} failed`].join("\n"));
+  const roles = Object.keys(ROLE_SGR) as Role[];
+  for (const role of roles) expect(paint([{ text: "sample", role }], color.color)).toBe(ROLE_SGR[role] ? `${ROLE_SGR[role]}sample${SGR_RESET}` : "sample");
 });
 test("status report is golden with color off and on", () => {
   const report = { home: "/synthetic", source: "VMEM_HOME" as const, version: "9.0.0", healthy: true, vaults: [] };
@@ -26,13 +25,13 @@ test("status report is golden with color off and on", () => {
 });
 test("color precedence and JSON on pipes", () => {
   const env = { isTTY: false, TERM: "dumb", FORCE_COLOR: "1" };
-  expect(resolveColor("auto", env)).toBe(true);
-  expect(resolveColor("auto", { ...env, NO_COLOR: "1" })).toBe(false);
-  expect(resolveColor("always", { ...env, NO_COLOR: "1" })).toBe(true);
-  expect(resolveColor("never", env)).toBe(false);
-  expect(resolveColor("auto", { isTTY: true, FORCE_COLOR: "0" })).toBe(false);
-  expect(resolveColor("auto", { isTTY: false, CLICOLOR_FORCE: "1", CLICOLOR: "0" })).toBe(true);
-  expect(resolveColor("auto", { isTTY: true, CLICOLOR: "0" })).toBe(false);
+  expect(resolveColor("auto", env, "vmem")).toBe(true);
+  expect(resolveColor("auto", { ...env, NO_COLOR: "1" }, "vmem")).toBe(false);
+  expect(resolveColor("always", { ...env, NO_COLOR: "1" }, "vmem")).toBe(true);
+  expect(resolveColor("never", env, "vmem")).toBe(false);
+  expect(resolveColor("auto", { isTTY: true, FORCE_COLOR: "0" }, "vmem")).toBe(false);
+  expect(resolveColor("auto", { isTTY: false, CLICOLOR_FORCE: "1", CLICOLOR: "0" }, "vmem")).toBe(true);
+  expect(resolveColor("auto", { isTTY: true, CLICOLOR: "0" }, "vmem")).toBe(false);
   const json = run(["manifest", "--json", "--color=always"], { FORCE_COLOR: "1", LANG: "C" }).text;
   expect(stripTerminal(json)).toBe(json);
   expect(JSON.parse(json).name).toBe("@staix/vault-mem");
@@ -48,10 +47,10 @@ test("80-column reports cap fixed columns and keep state on one line", () => {
 });
 test("LANG=C selects ASCII markers", () => {
   const options = textOptions("never", { LANG: "C" });
-  expect(marker("ok", options)).toBe("ok");
-  expect(marker("fail", options)).toBe("x ");
-  expect(marker("next", options)).toBe("->");
-  expect(marker("ok", textOptions("never", { LANG: "C.UTF-8" }))).toBe("✓ ");
+  expect(markerCell("ok", options.ascii === true)).toBe("ok");
+  expect(markerCell("fail", options.ascii === true)).toBe("x ");
+  expect(markerCell("next", options.ascii === true)).toBe("->");
+  expect(markerCell("ok", textOptions("never", { LANG: "C.UTF-8" }).ascii === true)).toBe("✓ ");
 });
 test("stderr decides color independently of stdout", () => {
   const env = { LANG: "C.UTF-8", TERM: "xterm" };
@@ -59,11 +58,11 @@ test("stderr decides color independently of stdout", () => {
   const stderr = textOptions("auto", env, { isTTY: true });
   expect(stdout.color).toBe(false);
   expect(stderr.color).toBe(true);
-  expect(stripTerminal(errorLine("failed", stderr, true))).toBe("✗  vmem: failed");
-  expect(errorLine("failed", stdout, false)).toBe("vmem: failed");
+  expect(errorLine("vmem", "failed", "", { tty: true, ascii: stderr.ascii })[0]).toBe("✗ vmem: failed");
+  expect(errorLine("vmem", "failed", "", { tty: false, ascii: stdout.ascii })[0]).toBe("vmem: failed");
   const forced = textOptions("auto", { ...env, FORCE_COLOR: "1" }, { isTTY: false });
-  expect(errorLine("failed", forced, false)).not.toBe(errorLine("failed", stdout, false));
-  expect(stripTerminal(errorLine("failed", forced, false))).toBe("vmem: failed");
+  expect(paint([{ text: errorLine("vmem", "failed", "", { tty: false, ascii: forced.ascii })[0]!, role: "error" }], forced.color)).not.toBe(errorLine("vmem", "failed", "", { tty: false, ascii: stdout.ascii })[0]);
+  expect(stripTerminal(paint([{ text: errorLine("vmem", "failed", "", { tty: false, ascii: forced.ascii })[0]!, role: "error" }], forced.color))).toBe("vmem: failed");
 });
 
 test("usage and operation failures have distinct process exits", () => {

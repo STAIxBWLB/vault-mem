@@ -1,10 +1,11 @@
+import { paint } from "@staix/cli-output";
 /** `vmem assert <vault> --batch FILE|- [--dry-run] [--log JSON] [--json]`: one implementation shared with `vmem_assert`. */
 import { appendAssertions, type AssertReceipt } from "./assertions.ts";
 import { argumentError } from "./mcp.ts";
 import { LOG_EVENT_SCHEMA } from "./log-format.ts";
 import type { LogEvent } from "./log-types.ts";
 import { input } from "./write-commands.ts";
-import { blocks, clean, issueTable, paint, plural, status, table, PLAIN, UsageError, type TextOptions } from "./text-output.ts";
+import { blocks, clean, issueTable, plural, status, table, PLAIN, UsageError, type TextOptions } from "./text-output.ts";
 
 export function assertText(r: AssertReceipt, o: TextOptions, c: { vault: string }): string {
   const ops = plural(r.entries.length, "operation");
@@ -17,7 +18,7 @@ export function assertText(r: AssertReceipt, o: TextOptions, c: { vault: string 
   const rows = r.entries.length ? table(["SEQ", "OP", "ID", "REV", "HASH"], r.entries.map(e => [e.seq ?? "-", e.op, e.id, e.rev ?? "-", e.hash ? e.hash.slice(0, 12) : "-"]), o) : undefined;
   const recovery = r.recovery.length ? ["recovery:", ...r.recovery.map(note => `  - ${clean(note)}`)].join("\n") : undefined;
   const log = r.log ? (r.log.ok ? status("ok", "log: appended", o) : blocks(status("fail", "log: not appended", o), issueTable(r.log.issues, o))) : undefined;
-  return blocks(head, rows, recovery && paint(recovery, "hint", o), issueTable(r.issues, o), log);
+  return blocks(head, rows, recovery && paint([{ text: recovery, role: "hint" }], o.color), issueTable(r.issues, o), log);
 }
 
 export function runAssertCommand(args: string[], home: string, env: NodeJS.ProcessEnv = process.env, text: TextOptions = PLAIN): { text: string; code: number } {
