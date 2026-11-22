@@ -1,18 +1,23 @@
 import ts from "typescript";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { COMMANDS } from "../src/commands-table.ts";
 import { SPEC_COMMANDS } from "../src/spec-command-table.ts";
 import { VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
 
-// Usage: bun scripts/refusal-inventory.ts [src-root]; defaults to ./src.
+// Usage: bun scripts/refusal-inventory.ts [src-root] [--baseline FILE] [--prune-baseline]; defaults to ./src and scripts/refusal-inventory.baseline.json.
 // Collects the message arguments of UsageError, Refusal and plain Error throws (#303) and checks rule B:
-// every `vmem <command> [--flag]` and `vmem_<tool>` a message names exists. Rule A (unnamed continuations) is T2.
+// every `vmem <command> [--flag]` and `vmem_<tool>` a message names exists. Rule A: every message names a continuation,
+// carries a `// refusal: <marker>` comment on its throw line or the line above, or is in the shrink-only baseline.
 
 /** Marks a `${...}` hole in a template message; a reference through a hole is not resolved. */
 export const HOLE = "\u2039\u203a";
 const THROWN = new Set(["UsageError", "Refusal", "Error"]);
-export interface Message { file: string; line: number; kind: string; text: string }
+/** By-design markers (#303): the next step needs operator knowledge, an action in the world, or a person's authority. */
+export const MARKERS = ["operator-knowledge", "world-action", "human-authority"] as const;
+export type Marker = typeof MARKERS[number];
+export interface Message { file: string; line: number; kind: string; text: string; marker?: Marker }
+export interface BaselineEntry { file: string; message: string }
 export interface Finding { file: string; line: number; reference: string; reason: string }
 export interface Surface { commands: Map<string, Set<string>>; tools: Set<string> }
 
@@ -40,11 +45,19 @@ export function collectMessages(dir: string, base = dir): Message[] {
     const file = join(dir, entry.name);
     if (entry.isDirectory()) { out.push(...collectMessages(file, base)); continue; }
     if (!file.endsWith(".ts")) continue;
-    const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+    const raw = readFileSync(file, "utf8"), lines = raw.split("\n");
+    const source = ts.createSourceFile(file, raw, ts.ScriptTarget.Latest, true);
+    const markerAt = (line: number): Marker | undefined => {
+      for (const text of [lines[line - 1], lines[line - 2]]) {
+        const found = text?.match(/\/\/\s*refusal:\s*([a-z-]+)/)?.[1];
+        if (found) { if (!(MARKERS as readonly string[]).includes(found)) throw new Error(`${file}:${line}: unknown refusal marker ${found}; use one of ${MARKERS.join(", ")}`); return found as Marker; }
+      }
+      return undefined;
+    };
     const visit = (node: ts.Node) => {
       if (ts.isThrowStatement(node) && node.expression && ts.isNewExpression(node.expression) && ts.isIdentifier(node.expression.expression) && THROWN.has(node.expression.expression.text)) {
         const kind = node.expression.expression.text, line = source.getLineAndCharacterOfPosition(node.getStart()).line + 1;
-        for (const text of messagesIn(kind, node.expression.arguments ?? [])) out.push({ file: relative(base, file), line, kind, text });
+        for (const text of messagesIn(kind, node.expression.arguments ?? [])) { const marker = markerAt(line); out.push({ file: relative(base, file), line, kind, text, ...(marker ? { marker } : {}) }); }
       }
       ts.forEachChild(node, visit);
     };
@@ -97,8 +110,43 @@ export function checkRuleB(messages: readonly Message[], surface: Surface): Find
   return findings;
 }
 
+// A next-step clause follows the cause after "; ", ", then" or ". " and is more than a template hole.
+const NEXT_STEP = /(?:;|\.|, then)\s+(?!$)(.+)$/s;
+const RULE_ID = /\b[A-Z]{1,4}\d{2,3}\b/;
+const NAMES_RETRY = /(?<![\w-])vmem (?=[a-z])|\bvmem_[a-z]/;
+/** Rule A: the message names what to do next. A message citing rule ids counts only when it also names the command or tool to retry with. */
+export function namesContinuation(text: string): boolean {
+  if (RULE_ID.test(text)) return NAMES_RETRY.test(text);
+  if (NAMES_RETRY.test(text)) return true;
+  const step = text.match(NEXT_STEP)?.[1]?.replaceAll(HOLE, "").trim();
+  return !!step && /[a-z]{2}/i.test(step);
+}
+/** Unnamed messages not covered by a marker or a baseline entry, and baseline entries that match no unnamed message (stale). */
+export function checkRuleA(messages: readonly Message[], baseline: readonly BaselineEntry[]): { unnamed: Message[]; stale: BaselineEntry[] } {
+  const pool = new Map<string, number>();
+  const key = (file: string, message: string) => `${file}\u0000${message}`;
+  for (const entry of baseline) pool.set(key(entry.file, entry.message), (pool.get(key(entry.file, entry.message)) ?? 0) + 1);
+  const unnamed: Message[] = [];
+  for (const m of messages) {
+    if (m.marker || namesContinuation(m.text)) continue;
+    const k = key(m.file, m.text), left = pool.get(k) ?? 0;
+    if (left) pool.set(k, left - 1); else unnamed.push(m);
+  }
+  const stale: BaselineEntry[] = [];
+  for (const entry of baseline) { const k = key(entry.file, entry.message), left = pool.get(k) ?? 0; if (left) { stale.push(entry); pool.set(k, left - 1); } }
+  return { unnamed, stale };
+}
+export function readBaseline(file: string): BaselineEntry[] {
+  const value: unknown = JSON.parse(readFileSync(file, "utf8"));
+  if (!Array.isArray(value) || value.some(e => typeof e?.file !== "string" || typeof e?.message !== "string" || Object.keys(e).length !== 2)) throw new Error(`${file}: expected an array of {file, message}; restore it from git`);
+  return value as BaselineEntry[];
+}
+
 if (import.meta.main) {
-  const root = process.argv[2] ?? "src";
+  const args = process.argv.slice(2), flag = (name: string) => { const i = args.indexOf(name); return i < 0 ? undefined : args.splice(i, 2)[1]; };
+  const prune = args.includes("--prune-baseline"); if (prune) args.splice(args.indexOf("--prune-baseline"), 1);
+  const baselineFile = flag("--baseline") ?? join(import.meta.dir, "refusal-inventory.baseline.json");
+  const root = args[0] ?? "src";
   const messages = collectMessages(root), findings = checkRuleB(messages, knownSurface());
   const references = messages.filter(m => /\bvmem[ _]/.test(m.text)).length;
   if (findings.length) {
@@ -106,5 +154,14 @@ if (import.meta.main) {
     console.error(`refusal-inventory: ${findings.length} rule B finding(s)`);
     process.exit(1);
   }
-  console.log(`refusal-inventory: ok (${messages.length} messages, ${references} naming vmem)`);
+  const baseline = readBaseline(baselineFile), { unnamed, stale } = checkRuleA(messages, baseline);
+  if (prune && stale.length) {
+    // Shrink only: pruning drops stale entries and never adds one.
+    const drop = [...stale], kept = baseline.filter(e => { const i = drop.findIndex(d => d.file === e.file && d.message === e.message); if (i < 0) return true; drop.splice(i, 1); return false; });
+    writeFileSync(baselineFile, JSON.stringify(kept, null, 2) + "\n");
+    console.log(`refusal-inventory: pruned ${stale.length} stale baseline entr${stale.length === 1 ? "y" : "ies"}`);
+  } else if (stale.length) for (const e of stale) console.error(`${baselineFile}: stale entry ${e.file}: ${JSON.stringify(e.message)}; the message changed or now names a continuation, so remove the entry (bun scripts/refusal-inventory.ts --prune-baseline)`);
+  for (const m of unnamed) console.error(`${join(root, m.file)}:${m.line}: ${JSON.stringify(m.text)}: names no continuation; add the next step after "; ", or mark the throw with // refusal: ${MARKERS.join("|")}`);
+  if (unnamed.length || (stale.length && !prune)) { console.error(`refusal-inventory: ${unnamed.length} rule A finding(s), ${prune ? 0 : stale.length} stale baseline entr${stale.length === 1 ? "y" : "ies"}`); process.exit(1); }
+  console.log(`refusal-inventory: ok (${messages.length} messages, ${references} naming vmem, ${baseline.length - (prune ? stale.length : 0)} baselined)`);
 }
