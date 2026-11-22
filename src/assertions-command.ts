@@ -1,5 +1,6 @@
 /** CLI surface for the shared assertion read provider. */
 import { readAssertions } from "./assertion-read.ts";
+import { assertionCoverageWarnings } from "./assertion-coverage.ts";
 import { scanAssertionExposure, writeReplaceFile, type ExposureReceipt } from "./assertion-exposure.ts";
 import { purgeAssertions, type PurgeReceipt } from "./assertions.ts";
 import { blocks, clean, heading, issueTable, nextCommand, paragraph, plural, status, table, PLAIN, UsageError, type TextOptions } from "./text-output.ts";
@@ -34,8 +35,7 @@ export function runAssertionsCommand(args: string[], home: string, env: NodeJS.P
   const rows = result.items.map(item => [clean(item.subject), clean(item.relation), item.answer ?? "-", typeof item.value === "string" ? clean(item.value) : item.value ? "withheld" : "-", item.id]);
   return { text: blocks(heading(`Assertions in ${clean(result.vault)}`, text), table(["SUBJECT", "RELATION", "ANSWER", "VALUE", "ID"], rows, text),
     result.truncated ? status("pending", `more results: rerun with --cursor ${result.continuation}`, text) : status("ok", `${result.items.length} assertion(s) shown`, text),
-    result.coverage.untrusted.length ? status("warn", `${result.coverage.untrusted.length} untrusted journal segment(s); inspect assertions/`, text) : undefined,
-    result.coverage.indexIssue ? status("warn", result.coverage.indexIssue, text) : undefined), code: 0 };
+    ...assertionCoverageWarnings(result.coverage).map(w => status(w.tone === "err" ? "fail" : w.tone === "warn" ? "warn" : "unknown", w.message, text))), code: 0 };
 }
 
 /** What a purge receipt means in words; `argv` is the command without `vmem`, so the confirm line is pasteable. */

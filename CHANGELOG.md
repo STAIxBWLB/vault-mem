@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed: assertion coverage counts excluded entries per damaged segment and partial batch, and shows the same coverage messages in CLI text and the console.
+
 - Fixed: the Graph panel says no vault is selected when none is, instead of an empty unknown-vault id, and offers First page next to a page error.
 
 - Add a Graph console panel with revision-bound, byte-bounded snapshot pages, unresolved-link placeholders, and existing neighborhood and path queries.
