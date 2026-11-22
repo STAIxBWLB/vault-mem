@@ -87,7 +87,7 @@ export function renderSpecValidate(r: SpecValidateResult, o: TextOptions, contex
   if (r.diagnostics.length) { out.section("Discovery"); for (const item of r.diagnostics) out.bullet("unknown", `${item.code}: ${finding(item)}`); }
   if (r.truncated) out.section("Coverage").bullet("warn", `truncated: ${r.items.length} of ${r.errors + r.warnings} findings shown; raise --limit (up to 500) or fix the listed findings and rerun`);
   out.section("Scope").kv([["Source", context.repo !== undefined ? `--repo ${context.repo}` : r.source]]);
-  out.summary({ failed: r.errors || (r.ok ? 0 : 1), warnings: r.warnings, unknown: context.values.requireFresh === true ? 0 : stale.length, ok: r.ok && !r.errors && !r.warnings && !stale.length ? 1 : 0 });
+  out.summary({ failed: r.errors || (r.ok ? 0 : 1), warnings: r.warnings + (context.values.requireFresh === true ? 0 : stale.length), ok: r.ok && !r.errors && !r.warnings && !stale.length ? 1 : 0 });
   return done(out, o);
 }
 

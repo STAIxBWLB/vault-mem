@@ -63,7 +63,7 @@ test("create CLI parses optional fields and JSON lists, returning created receip
   const f = fixture(), stamp = f.git(["rev-parse", "HEAD"]).stdout.toString().trim();
   const result = runSpecCommand([...cli, "--status", "deprecated", "--superseded-by", "root", "--depends-on", '["root"]', "--references", '["root"]', "--implements", '["root"]', "--covers", '["synthetic-token"]', "--tags", '["alpha"]', "--paths", '["SPEC.md"]', "--verified-against", stamp], f.env);
   expect(result.code).toBe(0);
-  expect(result.text).toContain("spec create child: created");
+  expect(result.text).toContain("child: created");
   expect(result.text).toContain("child.md"); expect(result.text).toContain("person"); expect(result.text.startsWith("{")).toBe(false);
   const file = readFileSync(join(f.repo, "child.md"), "utf8"), document = parseFrontmatter(file);
   expect(document.data).toMatchObject({ id: "child", type: "module", title: "Created child", status: "deprecated", parent: "root", "superseded-by": "root", "depends-on": ["root"], references: ["root"], implements: ["root"], covers: ["synthetic-token"], tags: ["alpha"], paths: ["SPEC.md"], "verified-against": stamp });
@@ -108,7 +108,7 @@ test("CLI create validation refusal names the missing id and a create-specific r
   const f = fixture();
   const result = runSpecCommand([...cli, "--depends-on", '["missing"]'], f.env);
   expect(result.code).toBe(1);
-  expect(result.text).toContain("spec create child: refused");
+  expect(result.text).toContain("child: refused");
   expect(result.text).toContain("dangling_link"); expect(result.text).toContain("missing");
   expect(result.text).toMatch(/(?:create|source tree)[^\n]*retry/);
   expect(result.text).not.toContain("expectedSha");

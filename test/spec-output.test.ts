@@ -43,7 +43,7 @@ test("spec validate uses findings, discovery and freshness sections and one summ
   const text = renderSpecValidate(report, PLAIN, { args: ["validate"], values: {} });
   expect(text).toContain("▸ Findings"); expect(text).toContain("▸ Discovery"); expect(text).toContain("▸ Freshness");
   expect(text.indexOf("dangling_link")).toBeLessThan(text.indexOf("orphan"));
-  expect(text.split("\n").at(-1)).toBe("✗ 1 failed  ⚠ 1 warning  ? 1 unknown");
+  expect(text.split("\n").at(-1)).toBe("✗ 1 failed  ⚠ 2 warnings");
   const clean = renderSpecValidate({ ...report, ok: true, errors: 0, warnings: 0, items: [], diagnostics: [], freshness: [] }, PLAIN, { args: ["validate", "--repo", "/r"], values: { requireFresh: true }, repo: "/r" });
   expect(clean).toEndWith("✓ 1 ok");
   expect(renderSpecValidate(report, PLAIN, { args: ["validate"], values: { requireFresh: true } })).not.toContain("Freshness");
