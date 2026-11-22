@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { runSetup, SETUP_TARGETS, stableRuntime } from "../src/setup.ts";
 import { completionDefinitions, completionScript, COMMANDS, help } from "../src/commands-table.ts";
 import { run } from "../src/cli.ts";
@@ -30,6 +30,53 @@ const seed: Record<string, string> = {
 };
 const parse = (target: string, text: string) => target === "codex" ? Bun.TOML.parse(text) as any : JSON.parse(text);
 const servers = (target: string, doc: any) => target === "codex" ? doc.mcp_servers : target === "jcode" ? doc.servers : doc.mcpServers;
+
+test("host profiles may link skills only to their real default root", () => {
+  for (const [host, variable, dirname] of [["claude", "CLAUDE_CONFIG_DIR", ".claude"], ["codex", "CODEX_HOME", ".codex"], ["kimi", "KIMI_CODE_HOME", ".kimi-code"], ["qwen", "QWEN_HOME", ".qwen"]] as const) {
+    const f = fixture(), profile = join(f.root, `profile-${host}`), destination = join(f.home, dirname, "skills");
+    mkdirSync(profile); mkdirSync(destination, { recursive: true }); symlinkSync(host === "codex" ? relative(profile, destination) : destination, join(profile, "skills"));
+    const env = { ...f.env, AGENTHUB_HOME: join(f.root, "agenthub"), [variable]: profile };
+    const setup = (mode: "dry-run" | "apply" | "undo") => runSetup(host, mode, { home: f.state, env, cwd: f.work, entry });
+    const dry = setup("dry-run").skills![0]!.report!;
+    expect(dry.root).toBe(realpathSync(destination));
+    expect(dry.actions.every(a => a.change === "install" && a.path.startsWith(destination) && a.reason?.includes("via linked root"))).toBe(true);
+    const rendered = run(["setup", host], env).text;
+    expect(rendered).toContain(destination); expect(rendered).toContain("via linked root");
+    expect(existsSync(join(destination, "vault-connect"))).toBe(false);
+    const applied = setup("apply").skills![0]!.report!;
+    expect(applied.actions.every(a => a.change === "install")).toBe(true);
+    const markerPath = join(destination, "vault-connect", ".vmem-skill.json"), marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    expect(marker.tool).toBe("vmem");
+    marker.version = "0.0.0-old"; writeFileSync(markerPath, JSON.stringify(marker));
+    expect(setup("dry-run").skills![0]!.report!.actions.find(a => a.name === "vault-connect")?.change).toBe("replace");
+    expect(setup("apply").skills![0]!.report!.actions.find(a => a.name === "vault-connect")?.change).toBe("replace");
+    writeFileSync(join(destination, "vault-connect", "SKILL.md"), "local edit");
+    const undone = setup("undo").skills![0]!.report!;
+    expect(undone.actions.find(a => a.name === "vault-connect")?.change).toBe("modified");
+    expect(readFileSync(join(destination, "vault-connect", "SKILL.md"), "utf8")).toBe("local edit");
+    expect(undone.actions.find(a => a.name === "vault-enrich")?.change).toBe("remove");
+  }
+});
+
+test("foreign and default-root links are refused, real profile directories remain supported", () => {
+  const f = fixture(), profile = join(f.root, "profile"), foreign = join(f.root, "foreign"), host = join(f.home, ".qwen"), defaultRoot = join(host, "skills");
+  mkdirSync(profile); mkdirSync(foreign); mkdirSync(host);
+  symlinkSync(foreign, defaultRoot); symlinkSync(defaultRoot, join(profile, "skills"));
+  const env = { ...f.env, AGENTHUB_HOME: join(f.root, "agenthub"), QWEN_HOME: profile };
+  const setup = (e: NodeJS.ProcessEnv, mode: "dry-run" | "apply" | "undo") => runSetup("qwen", mode, { home: f.state, env: e, cwd: f.work, entry }).skills![0]!;
+  for (const mode of ["dry-run", "apply", "undo"] as const) {
+    expect(setup(env, mode)).toMatchObject({ refused: true, reason: expect.stringContaining(defaultRoot) });
+    expect(setup({ ...f.env, AGENTHUB_HOME: join(f.root, "agenthub") }, mode)).toMatchObject({ refused: true, reason: expect.stringContaining(foreign) });
+  }
+  const otherProfile = join(f.root, "other-profile"), realDefault = join(f.home, ".codex", "skills");
+  mkdirSync(otherProfile); mkdirSync(realDefault, { recursive: true }); symlinkSync(foreign, join(otherProfile, "skills"));
+  for (const mode of ["dry-run", "apply", "undo"] as const) {
+    const bad = runSetup("codex", mode, { home: f.state, env: { ...f.env, AGENTHUB_HOME: join(f.root, "agenthub"), CODEX_HOME: otherProfile }, cwd: f.work, entry }).skills![0]!;
+    expect(bad).toMatchObject({ refused: true, reason: expect.stringContaining(foreign) });
+  }
+  const real = join(f.root, "real-profile"); mkdirSync(join(real, "skills"), { recursive: true });
+  expect(runSetup("codex", "dry-run", { home: f.state, env: { ...f.env, AGENTHUB_HOME: join(f.root, "agenthub"), CODEX_HOME: real }, cwd: f.work, entry }).skills![0]!.report!.root).toBe(join(real, "skills"));
+});
 
 test("every host format: dry-run writes nothing, apply is idempotent and keeps unrelated entries, undo restores bytes", () => {
   for (const target of SETUP_TARGETS) {

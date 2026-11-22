@@ -1,5 +1,5 @@
 /** Install package-owned skills without replacing foreign or locally modified trees. */
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, realpathSync, rmSync, writeFileSync, type Stats } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readlinkSync, readSync, realpathSync, rmSync, writeFileSync, type Stats } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
@@ -114,10 +114,10 @@ function stage(root: string, files: Files, digestValue: string, packageVersion: 
   } catch (error) { rmSync(dir, { recursive: true, force: true }); throw error; }
 }
 function existingRoot(path: string): string | undefined {
-  try { const info = lstatSync(path); if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("skill root is linked or not a directory; choose a real directory"); return realpathSync(path); }
+  try { const info = lstatSync(path); if (info.isSymbolicLink()) throw new Error(`skill root link points to ${readlinkSync(path)}; vmem installs only into a real directory or a link to the host's default skill root`); if (!info.isDirectory()) throw new Error("skill root is not a directory; choose a real directory"); return realpathSync(path); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    if (error instanceof Error && error.message.startsWith("skill root is linked")) throw error;
+    if (error instanceof Error && error.message.startsWith("skill root ")) throw error;
     throw new Error("skill root cannot be inspected; check its path and permissions", { cause: error });
   }
 }
@@ -127,12 +127,13 @@ function removeVerified(path: string, sha: string): boolean {
   catch { return false; }
 }
 /** Plan or install one complete skill tree per name. `root` must be an absolute target directory. */
-export function installSkills(root: string, mode: SetupMode, packageRoot = PACKAGE_ROOT, packageVersion = version, retryCommand = ["vmem", "skills", "export", root].map(shellWord).join(" ")): SkillInstallReport {
+export function installSkills(root: string, mode: SetupMode, packageRoot = PACKAGE_ROOT, packageVersion = version, retryCommand = ["vmem", "skills", "export", root].map(shellWord).join(" "), rootGuard?: () => void): SkillInstallReport {
   if (!isAbsolute(root)) throw new Error("skills: target must be absolute; provide an absolute skill root");
   if (mode !== "undo" && (typeof packageVersion !== "string" || !packageVersion.trim() || Buffer.byteLength(packageVersion) > 128 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(packageVersion))) throw new Error("skills: package version is invalid; reinstall a valid vmem package");
   const requested = resolve(root), actions: SkillAction[] = [];
+  rootGuard?.();
   let actual = existingRoot(requested);
-  if (!actual && mode !== "dry-run" && mode !== "undo") { mkdirSync(requested, { recursive: true, mode: 0o700 }); actual = existingRoot(requested); }
+  if (!actual && mode !== "dry-run" && mode !== "undo") { rootGuard?.(); mkdirSync(requested, { recursive: true, mode: 0o700 }); actual = existingRoot(requested); }
   if (!actual && mode === "apply") throw new Error("skills: target directory could not be created; inspect the target and retry");
   for (const name of SKILL_NAMES) {
     const target = join(actual ?? requested, name), action: SkillAction = { name, path: target, change: "absent" }; actions.push(action);
@@ -149,6 +150,7 @@ export function installSkills(root: string, mode: SetupMode, packageRoot = PACKA
       }
       if (mode === "undo") {
         if (!before) continue;
+        rootGuard?.();
         action.change = "remove";
         const moved = join(actual!, `.vmem-skill-${randomUUID()}`);
         renameAtomic(target, moved, false);
@@ -166,9 +168,11 @@ export function installSkills(root: string, mode: SetupMode, packageRoot = PACKA
       if (before && own?.sha256 === sha && own.version === packageVersion) { action.change = "unchanged"; continue; }
       action.change = before ? "replace" : "install";
       if (mode === "dry-run") continue;
+      rootGuard?.();
       const temp = stage(actual!, files, sha, packageVersion), staged = lstatSync(temp);
       let preserve = false, published = false;
       try {
+        rootGuard?.();
         if (!before) { renameAtomic(temp, target, false); published = true; }
         else {
           if (!identical(before, lstatSync(target))) throw new Error("skill changed before replacement; inspect it and retry");
@@ -201,6 +205,40 @@ export function skillRoot(target: SetupTarget, env: NodeJS.ProcessEnv): string |
   const value = env[spec[0]]?.trim(), home = env.HOME?.trim() || homedir();
   if (value && !isAbsolute(value)) throw new Error(`setup: ${spec[0]} must be absolute; set an absolute host configuration directory`);
   return join(value ? resolve(value) : join(home, spec[1]), "skills");
+}
+
+/** Only an override profile may link its skill root to that host's real default root. */
+export function resolveHostSkillRoot(target: SetupTarget, env: NodeJS.ProcessEnv): { root: string; linkedFrom?: string; recheck?: () => void } | undefined {
+  const requested = skillRoot(target, env);
+  if (!requested) return undefined;
+  let info: Stats;
+  try { info = lstatSync(requested); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { root: requested }; throw error; }
+  if (!info.isSymbolicLink()) return { root: requested };
+  const targetText = readlinkSync(requested);
+  const refused = () => new Error(`skill root link points to ${targetText}; vmem installs only into a real directory or a link to the host's default skill root`);
+  const vars: Partial<Record<SetupTarget, string>> = { claude: "CLAUDE_CONFIG_DIR", codex: "CODEX_HOME", kimi: "KIMI_CODE_HOME", qwen: "QWEN_HOME" };
+  const variable = vars[target];
+  if (!variable || !env[variable]?.trim()) throw refused();
+  const defaults = { ...env }; delete defaults[variable];
+  const defaultRoot = skillRoot(target, defaults)!;
+  let defaultInfo: Stats, actual: string;
+  try {
+    defaultInfo = lstatSync(defaultRoot);
+    if (!defaultInfo.isDirectory() || defaultInfo.isSymbolicLink()) throw refused();
+    actual = realpathSync(defaultRoot);
+    if (realpathSync(requested) !== actual) throw refused();
+  } catch { throw refused(); }
+  const recheck = () => {
+    try {
+      const link = lstatSync(requested), current = lstatSync(defaultRoot);
+      if (!link.isSymbolicLink() || link.dev !== info.dev || link.ino !== info.ino || readlinkSync(requested) !== targetText || !identical(defaultInfo, current) || realpathSync(defaultRoot) !== actual || realpathSync(requested) !== actual) throw new Error();
+    } catch {
+      let target = targetText;
+      try { target = readlinkSync(requested); } catch { /* Keep the last observed target when the link disappeared. */ }
+      throw new Error(`skill root link changed (target ${target}); inspect ${requested} before retrying`);
+    }
+  };
+  return { root: actual, linkedFrom: requested, recheck };
 }
 
 /** Export into a dedicated directory. Unknown entries mean it is not a vmem export root. */

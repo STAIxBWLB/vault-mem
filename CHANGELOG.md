@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed: setup accepts an override profile skill root linked to the host's real default skill root; other links remain refused.
+
 ## [0.14.0] - 2026-11-22
 
 - N-1: 0.13.1 and 0.14.0 share the note and spec index files, config format 6 and the enrichment sidecar format. CLI commands and MCP tool names, arguments and receipts are unchanged. Only the console provider differs: its Graph snapshot adds the first-page `enrichment` field and the `similar` and `semantic` arguments, which the 0.13.1 provider does not offer.

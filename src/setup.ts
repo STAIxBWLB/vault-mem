@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { shellWord } from "./text-output.ts";
-import { installSkills, skillRoot, type SkillInstallReport } from "./skills-install.ts";
+import { installSkills, resolveHostSkillRoot, type SkillInstallReport } from "./skills-install.ts";
 import { fileURLToPath } from "node:url";
 
 /** Hosts whose MCP configuration `vmem setup` can register; `all` covers every user-level host (not agy). */
@@ -302,9 +302,11 @@ export function runSetup(target: string, mode: SetupMode, options: { home: strin
   }
   for (const name of targets) {
     try {
-      const path = skillRoot(name, env);
-      if (!path) { report.skills!.push({ target: name, reason: "skills are not installed for this host; use vmem skills export <dir>" }); continue; }
-      report.skills!.push({ target: name, report: installSkills(path, mode, root?.path, root?.version, ["vmem", "setup", name, ...(root ? ["--root", root.path] : []), mode === "undo" ? "--undo" : "--apply"].map(shellWord).join(" ")) });
+      const resolved = resolveHostSkillRoot(name, env);
+      if (!resolved) { report.skills!.push({ target: name, reason: "skills are not installed for this host; use vmem skills export <dir>" }); continue; }
+      const skills = installSkills(resolved.root, mode, root?.path, root?.version, ["vmem", "setup", name, ...(root ? ["--root", root.path] : []), mode === "undo" ? "--undo" : "--apply"].map(shellWord).join(" "), resolved.recheck);
+      if (resolved.linkedFrom) for (const item of skills.actions) item.reason = `via linked root ${resolved.linkedFrom} to ${skills.root}${item.reason ? `; ${item.reason}` : ""}`;
+      report.skills!.push({ target: name, report: skills });
     } catch (error) { report.skills!.push({ target: name, refused: true, reason: error instanceof Error ? error.message : "skill setup failed; inspect the host configuration" }); }
   }
   report.console = consoleManifest(mode, env, root?.path);
