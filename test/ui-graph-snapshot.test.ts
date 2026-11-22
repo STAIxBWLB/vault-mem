@@ -31,6 +31,23 @@ describe("graph snapshot", () => {
     const s = input(Array.from({ length: 10_000 }, (_, i) => note(`n${String(i).padStart(5, "0")}`, i === 0 ? "[[missing]]" : "")));
     const a = assembleGraphSnapshot(s, "v"); expect(a.pages[0]!.totals.placeholdersOmitted).toBe(1);
   });
+  test("anchors resolve against note stems and empty targets are ignored", () => {
+    const s = input([note("a", "[[b#heading]] [[missing#section]] [[ |x]]"), note("b", "")]);
+    const original = JSON.stringify(buildGraph(s));
+    const a = assembleGraphSnapshot(s, "v");
+    const columns = a.pages[0]!.columns as GraphNodeColumns;
+    expect(columns.id).toEqual(["a", "b", "missing"]);
+    expect(a.pages[0]!.totals.edges).toBe(1);
+    expect(JSON.stringify(buildGraph(s))).toBe(original);
+  });
+  test("bare note paths and missing optional scalars", () => {
+    const s = input([{ path: "bare.md", source: "---\ncreated: [invalid]\ndate: 2020-01-01\n---\n" }]);
+    const columns = assembleGraphSnapshot(s, "v").pages[0]!.columns as GraphNodeColumns;
+    expect(columns.id).toEqual(["bare"]);
+    expect(columns.description).toEqual([null]); expect(columns.confidence).toEqual([null]); expect(columns.topics).toEqual([null]);
+    expect(columns.type).toEqual(["unknown"]); expect(columns.domain).toEqual(["unknown"]);
+    expect(columns.date).toEqual(["2020-01-01"]);
+  });
   test("oversized node is refused", () => {
     const s = input([note("large", `---\ndescription: ${"x".repeat(1_100_000)}\n---\n`)]);
     expect(() => assembleGraphSnapshot(s, "v")).toThrow(/large.*shorten/);

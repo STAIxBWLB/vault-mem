@@ -34,10 +34,10 @@ export function assembleGraphSnapshot(snapshot: AnalysisSnapshot, vault: string)
   const graph = buildGraph(snapshot), unresolved = collectUnresolvedGraph(snapshot);
   const grouped = new Map<string, GraphEdge[]>();
   for (const edge of unresolved) { const list = grouped.get(edge.target) ?? []; list.push(edge); grouped.set(edge.target, list); }
-  const notes = new Map(snapshot.notes.map(n => [n.path, n]));
+  const notes = new Map(snapshot.notes.map(n => [n.path.replace(/^notes\//, "").slice(0, -3), n]));
   const nodes: NodeRow[] = graph.nodes.map(n => {
-    const fm = graphFrontmatter(notes.get(n.source_file)!.source);
-    return { ...n, description: n.description ?? null, confidence: n.confidence ?? null, topics: n.topics ?? null, updated: scalar(fm.updated), date: scalar(fm.created ?? fm.date), placeholder: false };
+    const fm = graphFrontmatter(notes.get(n.id)!.source);
+    return { ...n, description: n.description || null, confidence: n.confidence || null, topics: n.topics || null, updated: scalar(fm.updated), date: scalar(fm.created) ?? scalar(fm.date), placeholder: false };
   });
   const extra: GraphEdge[] = [];
   let omitted = 0, full = false;

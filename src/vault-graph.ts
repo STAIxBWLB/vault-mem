@@ -126,8 +126,8 @@ export function collectUnresolvedGraph(snapshot: AnalysisSnapshot): GraphEdge[] 
     const id = note.path.replace(/^notes\//, "").slice(0, -3), { fm, body } = parse(note.source);
     const inferredTargets = inferredLinkTargets(fm.inferred_links), authored = authoredLinkOffsets(body);
     for (const match of body.matchAll(LEGACY_LINK)) {
-      const target = legacyTarget(match[1]!);
-      if (stems.has(target)) continue;
+      const target = legacyTarget(match[1]!.split("#", 1)[0]!);
+      if (!target || stems.has(target)) continue;
       const key = JSON.stringify([id, target]), prior = edges.get(key);
       const rel = prior?.rel ?? linkRelation(body, match.index, match[0].length);
       const inferred = inferredTargets.has(target) && authored.has(match.index);
