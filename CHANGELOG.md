@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Standardize read and analysis human reports, including brief and skills mine; JSON and stored lint reports are unchanged.
+
 - Standardize registry and setup human reports, including a readable settings view; JSON output and exit codes are unchanged.
 
 - Adopt `@staix/cli-output` 0.1.0 for CLI output standard v1; Bun 1.4.4 is now the minimum supported version.

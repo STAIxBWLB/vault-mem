@@ -65,28 +65,24 @@ export function renderDoctor(r: StatusResult, o: TextOptions): string {
 }
 
 export function renderStats(r: VaultStats, o: TextOptions): string {
-  const counts = (record: Record<string, number>) => fields(Object.entries(record).sort(([a, x], [b, y]) => y - x || a.localeCompare(b)), o);
-  const block = (name: string, body: string | undefined) => body ? `${heading(name, o)}\n${body}` : undefined;
-  const size = r.size.total, ratio = r.ratio;
-  const notFile = ratio.skippedNonFile ? `, ${ratio.skippedNonFile} not a file` : "";
-  // No ratio can be printed either because nothing was readable or because every readable source was empty.
-  const noRatio = ratio.sources ? "no cited source had a nonzero size" : "no note cites a readable workspace file";
-  const ratioBody = ratio.notes
-    ? fields([["notes", plural(ratio.notes, "note")], ["sources", plural(ratio.sources, "file")], ["median", ratio.median ?? ""], ["p90", ratio.p90 ?? ""],
-      ["over 1", plural(ratio.overOne, "note")], ["skipped", `${plural(ratio.skipped, "source reference")}${notFile}`],
-      ["empty", ratio.emptySourceNotes ? `${plural(ratio.emptySourceNotes, "note")} with only empty sources` : ""],
-      ["truncated", ratio.truncatedNotes ? `${plural(ratio.truncatedNotes, "note")} past the ${MAX_RATIO_NOTES}-note cap` : ""],
-      ["largest", ratio.largest.map(entry => `${entry.path} ${entry.ratio}`).join("; ")]], o)
-    : paragraph(`${noRatio}${ratio.skipped ? `; ${plural(ratio.skipped, "source reference")} skipped` : ""}${ratio.emptySourceNotes ? `; ${plural(ratio.emptySourceNotes, "note")} with only empty sources` : ""}${ratio.truncatedNotes ? `; ${plural(ratio.truncatedNotes, "note")} past the ${MAX_RATIO_NOTES}-note cap` : ""}`, o);
-  const log = r.log.total === null ? paragraph("unreadable; see the issues below", o, "fail", "  ")
-    : fields([["total", r.log.total], ...Object.entries(r.log.byType ?? {}).filter(([, n]) => n > 0).sort(([a, x], [b, y]) => y - x || a.localeCompare(b))], o);
-  return blocks(`${heading(r.vault, o)}  ${plural(r.notes.total, "note")} as of ${r.asOf}`,
-    block("Notes by type", counts(r.notes.byType)), block("Notes by domain", counts(r.notes.byDomain)), block("Notes by status", counts(r.notes.byStatus)),
-    block("Note size", size.notes ? fields([["total", `${plural(size.bytes, "byte")}, ${plural(size.words, "word")}`]], o) : undefined),
-    block("Note-to-source ratio", ratioBody),
-    block("Modified", fields([["last 7 days", r.modified.last7Days], ["last 30 days", r.modified.last30Days]], o)),
-    block(`Log since ${r.log.since} (${plural(r.log.days, "day")})`, log),
-    r.log.warnings.map(w => paragraph(`warning: ${w}`, o, "warn")).join("\n"), issueTable(r.log.issues, o));
+  const out = report("stats", o);
+  if (r.log.issues.length || r.log.warnings.length) {
+    out.section("Log problems");
+    for (const issue of r.log.issues) out.bullet("fail", `${issue.code}: ${issue.message}`);
+    for (const warning of r.log.warnings) out.bullet("warn", warning);
+  }
+  out.section("Vault").kv([["Vault", r.vault], ["As of", r.asOf], ["Notes", r.notes.total]]);
+  for (const [name, record] of [["Notes by type", r.notes.byType], ["Notes by domain", r.notes.byDomain], ["Notes by status", r.notes.byStatus]] as const) {
+    if (Object.keys(record).length) out.section(name).kv(Object.entries(record).sort(([a, x], [b, y]) => y - x || a.localeCompare(b)));
+  }
+  if (r.size.total.notes) out.section("Note size").kv([["Bytes", r.size.total.bytes], ["Words", r.size.total.words]]);
+  const ratio = r.ratio;
+  out.section("Note-to-source ratio").kv([["Notes", ratio.notes], ["Sources", ratio.sources], ["Median", ratio.median], ["P90", ratio.p90], ["Over 1", ratio.overOne], ["Skipped", ratio.skipped], ["Not a file", ratio.skippedNonFile], ["Empty sources", ratio.emptySourceNotes], ["Truncated", ratio.truncatedNotes]]);
+  if (!ratio.notes) out.note(ratio.sources ? "no cited source had a nonzero size" : "no note cites a readable workspace file");
+  for (const entry of ratio.largest) out.bullet("absent", `${entry.path}: ${entry.ratio}`);
+  out.section("Modified").kv([["Last 7 days", r.modified.last7Days], ["Last 30 days", r.modified.last30Days]]);
+  out.section("Log").kv([["Since", r.log.since], ["Days", r.log.days], ["Total", r.log.total], ...Object.entries(r.log.byType ?? {}).filter(([, n]) => n > 0).sort(([a, x], [b, y]) => y - x || a.localeCompare(b))]);
+  return render(out, o);
 }
 
 export function renderRecover(r: RecoveryReport, o: TextOptions): string {

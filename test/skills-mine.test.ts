@@ -249,7 +249,8 @@ test("CLI and MCP expose the same read-only command", async () => {
   const parsed = JSON.parse(cli.text);
   expect(parsed.records.curated + parsed.records.capture + parsed.records.vault).toBeGreaterThan(0);
   const markdown = await runAsync(["skills", "mine", "mine", "--vocab", join(FIXTURES, "vocab"), "--days", "3650"], f.env);
-  expect(markdown.text.startsWith("# Skill Candidates")).toBe(true);
+  expect(markdown.text).toContain("vmem skills mine");
+  expect(markdown.text).not.toContain("# Skill Candidates");
   await expect(runAsync(["skills", "mine", "mine", "--bogus"], f.env)).rejects.toThrow("unknown option");
   await expect(runAsync(["skills", "list"], f.env)).rejects.toThrow("skills mine");
   expect(VMEM_TOOL_NAMES).toContain("vmem_skills_mine");

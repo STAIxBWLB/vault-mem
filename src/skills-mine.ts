@@ -1,3 +1,4 @@
+import { Report } from "@staix/cli-output";
 import { localDate } from "./local-date.ts";
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync } from "node:fs";
@@ -472,6 +473,26 @@ export async function mineSkills(home: string, options: MineOptions): Promise<Mi
   });
 }
 
+/** Human report; the Markdown report remains unchanged in the structured result. */
+export function renderMineText(result: MineResult, options: TextOptions): string {
+  const out = new Report(options.columns, options.ascii).header("vmem", "skills mine").section("Corpus");
+  const dropped = result.dropped;
+  out.kv([["Vault", result.vault], ["Days", result.days], ["Projects", result.projects.length], ["Curated", result.records.curated], ["Capture", result.records.capture], ["Vault records", result.records.vault], ["Synthetic dropped", dropped.synthetic], ["Over cap", dropped.overCap], ["Secret dropped", dropped.secret], ["Policy dropped", dropped.policy], ["Oversized", dropped.oversized], ["Duplicate", dropped.duplicate], ["Unreadable", dropped.unreadable], ["Malformed Record", dropped.malformedRecord], ["Truncated capture shards", dropped.truncatedCapture], ["Record outside window", `${dropped.recordOutsideCapped ? "at least " : ""}${dropped.recordOutsideWindow}`], ["Uncounted shards", dropped.recordOutsideUnavailable]]);
+  out.section("Graph").kv([["Nodes", result.graph.nodes], ["Edges", result.graph.edges], ["Communities", result.graph.communities], ["Partitioner", result.graph.partitioner]]);
+  if (result.godNodes.length) { out.section("God nodes"); for (const node of result.godNodes) out.bullet("absent", `${node.id}: degree ${node.degree}`); }
+  out.section("Candidates");
+  if (!result.candidates.length) out.note("No community met the configured thresholds.");
+  for (const candidate of result.candidates) {
+    out.bullet("absent", `${candidate.label}: rank ${candidate.rank}`);
+    out.kv([["Size", candidate.size], ["Unique days", candidate.unique_days], ["Span days", candidate.day_span], ["Curated", candidate.sources.curated], ["Capture", candidate.sources.capture], ["Vault", candidate.sources.vault], ["Cohesion", candidate.cohesion], ["Novelty", candidate.novelty], ["Gloss", candidate.gloss], ["Triggers", candidate.triggers.join(", ")], ["Similar skills", candidate.similar_skills.map(s => `${s.name} (${s.similarity})`).join(", ")]], 4);
+    for (const sample of candidate.samples) out.bullet("absent", `[${sample.source}/${sample.kind} ${sample.at.slice(0, 10)}] ${sample.text}`, true);
+  }
+  if (result.surprising.length) { out.section("Surprising connections"); for (const edge of result.surprising) out.bullet("absent", `${edge.source} to ${edge.target}: communities ${edge.source_community} to ${edge.target_community}, score ${edge.score}`); }
+  if (result.rejected.below3 || result.rejected.detailed.length) { out.section("Rejected"); if (result.rejected.below3) out.note(`${result.rejected.below3} clusters with fewer than 3 records`); for (const candidate of result.rejected.detailed) out.bullet("absent", `${candidate.label}: size ${candidate.size}, novelty ${candidate.novelty}, reason ${candidate.reason}`); }
+  out.section("Guidance").note("Review candidates and propose skill changes in the skill source repository.");
+  return out.render(options.color).join("\n");
+}
+
 const VALUES = ["--days", "--project", "--vocab", "--skills", "--min-size", "--min-novelty"];
 const BOOLEANS = ["--all-projects", "--json"];
 /** `vmem skills mine <vault> ...`. Prints the JSON result, or the markdown report without --json. */
@@ -508,5 +529,5 @@ export async function runSkillsCommand(args: string[], home: string, env: NodeJS
     ...(number("--min-size") !== undefined ? { minSize: number("--min-size") } : {}),
     ...(number("--min-novelty") !== undefined ? { minNovelty: number("--min-novelty") } : {}),
   });
-  return { text: flags["--json"] ? JSON.stringify(result) : stripTerminal(result.report).trimEnd(), code: 0 };
+  return { text: flags["--json"] ? JSON.stringify(result) : renderMineText(result, text), code: 0 };
 }

@@ -25,7 +25,7 @@ Link resolution uses NFC and case-insensitive filename stems only, as Obsidian a
 
 ## Intent-scoped brief
 
-`vmem brief <vault> --for "task intent" [--paths src/file.ts]... [--bytes 256..4096] [--json]` returns screened note pointers, without bodies. `vmem_brief` takes `intent`, optional `vault`, `paths` (array) and `bytes`. Use `vmem_read` for a selected note. This command does not inject anything into SessionStart or another host.
+`vmem brief <vault> --for "task intent" [--paths src/file.ts]... [--bytes 256..4096] [--json]` returns screened note pointers, without bodies. `vmem_brief` takes `intent`, optional `vault`, `paths` (array) and `bytes`. Use `vmem_read` for a selected note. The human report counts terminal formatting toward the byte cap and may omit additional pointers to stay within it; the JSON and MCP result remains unchanged. This command does not inject anything into SessionStart or another host.
 
 MCP `vmem_search` also accepts an optional caller-supplied vector and model for hybrid ranking when matching stored vectors exist. Without stored vectors it keeps lexical ranking; `vmem_similar` finds related notes from stored vectors. Vectors come from opt-in enrichment, not model calls by vmem.
 

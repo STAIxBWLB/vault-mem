@@ -187,7 +187,8 @@ test("#206 CLI, direct API and read-only MCP return the same capped result, incl
   const cli = run(["brief", "mine", "--for", "lantern", "--paths", "src/route.ts", "--bytes", "256", "--json"], f.env);
   expect(cli.code).toBe(0); expect(JSON.parse(cli.text)).toEqual(expected);
   const human = run(["brief", "mine", "--for", "lantern", "--paths", "src/route.ts", "--bytes", "256"], f.env);
-  expect(human.code).toBe(0); expect(human.text).toBe(briefText(expected));
+  expect(human.code).toBe(0); expect(human.text).toContain("vmem brief");
+  expect(Buffer.byteLength(human.text) + 1).toBeLessThanOrEqual(256);
   const mcp = createVaultMcp(f.home, f.env), tool = mcp.tools.find(tool => tool.name === "vmem_brief");
   expect(tool).toBeDefined(); expect(tool!.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
   expect(await mcp.handlers.vmem_brief!(args)).toEqual(expected);
