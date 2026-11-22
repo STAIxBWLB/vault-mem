@@ -22,8 +22,6 @@ const EXEMPT: Record<string, string> = {
 };
 /** Bodies printed verbatim (#312: note and spec bodies keep their bytes); the surrounding report is still checked. */
 const BODY_AFTER: Record<string, RegExp> = { show: /\n> Content\n/, "proposal show": /\n> Content\n/ };
-/** Renderer findings reported to the family owner on #312; each entry suspends one rule for one command until fixed. */
-const KNOWN: Record<string, "markdown"> = { lint: "markdown" };
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-tree-")));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -183,7 +181,7 @@ for (const c of CASES) test(`conformance: ${c.name}`, () => {
   expect(plain.text.endsWith("\n"), `${c.name}: trailing blank line`).toBe(false);
   // AC4 content: no raw JSON, Markdown markup, (s) plurals or placeholders in printed commands.
   expect(/^\s*[{[]"/m.test(text), `${c.name}: raw JSON`).toBe(false);
-  if (KNOWN[c.name] !== "markdown") expect(/`[^`\n]+`|^#{1,6} |\*\*[^*\n]+\*\*/m.test(text), `${c.name}: Markdown markup`).toBe(false);
+  expect(/`[^`\n]+`|^#{1,6} |\*\*[^*\n]+\*\*/m.test(text), `${c.name}: Markdown markup`).toBe(false);
   expect(/\w\(s\)/.test(text), `${c.name}: (s) plural`).toBe(false);
   for (const line of lines.filter(line => /^\s*(->|→)\s/.test(line))) expect(/<[a-z][\w-]*>/.test(line), `${c.name}: placeholder in ${line}`).toBe(false);
   // Summary lines: exactly one, last, on check commands; none on view commands; no prose verdict beside it.

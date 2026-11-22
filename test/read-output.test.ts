@@ -85,8 +85,8 @@ test("#114 lint keeps every finding and info line as LEVEL/CHECK/FINDING rows an
   expect(details.report).toEqual(lintVault(analysisCorpus()));
   expect(lines[0]).toBe(" vmem lint");
   expect(text).toContain("▸ Findings");
-  for (const finding of Object.values(details.report.findings).flat()) expect(text).toContain(finding);
-  for (const info of Object.values(details.info).filter(Boolean)) expect(text).toContain(info!);
+  for (const finding of Object.values(details.report.findings).flat()) expect(text).toContain(finding.replaceAll("`", ""));
+  for (const info of Object.values(details.info).filter(Boolean)) expect(text).toContain(info!.replaceAll("`", ""));
   expect(text).not.toContain(details.report.summary);
   expect(lines.at(-1)).toContain("12 failed");
   const written = analysisWriteText({ ok: true, applied: false, summary: { nodes: 2, edges: 1, communities: 1 }, paths: ["reports/vault-graph.json"], receipts: [] }, PLAIN, { kind: "graph", dryRun: true });

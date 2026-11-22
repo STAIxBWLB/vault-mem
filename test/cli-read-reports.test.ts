@@ -16,9 +16,14 @@ test("read and analysis reports retain content, ASCII layout and semantic color"
   expect(stripTerminal(colored)).toBe(expected);
   expect(colored).not.toBe(expected);
   const details = lintDetails(analysisCorpus());
+  const original = JSON.stringify(details.report);
   const lint = lintText(details, plain, { vault: "demo" });
+  expect(JSON.stringify(details.report)).toBe(original);
   expect(lint).not.toContain(details.report.summary);
-  for (const finding of Object.values(details.report.findings).flat()) expect(lint.replace(/\s+/g, " ")).toContain(finding.replace(/\s+/g, " "));
+  expect(lint).not.toContain("`");
+  expect(details.report.markdown).toContain("`");
+  expect(JSON.stringify(details.report)).toContain("`");
+  for (const finding of Object.values(details.report.findings).flat()) expect(lint.replace(/\s+/g, " ")).toContain(finding.replaceAll("`", "").replace(/\s+/g, " "));
   expect(lint.split("\n").at(-1)).toContain("failed");
   const note = "# Synthetic\n\nBody line.\n## Heading\nMore.";
   const show = showText({ path: "synthetic.md", hash: "abcdef0123456789", content: note, truncated: false }, plain, { vault: "demo", target: "synthetic" });

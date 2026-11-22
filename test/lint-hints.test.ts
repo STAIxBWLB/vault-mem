@@ -173,7 +173,7 @@ test("#165 AC3 fix: a NUL dead link is reported by links and both MCP tools, not
   expect(links.find(link => link.target === "unquotable \"")!.suggested).toBeNull();
   expect(run(["links", "demo", "hub"], f.env).text).toContain("suggested bad.md");
   const lint = run(["lint", "demo"], f.env).text;
-  expect(lint).toContain("suggested `bad.md`");
+  expect(lint).toContain("suggested bad.md");
   expect(lint).toContain(" failed");
   const server = createVaultMcp(f.home, { VMEM_HOME: f.home });
   const mcp = await server.handlers.vmem_links!({ vault: "demo", path: "hub" }) as { dead: { target: string; suggested: { path: string } | null }[] };
@@ -305,9 +305,9 @@ test("#165 AC3: lintVault takes own keys only, so a plain-record snapshot cannot
 
 test("#165 AC3: lint and links report the hint in text and JSON and rewrite nothing", () => {
   const f = fixture(), before = tree(f.vault), lint = run(["lint", "demo"], f.env).text;
-  expect(lint).toContain("suggested `lantern.md` (score ");
+  expect(lint).toContain("suggested lantern.md (score ");
   // The report completes with a real hint present: no prototype-named dead link turns into a crash.
-  expect(lint).toContain("suggested `protos.md` (score ");
+  expect(lint).toContain("suggested protos.md (score ");
   for (const text of ["constructor", "toString"]) {
     const named = lint.split("\n").filter(line => line.includes(`[[${text}]]`));
     expect(named.length).toBeGreaterThan(0);
