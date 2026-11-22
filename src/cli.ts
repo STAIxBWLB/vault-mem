@@ -13,7 +13,7 @@ import { runOrgCommand } from "./org-commands.ts";
 import { isWriteCommand, runWriteCommand } from "./write-commands.ts";
 import { isReadCommand, runReadCommand } from "./read-commands.ts";
 import { version } from "../package.json";
-import { COMMANDS, commandUsage, completionScript, help } from "./commands-table.ts";
+import { COMMANDS, commandUsage, completionScript, help, usageLines } from "./commands-table.ts";
 import { VMEM_TOOL_NAMES, vaultTools } from "./mcp-vault.ts";
 import { CONFIG_VERSION, effectiveDomains } from "./config.ts";
 import { runSetup, type SetupMode } from "./setup.ts";
@@ -57,7 +57,7 @@ export interface Stdout { isTTY?: boolean; columns?: number }
 /** Runs one command; `--color=auto|always|never` is taken off first and decides the text options for `stdout`. */
 export function run(args: string[], env: NodeJS.ProcessEnv = process.env, stdout: Stdout = {}): { text: string; code: number } {
   const taken = takeColorFlag(args);
-  return runWith(taken.args, env, textOptions(taken.color, env, stdout));
+  return runWith(taken.args, env, textOptions(taken.color, env, stdout, taken.ascii));
 }
 function runWith(args: string[], env: NodeJS.ProcessEnv, text: TextOptions = PLAIN): { text: string; code: number } {
   if (!args.length || (args.length === 1 && ["--help", "-h", "help"].includes(args[0]!))) return { text: help(text), code: 0 };
@@ -244,7 +244,7 @@ export async function runMcp(env: NodeJS.ProcessEnv = process.env): Promise<void
 }
 /** Async commands. Only `promote-from-amem` and `skills mine` load the agent-mem seam, and only when they run. */
 export async function runAsync(argv: string[], env: NodeJS.ProcessEnv = process.env, io: { stdinIsTTY?: boolean; stdout?: Stdout } = {}): Promise<{ text: string; code: number }> {
-  const taken = takeColorFlag(argv), args = taken.args, text = textOptions(taken.color, env, io.stdout ?? {});
+  const taken = takeColorFlag(argv), args = taken.args, text = textOptions(taken.color, env, io.stdout ?? {}, taken.ascii);
   const usage = commandHelp(args, text);
   if (usage) return { text: usage, code: 0 };
   if (args[0] === "skills" && args[1] === "export") {
@@ -274,17 +274,18 @@ export function main(args: string[]): number {
 }
 
 export function reportError(error: unknown, args: string[]): number {
-  let color: string | undefined;
-  try { color = takeColorFlag(args).color; } catch { color = "never"; }
+  let color: string | undefined, ascii = false;
+  try { ({ color, ascii = false } = takeColorFlag(args)); } catch { color = "never"; }
   let options: TextOptions;
-  try { options = textOptions(color, process.env, process.stderr); } catch { options = PLAIN; }
+  try { options = textOptions(color, process.env, process.stderr, ascii); } catch { options = PLAIN; }
   const line = errorLine("vmem", clean(error instanceof Error ? error.message : "operation failed"), "", { tty: process.stderr.isTTY === true, ascii: options.ascii === true })[0]!;
   console.error(paint([{ text: line, role: "error" }], options.color));
   if (!(error instanceof UsageError)) return EXIT.fail;
   let words = args;
   try { words = takeColorFlag(args).args; } catch { /* invalid color still receives a general usage */ }
   const entry = [...COMMANDS].sort((a, b) => b.name.length - a.name.length).find(item => item.name.split(" ").every((word, i) => words[i] === word));
-  console.error(`Usage: vmem ${entry?.usage ?? "<command> [args]"}`);
+  // The usage within 80 columns (standard v1), or its short form when it would take more than four lines.
+  for (const line of usageLines(entry?.name, options.columns)) console.error(line);
   console.error(`Run 'vmem help${entry ? ` ${entry.name}` : ""}' for details.`);
   return EXIT.usage;
 }

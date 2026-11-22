@@ -38,7 +38,7 @@ vmem tidy personal --all        # once after upgrading an existing vault: previe
 
 ## Output
 
-Output: every command prints text for people by default, following agent-hub's CLI style. Lists are tables with uppercase headers, single objects are a title line and aligned fields, checks (`doctor`, `check`, `lint`, `spec validate`) print LEVEL/CHECK/FINDING rows and a verdict, and writes print what changed or would change. A preview prints the exact confirm command with its fingerprint; a truncated read or full page prints the command for the next one. `--json` prints compact JSON objects for scripts and agents; existing fields keep their shape; status and vaults list additionally report effective `domains`. `--color=auto|always|never` is accepted by every command: auto colors only a terminal, and `NO_COLOR` or `TERM=dumb` turn it off. Text wraps to the terminal width, or to `COLUMNS` when output is not a terminal. Errors stay `vmem: <message>` on stderr, and exit codes are unchanged. `vmem help <command>` or `<command> --help` prints one command's entries.
+Output: every command prints text for people by default, following agent-hub's CLI style. Lists are tables with uppercase headers, single objects are a title line and aligned fields, checks (`doctor`, `check`, `lint`, `spec validate`) print LEVEL/CHECK/FINDING rows and a verdict, and writes print what changed or would change. A preview prints the exact confirm command with its fingerprint; a truncated read or full page prints the command for the next one. `--json` prints compact JSON objects for scripts and agents; existing fields keep their shape; status and vaults list additionally report effective `domains`. `--color=auto|always|never` is accepted by every command. With `auto` (the default) `NO_COLOR` turns color off, then `FORCE_COLOR` or `CLICOLOR_FORCE` (not `0`) turns it on, then `FORCE_COLOR=0` or `CLICOLOR=0` turns it off; otherwise only a terminal is colored, unless `TERM=dumb`. `--ascii`, also accepted by every command, prints ASCII markers, as does a locale that is not UTF-8. Text wraps to the terminal width, or to `COLUMNS` when output is not a terminal. Errors stay `vmem: <message>` on stderr, and exit codes are unchanged; a usage error adds the command's usage, wrapped within 80 columns or shortened. `vmem help` lists each command with a one-line summary within 80 columns; `vmem help <command>` or `<command> --help` prints its Usage, Description, Flags, Examples and Details.
 
 ## Commands
 
@@ -54,7 +54,7 @@ Output: every command prints text for people by default, following agent-hub's C
 | Analysis | `lint`, `graph build\|neighbors\|path\|explain`, `skills mine` | [analysis](docs/reference/analysis.md) |
 | Specs | `spec get\|graph\|grep\|validate\|create\|update\|delete` | [specs](docs/reference/specs.md) |
 
-`vmem help <command>` prints one command's syntax; `vmem manifest --json` lists the commands and MCP tools for scripts. [docs/README.md](docs/README.md) says which document to open for which task.
+`vmem help <command>` prints one command's usage, flags and examples; `vmem manifest --json` lists the commands and MCP tools for scripts. [docs/README.md](docs/README.md) says which document to open for which task.
 
 `vmem settings <vault>` displays effective settings as a human-readable report (`--json` retains structured output); `--set JSON` previews changes and `--confirm --fingerprint SHA` applies them. The console Settings panel uses the same preview and confirmation. Graph community resolution defaults to 1.
 

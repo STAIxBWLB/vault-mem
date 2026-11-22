@@ -175,7 +175,8 @@ test("CLI setup is non-TTY, dry-run by default, and reports partial refusal", ()
 
 test("help and completion share one command table", () => {
   const text = help();
-  for (const command of COMMANDS) expect(text).toContain(`vmem ${command.usage}`);
+  // The overview lists every command with its summary; each command's own help carries its usage.
+  for (const command of COMMANDS) expect(text).toContain(`  ${command.name}`);
   const defs = completionDefinitions();
   expect(defs.map(d => d.path.join(" "))).toEqual(COMMANDS.map(c => c.name));
   expect(defs.find(d => d.path.join(" ") === "vaults add")!.options["--write"]).toEqual({ value: ["mcp", "cli", "none"] });

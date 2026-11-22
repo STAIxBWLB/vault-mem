@@ -50,29 +50,34 @@ test("status and doctor report findings and sections", () => {
   expect(doctor).toContain("2 failed");
 });
 
-test("#114 AC3: help has the tagline, every section and every command with its description; per-command help prints its entries", () => {
+test("#114 AC3, #312 T2: the overview lists every command by section; per-command help has Usage, Description, Flags, Examples and Details", () => {
   for (const command of COMMANDS) {
     expect(HELP_SECTIONS).toContain(command.section);
     expect(command.description.length).toBeGreaterThan(0);
   }
   const text = help();
   expect(text.split("\n").slice(0, 4)).toEqual([
-    `vmem ${version}: validated knowledge vaults for agents and people`,
+    ` vmem ${version}  validated knowledge vaults for agents and people`,
     "",
-    "Registry",
-    "  vmem status [--json]            show the home, registered vaults and spec sources, and vault health",
+    "▸ Registry",
+    "  status               show the home, vaults, spec sources and vault health",
   ]);
-  for (const section of HELP_SECTIONS) expect(text).toContain(`\n${section}\n`);
-  for (const command of COMMANDS) expect(text).toContain(command.description);
-  expect(text).toContain("--color=auto|always|never");
-  expect(commandUsage("status")).toBe("Registry\n  vmem status [--json]            show the home, registered vaults and spec sources, and vault health");
-  expect(commandUsage("recover", { color: false, columns: 80 })).toBe([
-    "Registry",
-    "  vmem recover [--confirm] [--json]",
-    "                                  preview, then remove with --confirm, a stale",
-    "                                  registry lock and leftover temporary files",
+  for (const section of HELP_SECTIONS) expect(text).toContain(`\n▸ ${section}\n`);
+  for (const command of COMMANDS) expect(text).toContain(command.summary);
+  expect(text).toContain("FORCE_COLOR or CLICOLOR_FORCE");
+  for (const line of text.split("\n")) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(80);
+  expect(commandUsage("status")).toBe([
+    " vmem status", "", "▸ Usage", "  vmem status [--json]", "", "▸ Description", "  Show the home, vaults, spec sources and vault health.", "",
+    "▸ Flags (3)", "  --json                     print compact JSON for scripts and agents", "  --color=auto|always|never  color text: auto (default), always or never",
+    "  --ascii                    print ASCII markers instead of symbols", "", "▸ Details", "  Show the home, registered vaults and spec sources, and vault health.",
   ].join("\n"));
-  expect(commandUsage("vaults")!.split("\n").filter(line => line.startsWith("  vmem "))).toHaveLength(4);
+  const recover = commandUsage("recover", { color: false, columns: 80 })!;
+  expect(recover).toContain("▸ Flags (4)\n  --confirm                  apply the previewed change");
+  expect(recover).not.toContain("▸ Examples");
+  const search = commandUsage("search")!;
+  expect(search).toContain("▸ Examples\n  vmem search personal lanterns\n  vmem search personal lanterns --type insight --limit 20");
+  expect(commandUsage("spec validate")).toContain("▸ Usage\n  vmem spec validate [--source ID] [--worktree PATH] [--require-fresh]\n      [--limit 1..500] [--json]\n  vmem spec validate --repo PATH [--require-fresh] [--limit 1..500] [--json]");
+  expect(commandUsage("vaults")!.split("\n").filter(line => /^  vaults /.test(line))).toHaveLength(4);
   expect(commandUsage("nope")).toBeUndefined();
   const o = textOptions(undefined, {});
   expect(run(["help", "vaults", "pii"], {})).toEqual({ code: 0, text: commandUsage("vaults pii", o)! });
@@ -80,6 +85,8 @@ test("#114 AC3: help has the tagline, every section and every command with its d
   expect(() => run(["help", "nope"], {})).toThrow("help: unknown command nope; run vmem help");
   expect(run(["--version"]).text).toBe(version);
   expect(help({ color: true })).toMatch(ANSI);
+  expect(run(["--ascii", "help"], { LANG: "en_US.UTF-8" }).text).toContain("\n> Registry\n");
+  expect(run(["help"], { LANG: "en_US.UTF-8" }).text).toContain("\n▸ Registry\n");
 });
 
 test("registry reports retain their information and complete confirmation commands", () => {

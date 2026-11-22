@@ -28,8 +28,15 @@ export class UsageError extends Error {}
 const COLOR_USAGE = "--color: expected --color=auto, --color=always or --color=never";
 
 /** Removes the one allowed `--color=` flag from args. It may appear anywhere before a `--` separator. */
-export function takeColorFlag(args: string[]): { args: string[]; color?: string } {
+export function takeColorFlag(args: string[]): { args: string[]; color?: string; ascii?: boolean } {
   const end = args.includes("--") ? args.indexOf("--") : args.length;
+  // `--ascii` (standard v1 markers): global like --color, taken off before a `--` separator only.
+  const asciiAt = args.slice(0, end).indexOf("--ascii");
+  if (asciiAt >= 0) {
+    if (args.slice(0, end).filter(arg => arg === "--ascii").length > 1) throw new UsageError("--ascii: given more than once; pass it once");
+    const rest = takeColorFlag([...args.slice(0, asciiAt), ...args.slice(asciiAt + 1)]);
+    return { ...rest, ascii: true };
+  }
   const found = args.slice(0, end).filter(arg => arg === "--color" || arg.startsWith("--color="));
   if (!found.length) return { args };
   if (found.length > 1 || found[0] === "--color") throw new UsageError(`${COLOR_USAGE}, given once`);
@@ -41,11 +48,11 @@ export function outputWidth(env: { isTTY: boolean; columns?: number; COLUMNS?: s
   return env.COLUMNS && /^[1-9][0-9]*$/.test(env.COLUMNS) ? Number(env.COLUMNS) : undefined;
 }
 /** Options for a stdout; the default is a non-terminal, so library calls and tests get the same text everywhere. */
-export function textOptions(flag: string | undefined, env: NodeJS.ProcessEnv = process.env, stdout: { isTTY?: boolean; columns?: number } = {}): TextOptions {
+export function textOptions(flag: string | undefined, env: NodeJS.ProcessEnv = process.env, stdout: { isTTY?: boolean; columns?: number } = {}, ascii = false): TextOptions {
   const isTTY = stdout.isTTY === true, color = resolveColor(flag, streamEnv(isTTY, env), "vmem");
   if (color instanceof Error) throw new UsageError(COLOR_USAGE);
   const columns = outputWidth({ isTTY, columns: stdout.columns, COLUMNS: env.COLUMNS });
-  return { color, ascii: asciiMarkers(env), ...(columns !== undefined ? { columns } : {}) };
+  return { color, ascii: asciiMarkers(env, ascii), ...(columns !== undefined ? { columns } : {}) };
 }
 
 const cell = (value: CellInput): Cell => typeof value === "object" && value !== null ? value : { text: value === null || value === undefined ? "" : String(value) };

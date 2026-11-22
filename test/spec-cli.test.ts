@@ -57,7 +57,7 @@ test("CLI freshness exit codes, command help, closed flags and manifest match th
   expect(() => run(["spec", "validate", "--require-fresh", "--require-fresh"], f.env)).toThrow("repeated option");
   for (const item of SPEC_COMMANDS) {
     expect(run(["spec", item.command, "--help"], f.env)).toEqual({ code: 0, text: commandUsage(`spec ${item.command}`, textOptions(undefined, f.env))! });
-    expect(commandUsage(`spec ${item.command}`)).toContain(item.usage);
+    for (const form of item.usage.split(" | ")) expect(commandUsage(`spec ${item.command}`)!.replace(/\s+/g, " ")).toContain(form);
   }
   expect(run(["completion", "bash"], f.env).text).toContain("get graph grep validate");
   const manifest = JSON.parse(run(["manifest", "--json"], f.env).text);
