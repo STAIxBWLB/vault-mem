@@ -53,3 +53,22 @@ export interface HistorySnapshot {
   changes: ChangesResult | null;
   error?: string;
 }
+
+export interface GraphNodeColumns {
+  id: string[]; label: string[]; type: (string | null)[]; domain: (string | null)[];
+  source_file: (string | null)[]; community: (number | null)[]; degree: number[];
+  updated: (string | null)[]; date: (string | null)[]; placeholder: boolean[];
+  description: (string | null)[]; confidence: (string | null)[]; topics: (string | null)[];
+}
+export interface GraphEdgeColumns {
+  source: number[]; target: number[]; relations: string[]; relation: number[];
+  field: (string | null)[]; rel: (string | null)[];
+  confidence_tag: string | string[]; confidence: number | number[];
+}
+export interface GraphSnapshotPage {
+  schema: 1; vault: string; revision: string;
+  graph: { directed: boolean; multigraph: boolean; partitioner: string; resolution: number; modularity: number; iterations: number; max_iterations: number };
+  totals: { nodes: number; edges: number; placeholders: number; placeholdersOmitted: number };
+  kind: "nodes" | "edges"; offset: number; count: number;
+  columns: GraphNodeColumns | GraphEdgeColumns; next: string | null;
+}
