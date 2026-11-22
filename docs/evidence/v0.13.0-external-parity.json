@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "kind": "external Python synthetic fixture parity",
+  "privateCorpus": "unverified; historical private-corpus evidence remains separate and private",
+  "references": {
+    "lintSha256": "1b38d417aef8e3ea395da36e9c58dc2fa0d33bdb65fd2ea50a771a6f5dfa2ad6",
+    "graphSha256": "5ff417ae8e129c208034516b7db8250473312ddeca669af0ba68931e4fd87aa8"
+  },
+  "inputsSha256": {
+    "src/frontmatter.ts": "83431907513f69864b152b0bd2f1352bef8b54f005129151bda29a6bd7300ffe",
+    "src/analysis-yaml.ts": "355c308ac11a7a71051c51409ee6e7437a491e07cb1910d2f0a0b80b32c4e2d7",
+    "src/vault-lint.ts": "06067b53b249a440f62020e0dbef78f4c2ae3ebb626ad16a8321c8ac9b057908",
+    "src/vault-graph.ts": "c47c0fd6e0a0850ecde05dce258fc3a93c99c3a81bd30a0830c99583717a8366",
+    "test/fixtures/analysis-corpus.ts": "200232cf87fc8c77027eb8e1e1f08543d1c365556968978e732bcec48b52b5b2",
+    "test/fixtures/analysis/lint-oracle.json": "d3e4cb1c009b4be44c2b6323425e54d2f0af3797c4a992bf589b47f0073c4628",
+    "test/fixtures/analysis/graph-oracle.json": "2416f03f3bf4052af5320bac46264c7985f4e4c90ce7ab92151ebdb95f3a4b89",
+    "scripts/analysis-parity.ts": "543e50a8e38d9c77ab4e38651145114a748869bb160229b83bc54dd9af8f0f3c"
+  },
+  "rounds": [
+    {
+      "run": 1,
+      "results": {
+        "lint": "lint parity: zero diff (external reference)",
+        "graph": "graph parity: zero diff (external reference)"
+      }
+    },
+    {
+      "run": 2,
+      "results": {
+        "lint": "lint parity: zero diff (external reference)",
+        "graph": "graph parity: zero diff (external reference)"
+      }
+    }
+  ],
+  "referencesRetired": false,
+  "measuredAt": "2026-11-22T06:23:08.371Z",
+  "runtimeDigest": "f91ba15a4940778938cafab2b910d1290228d9bbd68ed7c0909963a0a094cb37",
+  "fixtureDigest": "c018376b88b57d84ebba5484dd285b80acfc4c0f60ac7728dcd124ea54edc83c",
+  "frontmatter": {
+    "files": 4,
+    "roundTrip": "byte-identical"
+  },
+  "incrementalIndex": {
+    "matchesCleanRebuild": [
+      "baseline",
+      "create",
+      "edit",
+      "rename",
+      "delete"
+    ]
+  },
+  "referenceEnvironment": {
+    "python": "3.13.5",
+    "pyyaml": "6.0.2",
+    "networkx": "3.4.2"
+  },
+  "candidateBase": "1a26cb5fbc36fc9303b603db9ca2a9a60b4332e0"
+}
