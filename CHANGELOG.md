@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-22
+
 - Add the bundled `vault-enrich` skill for hash-bound offline enrichment intake, review and reconciliation.
 
 ## [0.12.0] - 2026-11-22
