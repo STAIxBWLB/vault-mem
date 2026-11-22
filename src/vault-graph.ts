@@ -114,6 +114,29 @@ function parse(source: string): { fm: Record<string, unknown>; body: string } {
   }
   return { fm, body: source.slice(match[0].length) };
 }
+/** Frontmatter for consumers of the same analysis snapshot as buildGraph. */
+export function graphFrontmatter(source: string): Record<string, unknown> { return parse(source).fm; }
+
+/** Unresolved edges use the same normalization and duplicate semantics as the resolved graph. */
+export function collectUnresolvedGraph(snapshot: AnalysisSnapshot): GraphEdge[] {
+  const sources = [...snapshot.notes].sort((a, b) => compare(a.path, b.path));
+  const stems = new Set(sources.map(note => note.path.replace(/^notes\//, "").slice(0, -3)));
+  const edges = new Map<string, GraphEdge>();
+  for (const note of sources) {
+    const id = note.path.replace(/^notes\//, "").slice(0, -3), { fm, body } = parse(note.source);
+    const inferredTargets = inferredLinkTargets(fm.inferred_links), authored = authoredLinkOffsets(body);
+    for (const match of body.matchAll(LEGACY_LINK)) {
+      const target = legacyTarget(match[1]!);
+      if (stems.has(target)) continue;
+      const key = JSON.stringify([id, target]), prior = edges.get(key);
+      const rel = prior?.rel ?? linkRelation(body, match.index, match[0].length);
+      const inferred = inferredTargets.has(target) && authored.has(match.index);
+      edges.set(key, { source: id, target, relation: "wiki_link", ...(rel ? { rel } : {}),
+        confidence_tag: inferred || prior?.confidence_tag === "INFERRED" ? "INFERRED" : "EXTRACTED", confidence: 1 });
+    }
+  }
+  return [...edges.values()].sort((a, b) => compare(a.target, b.target) || compare(a.source, b.source));
+}
 function adjacency(graph: Pick<VaultGraph, "nodes" | "edges">): Map<string, Set<string>> {
   const neighbors = new Map(graph.nodes.map(node => [node.id, new Set<string>()]));
   for (const edge of graph.edges) { neighbors.get(edge.source)?.add(edge.target); neighbors.get(edge.target)?.add(edge.source); }
