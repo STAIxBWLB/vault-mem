@@ -101,8 +101,8 @@ test("kit graph summary and page navigation", async () => {
     receive({ error: "graph page expired; restart from the first page" });
     const first = root.children.find(c => c.kind === "div")!.children.find(b => b.props.label === "First page")!;
     expect(JSON.stringify(root.children)).toContain("restart from the first page");
-    navigated = undefined; (first.props.onClick as () => void)();
-    expect(navigated).toEqual({ vault: "mine" });
+    navigated = { stale: true }; (first.props.onClick as () => void)();
+    expect(navigated as Record<string, unknown>).toEqual({ vault: "mine" });
     panel.show("graph", { vault: "mine" });
     receive({ error: "graph: no selected vault; select a registered vault" });
     expect(JSON.stringify(root.children)).not.toContain("First page");
