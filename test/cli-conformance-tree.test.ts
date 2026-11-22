@@ -1,12 +1,15 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, mkdirSync, mkdtempSync, openSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROLE_SGR } from "@staix/cli-output";
 import { COMMANDS } from "../src/commands-table.ts";
 import { runAsync } from "../src/cli.ts";
-import { addVault } from "../src/registry.ts";
+import { addVault, LOCK_FILE } from "../src/registry.ts";
+import { readStoredProposal, replaceStoredProposal } from "../src/proposal-storage.ts";
+import { proposalRecordDigest } from "../src/proposals.ts";
 import { stripTerminal, width } from "../src/text-output.ts";
+import { renderCandidates } from "../src/write-output.ts";
 
 // #312 T4: the five standard-v1 conformance checks and the AC3/AC4 layout and content rules over the whole command tree,
 // on a synthetic home (no host paths, no note contents from a real vault), at COLUMNS=80 and LC_ALL=C.
@@ -18,7 +21,7 @@ const EXEMPT: Record<string, string> = {
   "--version": "machine-readable version scalar",
 };
 /** Bodies printed verbatim (#312: note and spec bodies keep their bytes); the surrounding report is still checked. */
-const BODY_AFTER: Record<string, RegExp> = { show: /\n> Content\n/ };
+const BODY_AFTER: Record<string, RegExp> = { show: /\n> Content\n/, "proposal show": /\n> Content\n/ };
 /** Renderer findings reported to the family owner on #312; each entry suspends one rule for one command until fixed. */
 const KNOWN: Record<string, "markdown"> = { lint: "markdown" };
 
@@ -45,9 +48,26 @@ git(repo, "init", "-q"); git(repo, "add", "-A"); git(repo, "commit", "-qm", "spe
 addVault(home, { id: "mine", path: vault, kind: "personal", write: "cli" });
 addVault(home, { id: "team", path: org, kind: "org", write: "cli" });
 writeFileSync(join(root, "draft.md"), note("Draft", "Draft body."));
-writeFileSync(join(root, "batch.json"), JSON.stringify([{ op: "assert", subject: "notes/alpha.md", relation: "status", value: "active", kind: "state", from: "2026-01-01", evidence: [] }]));
-writeFileSync(join(root, "proposal.json"), JSON.stringify({ operation: { op: "patch", path: "notes/beta.md", edits: [{ oldString: "lanterns", newString: "lamps" }] } }));
+writeFileSync(join(root, "batch.json"), JSON.stringify({ ops: [{ op: "declare", subject: "s:alpha", note: "notes/alpha.md" }, { op: "assert", subject: "s:alpha", relation: "status", value: "active", kind: "state", from: "2026-01-01", to: "open", source: ["mem:synthetic"] }] }));
+const proposalFile = (path: string) => { const file = join(root, `${path}.json`); writeFileSync(file, JSON.stringify({ op: "create", path, frontmatter: { type: "insight", domain: "research", description: "Synthetic finding.", topics: ["[[research]]"], source: "https://example.invalid/source", evidence: [{ source: "https://example.invalid/source", sha256: "a".repeat(64), quote: "Synthetic quote" }] }, body: `# ${path}\n\nSynthetic.\n\n## Topics\n\n- [[research]]\n` })); return file; };
+// A real install root for setup and an existing git vault for vaults add.
+const pkg = join(root, "pkg"); mkdirSync(join(pkg, "bin"), { recursive: true });
+writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@staix/vault-mem", version: "0.0.0" })); writeFileSync(join(pkg, "bin", "vmem.js"), "");
+const extra = join(root, "extra"); mkdirSync(join(extra, "notes"), { recursive: true }); writeFileSync(join(extra, "notes", "research.md"), "---\ntype: moc\ndescription: Synthetic directory.\n---\n# Research\n");
+git(extra, "init", "-q"); git(extra, "add", "-A"); git(extra, "commit", "-qm", "synthetic");
 const env: NodeJS.ProcessEnv = { VMEM_HOME: home, AGENTHUB_HOME: join(root, "hub"), AMEM_HOME: join(root, "amem"), HOME: root, COLUMNS: "80", LC_ALL: "C", LANG: "C", TERM: "xterm", PATH: process.env.PATH };
+// Two proposals submitted up front: A is shown and applied, B is rejected, R is reconciled.
+const submit = async (path: string) => (JSON.parse((await runAsync(["proposal", "submit", "mine", proposalFile(path), "--json"], env)).text) as { id: string }).id;
+const proposalA = await submit("synthetic-a"), proposalB = await submit("synthetic-b"), proposalR = await submit("synthetic-r");
+// Reconcile needs an uncertain apply: mark proposal R as interrupted mid-apply, the way the proposals tests do.
+{
+  const digest = readdirSync(join(home, "proposals")).find(name => /^[a-f0-9]{64}$/.test(name))!, pending = readStoredProposal(home, digest, proposalR);
+  const fd = openSync(join(home, LOCK_FILE), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+  try { replaceStoredProposal(home, digest, proposalR, proposalRecordDigest(pending), { ...pending, state: "apply_unknown", intent: { fingerprint: "a".repeat(64), beforeSha: null, afterSha: "b".repeat(64) } }, [], fd); }
+  finally { closeSync(fd); rmSync(join(home, LOCK_FILE)); }
+}
+/** Cases that cannot render on a synthetic home, with the reason; each has a direct renderer case below. */
+const EXPECTED_REFUSAL: Record<string, string> = { "promote-from-amem": "needs an agent-mem generation-profile home" };
 
 type Kind = "check" | "view" | "other";
 /** One representative invocation per non-exempt command, in an order where earlier writes do not break later reads. */
@@ -98,22 +118,22 @@ const CASES: { name: string; args: string[]; kind: Kind }[] = [
   { name: "log append", args: ["log", "append", "mine", "LEARN", "-", "notes/alpha.md", "synthetic"], kind: "other" },
   { name: "log tail", args: ["log", "tail", "mine"], kind: "view" },
   { name: "log grep", args: ["log", "grep", "mine", "synthetic"], kind: "view" },
-  { name: "assert", args: ["assert", "mine", "--batch", join(root, "batch.json"), "--dry-run"], kind: "other" },
+  { name: "assert", args: ["assert", "mine", "--batch", join(root, "batch.json")], kind: "other" },
   { name: "assertions", args: ["assertions", "mine"], kind: "view" },
   { name: "assertions purge", args: ["assertions", "purge", "mine", "a:0001:1", "--reason", "privacy"], kind: "other" },
   { name: "assertions exposure", args: ["assertions", "exposure", "mine"], kind: "check" },
-  { name: "proposal submit", args: ["proposal", "submit", "mine", join(root, "proposal.json")], kind: "other" },
+  { name: "proposal submit", args: ["proposal", "submit", "mine", proposalFile("synthetic-c")], kind: "other" },
   { name: "proposal list", args: ["proposal", "list", "mine"], kind: "view" },
-  { name: "proposal show", args: ["proposal", "show", "mine", "00000000-0000-4000-8000-000000000000"], kind: "view" },
-  { name: "proposal apply", args: ["proposal", "apply", "mine", "00000000-0000-4000-8000-000000000000"], kind: "other" },
-  { name: "proposal reject", args: ["proposal", "reject", "mine", "00000000-0000-4000-8000-000000000000", "--reason", "duplicate"], kind: "other" },
-  { name: "proposal reconcile", args: ["proposal", "reconcile", "mine", "00000000-0000-4000-8000-000000000000"], kind: "other" },
+  { name: "proposal show", args: ["proposal", "show", "mine", proposalA], kind: "view" },
+  { name: "proposal apply", args: ["proposal", "apply", "mine", proposalA], kind: "other" },
+  { name: "proposal reject", args: ["proposal", "reject", "mine", proposalB, "--reason", "duplicate"], kind: "other" },
+  { name: "proposal reconcile", args: ["proposal", "reconcile", "mine", proposalR], kind: "other" },
   { name: "promote-from-amem", args: ["promote-from-amem", "mine"], kind: "view" },
   { name: "promote", args: ["promote", "mine", "alpha", "--to", "team"], kind: "other" },
   { name: "sync", args: ["sync", "mine"], kind: "other" },
-  { name: "setup", args: ["setup", "claude", "--root", root], kind: "other" },
+  { name: "setup", args: ["setup", "claude", "--root", pkg], kind: "other" },
   { name: "manifest", args: ["manifest"], kind: "view" },
-  { name: "vaults add", args: ["vaults", "add", "extra", join(root, "missing-vault"), "--kind", "personal", "--write", "cli"], kind: "other" },
+  { name: "vaults add", args: ["vaults", "add", "extra", extra, "--kind", "personal", "--write", "cli"], kind: "other" },
   { name: "vaults remove", args: ["vaults", "remove", "team"], kind: "other" },
   { name: "specs remove", args: ["specs", "remove", "app"], kind: "other" },
 ];
@@ -138,11 +158,9 @@ test("every command is either exercised or exempt with a reason", () => {
 // Each case reaches its renderer: it prints a report (a header line) or refuses through the CLI error path with `vmem: ` text.
 for (const c of CASES) test(`conformance: ${c.name}`, () => {
   const { plain, colored } = results.get(c.name)!;
-  if (plain.code === -1) {
-    // A refusal: check 4 (the message, never a crash) and nothing else to lay out.
-    expect(plain.stderr, c.name).toMatch(/\S/);
-    return;
-  }
+  // Every case must reach its renderer, unless it is a listed expected refusal (which is checked at renderer level).
+  if (Object.hasOwn(EXPECTED_REFUSAL, c.name)) { expect(plain.code, `${c.name}: expected refusal now renders; drop it from EXPECTED_REFUSAL`).toBe(-1); return; }
+  expect(plain.stderr, `${c.name}: threw before rendering`).toBeUndefined();
   const text = reportPart(c.name, plain.text), lines = text.split("\n");
   // Check 1: color off has no ESC; --color=always paints with the standard SGR codes and strips back to the same text.
   expect(plain.text.includes("\u001b"), `${c.name}: ESC with --color=never`).toBe(false);
@@ -173,7 +191,7 @@ for (const c of CASES) test(`conformance: ${c.name}`, () => {
   if (c.kind === "check") {
     expect(summaries.length, `${c.name}: summary lines`).toBe(1);
     expect(lines.at(-1), `${c.name}: summary last`).toBe(summaries[0]);
-    expect(/\b(healthy|unhealthy|passed|failed checks?)\b[:.]/i.test(lines.slice(0, -1).join("\n")) && /verdict/i.test(text), `${c.name}: prose verdict`).toBe(false);
+    expect(lines.slice(0, -1).filter(line => /^\s*(verdict|result|overall)\b|\b(healthy|unhealthy|all checks passed)\b/i.test(line)), `${c.name}: prose verdict`).toEqual([]);
   }
   if (c.kind === "view") expect(summaries, `${c.name}: summary on a view`).toEqual([]);
 });
@@ -199,6 +217,24 @@ test("check 4: failures exit non-zero with vmem: on stderr and usage errors exit
   const failed = Bun.spawnSync([process.execPath, bin, "show", "nope", "alpha"], { env, stdout: "pipe", stderr: "pipe" });
   expect(failed.exitCode).toBe(1);
   expect(failed.stderr.toString()).toStartWith("vmem: ");
+});
+
+// Direct renderer cases for EXPECTED_REFUSAL, run through the same layout rules.
+test("renderer: promote-from-amem candidates (empty and populated)", () => {
+  const ctx = { argv: ["promote-from-amem", "mine"], positional: ["mine"] };
+  const fill = { projects: [{ project: "synthetic", candidates: [{ id: "mem-1", project: "synthetic", kind: "decision", title: "Synthetic decision", at: "2026-01-01" }] }] };
+  for (const data of [{ projects: [] }, fill]) {
+    const plain = renderCandidates(data, { color: false, columns: 80, ascii: true }, ctx), colored = renderCandidates(data, { color: true, columns: 80, ascii: true }, ctx);
+    const lines = plain.split("\n");
+    expect(plain.includes("\u001b")).toBe(false);
+    expect(stripTerminal(colored)).toBe(plain);
+    expect(lines[0]).toMatch(/^ vmem promote-from-amem/);
+    for (const line of lines) expect(width(line)).toBeLessThanOrEqual(80);
+    for (const [i, line] of lines.entries()) if (/^> \S/.test(line)) { expect(lines[i - 1]).toBe(""); expect(lines[i + 1] ?? "x").not.toBe(""); }
+    expect(/\n\n\n|\(s\)|`/.test(plain) || plain.endsWith("\n")).toBe(false);
+    expect(lines.filter(line => /^(x|!|\?|ok) \d+ /.test(line))).toEqual([]);
+  }
+  expect(Object.keys(EXPECTED_REFUSAL)).toEqual(["promote-from-amem"]);
 });
 
 test("exempt commands keep their raw output", async () => {
