@@ -16,6 +16,7 @@ import type { GraphSnapshotAssembly } from "./graph-snapshot.ts";
 import { assertionCoverageWarnings } from "./panel-types.ts";
 import type { AssertionsReadResult } from "../assertion-read.ts";
 import { createInboxSnapshot } from "./inbox.ts";
+import { LINK_RELATIONS } from "../links.ts";
 import { lintVault } from "../vault-lint.ts";
 import { readLogSince } from "../vault-log.ts";
 import type { LintCode } from "../analysis-types.ts";
@@ -80,7 +81,6 @@ export function confirmedOutcome(done: Args, verb: string): ActionResult {
   if (done.ok === true && !issues.some(i => i.severity !== "warning")) return { ok: true, message: `${verb}: already done, nothing changed` };
   return { ok: false, error: firstIssue(done) };
 }
-const LINK_ACTION_RELATIONS = ["supports", "contradicts", "extends", "applies-to", "context-for"];
 const firstIssue = (r: Args): string => {
   const issues = Array.isArray(r.issues) ? r.issues as { message?: string; severity?: string }[] : [];
   return (issues.find(i => i.severity !== "warning") ?? issues[0])?.message ?? "refused";
@@ -380,7 +380,7 @@ export const plugin: ConsolePlugin = {
           case "link": {
             const from = str(args.from), to = str(args.to), relation = str(args.relation);
             if (!from || !to || !relation) return { ok: false, error: "link: from, to and relation are required; pick both notes and a relation" };
-            if (!LINK_ACTION_RELATIONS.includes(relation)) return { ok: false, error: `link: invalid relation ${relation}; use one of ${LINK_ACTION_RELATIONS.join(", ")}` };
+            if (!(LINK_RELATIONS as readonly string[]).includes(relation)) return { ok: false, error: `link: invalid relation ${relation}; use one of ${LINK_RELATIONS.join(", ")}` };
             const both = args.bidirectional !== false && args.bidirectional !== "false";
             return twoStep("vmem_link", forward("vmem_link", args, { preview: true, bidirectional: both }), confirmed, fingerprint, p => ({ verb: "Link notes",
               preview: [`link ${from} → ${to} (${relation})${both ? ", both directions" : ", one way"}`, ...(p.logEvent ? [`log: ${JSON.stringify(p.logEvent)}`] : [])], changes: changesOf(p), warnings: [] }));
