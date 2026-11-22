@@ -21,6 +21,16 @@ export default (host) => {
   const assertionQuery = () => Object.fromEntries(["subject", "relation", "at", "asOf", "history", "limit"].filter((k) => params[k] !== undefined && params[k] !== "").map((k) => [k, params[k]]));
 
   const views = {
+    graph(s) {
+      if (s.error) return [ui.notice(s.error, "err")];
+      const graph = s.graph ?? {}, totals = s.totals ?? {};
+      return [h("section", { class: "card" }, h("h2", { text: `Graph · ${s.vault}` }),
+        h("p", { text: `Revision: ${s.revision}` }),
+        h("p", { text: `Nodes: ${totals.nodes} · edges: ${totals.edges} · placeholders: ${totals.placeholders} · omitted: ${totals.placeholdersOmitted}` }),
+        h("p", { text: `${graph.partitioner} · resolution ${graph.resolution} · modularity ${graph.modularity} · iterations ${graph.iterations}/${graph.max_iterations}` }),
+        h("p", { text: `${s.kind} · offset ${s.offset} · ${s.count} of ${totals[s.kind]} rows · ${s.next !== null ? "more pages follow" : "last page"}` })),
+        h("div", { class: "vmem-bar" }, ...(params.page ? [ui.button("First page", () => go("graph"))] : []), ...(s.next ? [ui.button("Next page", () => go("graph", { page: s.next }))] : []))];
+    },
     settings(s) {
       if (s.error) return [ui.notice(s.error, "err")];
       const defaultVault = h("input", { type: "text", name: "defaultVault", value: s.defaultVault ?? "", class: "vmem-input", "aria-label": "Default vault" });

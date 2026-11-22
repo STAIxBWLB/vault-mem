@@ -11,6 +11,8 @@ import { validArguments } from "../mcp.ts";
 import { listPromotionCandidates } from "../promote.ts";
 import { changeSettings, settingsSnapshot, loadRegistry } from "../registry.ts";
 import { createSnapshotRevision, createPromoteSnapshot, nextSnapshotCursor } from "./snapshot-cache.ts";
+import { assembleGraphSnapshot, resolveGraphPage } from "./graph-snapshot.ts";
+import type { GraphSnapshotAssembly } from "./graph-snapshot.ts";
 import { assertionCoverageWarnings } from "./panel-types.ts";
 import type { AssertionsReadResult } from "../assertion-read.ts";
 import { createInboxSnapshot } from "./inbox.ts";
@@ -22,6 +24,38 @@ const asset = (name: string) => readFileSync(new URL(name, import.meta.url), "ut
 const VERSION = (JSON.parse(asset("../../package.json")) as { version: string }).version;
 const LINT_ERRORS: LintCode[] = ["L01", "L02", "L13"];
 const CACHE_MS = 60_000;
+/** Revision-bound assemblies, shared between concurrent requests and bounded to two vaults. */
+export function createGraphSnapshotCache(revision: () => number, load: (vault: string) => Promise<GraphSnapshotAssembly>, now: () => number = Date.now) {
+  type Entry = { stamp: number; at: number; assembly: GraphSnapshotAssembly; cursors: Map<string, number> };
+  const cache = new Map<string, Entry>(), flights = new Map<string, Promise<Entry>>();
+  return {
+    async snapshot(vault: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+      let entry: Entry | undefined;
+      for (let attempts = 0; attempts < 3; attempts++) {
+        const stamp = revision(), hit = cache.get(vault);
+        if (hit && hit.stamp === stamp && now() - hit.at < CACHE_MS) { entry = hit; break; }
+        let flight = flights.get(vault);
+        if (!flight) {
+          flight = load(vault).then(assembly => ({ stamp, at: now(), assembly, cursors: new Map<string, number>() }));
+          flights.set(vault, flight);
+        }
+        try { entry = await flight; } finally { if (flights.get(vault) === flight) flights.delete(vault); }
+        if (entry.stamp === revision()) { cache.delete(vault); cache.set(vault, entry); while (cache.size > 2) cache.delete(cache.keys().next().value!); break; }
+        entry = undefined;
+      }
+      if (!entry) throw new Error("graph changed while assembling; restart from the first page");
+      cache.delete(vault); cache.set(vault, entry);
+      while (cache.size > 2) cache.delete(cache.keys().next().value!);
+      if (args.page !== undefined && typeof args.page !== "string") throw new Error("graph page is invalid; restart from the first page");
+      const page = resolveGraphPage(entry.assembly, args.page as string | undefined);
+      const key = `${page.kind}:${page.offset}`;
+      let cursor = entry.cursors.get(key);
+      if (cursor === undefined) { cursor = nextSnapshotCursor(); entry.cursors.set(key, cursor); }
+      if (args.after === cursor) return { changed: false, cursor };
+      return { ...page, cursor };
+    },
+  };
+}
 const POLL_MS = 15_000;
 // The shell reuses a snapshot for maxAgeMs, then serves it stale once more while it refreshes, and drops it on every
 // console action. Half the poll keeps both windows inside one poll, so the shell cache never delays a refresh past the
@@ -96,6 +130,7 @@ export const plugin: ConsolePlugin = {
       { id: "proposals", title: "Proposals", order: 8, maxAgeMs: REUSE_MS },
       { id: "assertions", title: "Assertions", order: 9 },
       { id: "history", title: "History", order: 10 },
+      { id: "graph", title: "Graph", order: 11, maxAgeMs: REUSE_MS },
     ],
     capabilities: { actions: ["delete", "move", "promote", "promote-from-amem", "settings", "proposal-apply", "proposal-reject"], confirm: true, inbox: true, inboxMaxAgeMs: REUSE_MS, search: true },
   },
@@ -156,6 +191,10 @@ export const plugin: ConsolePlugin = {
     };
 
     const promote = createPromoteSnapshot(revision.current, candidates);
+    const graph = createGraphSnapshotCache(revision.current, async id => {
+      const spec = mcp.vaults.find(v => v.id === id)!;
+      return assembleGraphSnapshot(analysisInput(home, id, { expectedVault: spec }).snapshot, id);
+    });
     const inbox = createInboxSnapshot(home, mcp.vaults, ctx.log, undefined, revision.current);
     // One cursor for the whole Promote failure: a fresh one per failed scan would rebuild the panel every poll.
     let promoteErrorCursor: number | undefined;
@@ -194,6 +233,21 @@ export const plugin: ConsolePlugin = {
       async snapshot(input) {
         const args = input as Args;
         switch (input.panel) {
+          case "graph": {
+            const vault = vaultOf(args);
+            if (!vault) return { vault: null, error: `unknown vault ${str(args.vault) ?? ""}; pick a registered vault from Overview` };
+            const stem = (value: unknown) => typeof value === "string" && value.startsWith("notes/") && value.endsWith(".md") ? value.slice(6, -3) : value;
+            if (args.neighbors !== undefined) {
+              const r = await readTool("vmem_graph_neighbors", args, { vault: vault.id, path: stem(args.neighbors) });
+              return "error" in r ? r : { neighborhood: r.result };
+            }
+            if (args.from !== undefined || args.to !== undefined) {
+              const r = await readTool("vmem_graph_path", args, { vault: vault.id, from: stem(args.from), to: stem(args.to) });
+              return "error" in r ? r : { path: r.result };
+            }
+            try { return await graph.snapshot(vault.id, args); }
+            catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
+          }
           case "settings": {
             const vault = vaultOf(args);
             if (!vault) return { error: "settings: no selected vault; select a registered vault" };
@@ -392,5 +446,5 @@ export const plugin: ConsolePlugin = {
 };
 
 export default plugin;
-export type { ProposalState, ProposalsSnapshot, AssertionsSnapshot, HistorySnapshot, CoverageWarning } from "./panel-types.ts";
+export type { ProposalState, ProposalsSnapshot, AssertionsSnapshot, HistorySnapshot, CoverageWarning, GraphSnapshotPage, GraphPanelPage, GraphNodeColumns, GraphEdgeColumns } from "./panel-types.ts";
 export { assertionCoverageWarnings } from "./panel-types.ts";
