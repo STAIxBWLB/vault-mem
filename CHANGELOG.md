@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- `vmem skills mine` skips host-injected `UserPromptSubmit` envelopes (`<task-notification>`, `<channel `, `<agent-message `), counted as `dropped.synthetic`, and no longer fails over 20,000 records or 64 MiB: it keeps the newest records, counts the rest in `dropped.overCap` and names the narrowing step in the report. CLI flags and MCP arguments are unchanged.
+
 ## [0.12.1] - 2026-11-22
 
 - Add the bundled `vault-enrich` skill for hash-bound offline enrichment intake, review and reconciliation.

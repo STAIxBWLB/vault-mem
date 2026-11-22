@@ -10,7 +10,7 @@ import { addVault } from "../src/registry.ts";
 import { runAsync } from "../src/cli.ts";
 import { createVaultMcp, VMEM_TOOL_NAMES } from "../src/mcp-vault.ts";
 import {
-  allPeople, buildSurfaceIndex, communityToCandidate, findMatches, jaccard, maskText, mineRecords, mineSkills, nodeId, skillFrontmatter, slugify, tokenize,
+  allPeople, buildSurfaceIndex, isSyntheticPrompt, communityToCandidate, findMatches, jaccard, maskText, mineRecords, mineSkills, nodeId, skillFrontmatter, slugify, tokenize,
   type MineRecord, type RegistryProject, type ScoreGraph, type SurfaceKind,
 } from "../src/skills-mine.ts";
 
@@ -152,7 +152,7 @@ test("skills mine reads curated, capture and vault records, masks them and write
   // curated: decision + fail pass, one finding screened by piiPatterns, a fact skipped; capture: 5 mined events, a tool event skipped, 1 duplicate;
   // vault: 3 notes in the window (person, moc and an old note excluded; the undated one uses its mtime).
   expect(result.records).toEqual({ curated: 2, capture: 5, vault: 3 });
-  expect(result.dropped).toEqual({ secret: 0, policy: 1, oversized: 0, duplicate: 1, unreadable: 0, truncatedCapture: 0, malformedRecord: 0, recordOutsideWindow: 0, recordOutsideCapped: 0, recordOutsideUnavailable: 0 });
+  expect(result.dropped).toEqual({ synthetic: 0, overCap: 0, secret: 0, policy: 1, oversized: 0, duplicate: 1, unreadable: 0, truncatedCapture: 0, malformedRecord: 0, recordOutsideWindow: 0, recordOutsideCapped: 0, recordOutsideUnavailable: 0 });
   expect(result.graph).toEqual({ nodes: 17, edges: 28, communities: 3, partitioner: "leiden" });
   expect(result.candidates.map(({ cid, label, gloss, size, day_span, unique_days, cohesion, novelty, rank, triggers, similar_skills, sources }) =>
     ({ cid, label, gloss, size, day_span, unique_days, cohesion, novelty, rank, triggers, similar_skills, sources }))).toEqual([
@@ -199,7 +199,46 @@ test("project filter, thresholds, secrets and bounds", async () => {
   expect(secret.dropped.secret).toBe(1);
   expect(JSON.stringify(secret)).not.toContain("ghp_");
   expect(pure([record("x".repeat(64 * 1024 + 1))]).dropped.oversized).toBe(1);
-  expect(() => pure(Array.from({ length: 20001 }, (_, i) => record(`r${i}`)))).toThrow("more than 20000 records");
+  const over = pure(Array.from({ length: 20001 }, (_, i) => record(`r${i}`, `2026-10-30T00:00:00.${String(i).padStart(5, "0")}Z`)));
+  expect(over.dropped.overCap).toBe(1);
+  expect(over.records.capture).toBe(20000);
+});
+
+test("isSyntheticPrompt matches only capture UserPromptSubmit envelopes", () => {
+  const prompt = (text: string, kind = "UserPromptSubmit", source: MineRecord["source"] = "capture") => ({ source, kind, text });
+  for (const text of ["<task-notification>done", "<task-notification id=\"1\">", "<channel source=\"plugin:x\">hi", "<agent-message from=\"a\">", "  \n\t<channel source=\"x\">"]) expect(isSyntheticPrompt(prompt(text))).toBe(true);
+  for (const text of ["please read <channel source=\"x\">", "<task-notifications>", "<channel>", "summarize meeting"]) expect(isSyntheticPrompt(prompt(text))).toBe(false);
+  expect(isSyntheticPrompt(prompt("<task-notification>x", "observation"))).toBe(false);
+  expect(isSyntheticPrompt(prompt("<task-notification>x", "summary"))).toBe(false);
+  expect(isSyntheticPrompt(prompt("<task-notification>x", "UserPromptSubmit", "curated"))).toBe(false);
+  expect(isSyntheticPrompt(prompt("<task-notification>x", "UserPromptSubmit", "vault"))).toBe(false);
+});
+
+test("mineRecords drops synthetic prompts and keeps the newest records over a bound", () => {
+  const record = (text: string, at: string, kind = "UserPromptSubmit"): MineRecord => ({ source: "capture", kind, at, text, project: "x" });
+  const run = (records: MineRecord[], limits?: { records?: number; bytes?: number }) => mineRecords({ vault: "v", days: 30, since: "", projects: [], records, vocab: { actions, objects }, registry: [], skills: [], minSize: 3, minNovelty: 0.3, today: "2026-10-31", limits });
+  const human = ["summarize meeting a", "summarize meeting b", "summarize meeting c"].map((t, i) => record(t, `2026-10-0${i + 1}T00:00:00Z`));
+  const base = run(human);
+  const noisy = run([...human, record("<task-notification>summarize meeting", "2026-10-05T00:00:00Z"), record(" <channel source=\"p\">summarize meeting", "2026-10-06T00:00:00Z"), record("<agent-message from=\"a\">summarize meeting", "2026-10-07T00:00:00Z"), record("<task-notification>summarize meeting", "2026-10-08T00:00:00Z", "observation")]);
+  expect(noisy.dropped.synthetic).toBe(3);
+  expect(noisy.report).toContain("- dropped: synthetic 3, secret 0,");
+  expect(JSON.stringify(noisy.candidates)).not.toContain("<channel");
+  expect(JSON.stringify(noisy.candidates)).not.toContain("<agent-message");
+  expect(noisy.records.capture).toBe(4);
+  // Under both bounds: same result, no over-cap line.
+  expect(base.dropped.overCap).toBe(0);
+  expect(base.report).not.toContain("over cap");
+  expect(run(human, { records: 3, bytes: 1 << 20 })).toEqual(base);
+  const many = [...human, record("summarize meeting d", "2026-10-04T00:00:00Z"), record("summarize meeting e", "2026-10-05T00:00:00Z")];
+  const byCount = run(many, { records: 3 });
+  expect(byCount.dropped.overCap).toBe(2);
+  expect(byCount.records.capture).toBe(3);
+  expect(byCount.report).toContain("- over cap: kept the newest 3 records, left out 2 older ones over the record or byte bound; narrow --days or --project to mine them");
+  expect(byCount.candidates.flatMap(c => c.samples).join("\n")).not.toContain("meeting a");
+  const byBytes = run(many, { bytes: Buffer.byteLength("summarize meeting e") * 2 });
+  expect(byBytes.dropped.overCap).toBe(3);
+  expect(byBytes.records.capture).toBe(2);
+  expect(byBytes.report).toContain("kept the newest 2 records, left out 3 older ones");
 });
 
 test("CLI and MCP expose the same read-only command", async () => {

@@ -47,7 +47,7 @@ export interface MineOptions {
 export interface MineResult {
   vault: string; days: number; since: string; projects: string[];
   records: Record<RecordSource, number>;
-  dropped: { secret: number; policy: number; oversized: number; duplicate: number; unreadable: number; truncatedCapture: number; malformedRecord: number;
+  dropped: { synthetic: number; overCap: number; secret: number; policy: number; oversized: number; duplicate: number; unreadable: number; truncatedCapture: number; malformedRecord: number;
     recordOutsideWindow: number; recordOutsideCapped: number; recordOutsideUnavailable: number };
   graph: { nodes: number; edges: number; communities: number; partitioner: "leiden" };
   godNodes: { id: string; degree: number }[];
@@ -119,6 +119,14 @@ export function maskText(text: string, people: readonly string[]): string {
     masked = masked.replace(new RegExp(literal, isAscii(name) ? "gi" : "g"), "[PERSON]");
   }
   return masked;
+}
+/** Host runtimes inject these envelopes through UserPromptSubmit; they are not human prompts. */
+const SYNTHETIC_PREFIXES = ["<task-notification>", "<task-notification ", "<channel ", "<agent-message "] as const;
+/** True for a capture UserPromptSubmit record whose text, after leading whitespace, starts with a synthetic envelope. */
+export function isSyntheticPrompt(record: Pick<MineRecord, "source" | "kind" | "text">): boolean {
+  if (record.source !== "capture" || record.kind !== "UserPromptSubmit") return false;
+  const text = record.text.trimStart();
+  return SYNTHETIC_PREFIXES.some(prefix => text.startsWith(prefix));
 }
 /** The vault config's `piiPatterns` (regular expressions, as everywhere in vmem) redact sample text from every source to `[PII]`. */
 export function redactPatterns(text: string, patterns: readonly string[]): string {
@@ -320,24 +328,30 @@ export interface MineInputs {
   vocab: { actions: VocabEntry[]; objects: VocabEntry[] }; registry: RegistryProject[]; skills: SkillEntry[];
   minSize: number; minNovelty: number; today: string; piiPatterns?: string[];
   dropped?: Partial<MineResult["dropped"]>;
+  /** Kept-set bounds; default MAX_RECORDS and MAX_TOTAL_BYTES. */
+  limits?: { records?: number; bytes?: number };
 }
 /** The pure part: screen, mask, match, cluster, score and render. */
 export function mineRecords(input: MineInputs): MineResult {
-  const dropped: MineResult["dropped"] = { secret: 0, policy: 0, oversized: 0, duplicate: 0, unreadable: 0, truncatedCapture: 0, malformedRecord: 0, recordOutsideWindow: 0, recordOutsideCapped: 0, recordOutsideUnavailable: 0, ...input.dropped };
+  const dropped: MineResult["dropped"] = { synthetic: 0, overCap: 0, secret: 0, policy: 0, oversized: 0, duplicate: 0, unreadable: 0, truncatedCapture: 0, malformedRecord: 0, recordOutsideWindow: 0, recordOutsideCapped: 0, recordOutsideUnavailable: 0, ...input.dropped };
   const ordered = [...input.records].sort((a, b) => compare(a.at, b.at) || compare(a.source, b.source) || compare(a.project, b.project) || compare(a.text, b.text));
-  const kept: MineRecord[] = [], texts = new Set<string>();
+  const kept: MineRecord[] = [], sizes: number[] = [], texts = new Set<string>();
   let total = 0;
   for (const record of ordered) {
+    if (isSyntheticPrompt(record)) { dropped.synthetic++; continue; }
     const text = record.text.trim();
     if (SECRET_PATTERNS.some(pattern => pattern.test(text))) { dropped.secret++; continue; }
     const bytes = Buffer.byteLength(text);
     if (bytes > MAX_RECORD_BYTES) { dropped.oversized++; continue; }
     if (texts.has(text)) { dropped.duplicate++; continue; }
-    texts.add(text); kept.push({ ...record, text });
+    texts.add(text); kept.push({ ...record, text }); sizes.push(bytes);
     total += bytes;
-    if (kept.length > MAX_RECORDS) throw new Error(`skills mine: more than ${MAX_RECORDS} records; narrow --days or --project`);
-    if (total > MAX_TOTAL_BYTES) throw new Error("skills mine: records exceed 64 MiB; narrow --days or --project");
   }
+  // Over a bound, keep the newest records: `ordered` is oldest first, so leave out from the front.
+  const maxRecords = input.limits?.records ?? MAX_RECORDS, maxBytes = input.limits?.bytes ?? MAX_TOTAL_BYTES;
+  let cut = 0;
+  while (cut < kept.length && (kept.length - cut > maxRecords || total > maxBytes)) total -= sizes[cut++]!;
+  if (cut) { kept.splice(0, cut); dropped.overCap += cut; }
   const index = buildSurfaceIndex(input.vocab.actions, input.vocab.objects, input.registry), people = allPeople(input.registry);
   const recordIds = new Map<string, MineRecord>(), neighbors = new Map<string, Set<string>>(), edges: [string, string][] = [];
   const width = String(kept.length).length;
@@ -398,7 +412,8 @@ export function renderReport(result: Omit<MineResult, "report">, today: string, 
     `# Skill Candidates (${today}, memory-based)`, "",
     `- corpus: ${total} records / ${result.days} days (curated ${result.records.curated}, capture ${result.records.capture}, vault ${result.records.vault})`,
     `- projects: ${result.projects.length}`,
-    `- dropped: secret ${result.dropped.secret}, policy ${result.dropped.policy}, oversized ${result.dropped.oversized}, duplicate ${result.dropped.duplicate}, unreadable ${result.dropped.unreadable}, malformed Record ${result.dropped.malformedRecord}`,
+    ...(result.dropped.overCap ? [`- over cap: kept the newest ${total} records, left out ${result.dropped.overCap} older ones over the record or byte bound; narrow --days or --project to mine them`] : []),
+    `- dropped: synthetic ${result.dropped.synthetic}, secret ${result.dropped.secret}, policy ${result.dropped.policy}, oversized ${result.dropped.oversized}, duplicate ${result.dropped.duplicate}, unreadable ${result.dropped.unreadable}, malformed Record ${result.dropped.malformedRecord}`,
     `- truncated capture machine shards: ${result.dropped.truncatedCapture}; rows of any event beyond maxReadRows were not read`,
     `- Record rows outside the read window: ${result.dropped.recordOutsideCapped ? "at least " : ""}${result.dropped.recordOutsideWindow}${result.dropped.recordOutsideUnavailable ? `; ${result.dropped.recordOutsideUnavailable} truncated ${result.dropped.recordOutsideUnavailable === 1 ? "shard" : "shards"} could not be counted (no Record index yet, or no bounded index plan; an off-hook \`amem search\` in the project builds a missing index)` : ""}`,
     `- graph: ${result.graph.nodes} nodes, ${result.graph.edges} edges, ${result.graph.communities} communities (deterministic Leiden)`, "",
