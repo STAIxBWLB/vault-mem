@@ -1,4 +1,4 @@
-import { markerCell } from "@staix/cli-output";
+import { Report } from "@staix/cli-output";
 /**
  * Text renderers for `vmem spec get|graph|grep|validate` (#114). Each one reads the same result object `--json` prints
  * and never adds content to it; data goes through `clean()` in tables and fields, and bodies keep their lines with
@@ -9,8 +9,7 @@ import type { SpecCommand } from "./spec-command-table.ts";
 import type { SpecEdge, SpecNode } from "./spec-graph.ts";
 import type { SpecFreshnessEntry } from "./spec-freshness.ts";
 import type { SpecValidationIssue, SpecValidationReport } from "./spec-validate.ts";
-import type { SpecDiagnostic } from "./spec-source.ts";
-import { blocks, fields, heading, issueTable, nextCommand, paragraph, plural, shellWord, status, table, tableParts, tone, type CellInput, type TextOptions, stripTerminal } from "./text-output.ts";
+import { plural, shellWord, type TextOptions, stripTerminal } from "./text-output.ts";
 
 /** What the renderers need from the command line: the spec arguments (`get root --body`) and their parsed values. */
 export interface SpecTextContext { args: readonly string[]; values: Record<string, unknown>; repo?: string }
@@ -25,9 +24,9 @@ export interface SpecGrepHit { id: string; path: string; title: string; type: st
 export interface SpecGrepResult { source: string; worktree: string; hits: SpecGrepHit[]; offset: number; truncated: boolean; nextOffset?: number }
 export type SpecValidateResult = SpecValidationReport & { source?: string; worktree?: string };
 
+const report = (name: string, o: TextOptions) => new Report(o.columns, o.ascii).header("vmem", name);
+const done = (out: Report, o: TextOptions) => out.render(o.color).join("\n");
 const value = (data: unknown): string => typeof data === "string" ? data : Array.isArray(data) ? data.map(value).join(", ") : data === undefined || data === null ? "" : JSON.stringify(data);
-const markedCell = (name: "ok" | "warn" | "fail", text: string, o: TextOptions) => tone(`${markerCell(name, o.ascii === true)} ${text}`, name);
-const statusTone = (value: string | undefined, o: TextOptions): CellInput => value === "active" ? markedCell("ok", value, o) : value === "deprecated" ? markedCell("warn", value, o) : value ?? "-";
 const counted = (shown: number, total: number) => shown < total ? ` (${shown} of ${total})` : "";
 /** The same command with `--offset` set, inserted before a `--` separator so it stays an option. */
 export function offsetCommand(args: readonly string[], offset: number): string {
@@ -35,110 +34,85 @@ export function offsetCommand(args: readonly string[], offset: number): string {
   const head = args.slice(0, end).filter((arg, i, all) => arg !== "--offset" && all[i - 1] !== "--offset");
   return ["vmem", "spec", ...head, "--offset", String(offset), ...args.slice(end)].map(shellWord).join(" ");
 }
-function freshnessText(entry: SpecFreshnessEntry | null, o: TextOptions): CellInput {
-  if (!entry) return undefined;
-  if (entry.state === "fresh") return markedCell(entry.dirty ? "warn" : "ok", entry.dirty ? "fresh, uncommitted changes" : "fresh", o);
-  return markedCell("warn", `stale: ${staleText(entry)}`, o);
-}
 const staleText = (entry: SpecFreshnessEntry) => [entry.commits > 0 && `${plural(entry.commits, "commit")} since verified-against`, entry.dirty && "uncommitted changes"].filter(Boolean).join(", ") || "source scope changed";
 
 export function renderSpecGet(r: SpecGetResult, o: TextOptions, context: SpecTextContext): string {
-  const data = r.frontmatter, title = typeof data.title === "string" ? data.title : "";
-  const info = fields([
-    ["type", value(data.type)], ["status", typeof data.status === "string" ? statusTone(data.status, o) : value(data.status)],
-    ["parent", value(data.parent)], ["depends-on", value(data["depends-on"])], ["covers", value(data.covers)], ["paths", value(data.paths)],
-    ["path", r.path], ["source", r.source], ["freshness", freshnessText(r.freshness, o)],
-    ["links", r.links.map(edge => `${edge.kind} ${edge.target}`).join(", ") + counted(r.links.length, r.totals.links)],
-    ["backlinks", r.backlinks.map(edge => `${edge.kind} ${edge.source}`).join(", ") + counted(r.backlinks.length, r.totals.backlinks)],
-    ["children", r.children.map(node => node.id).join(", ") + counted(r.children.length, r.totals.children)],
-    ["section", r.section], ["offset", r.offset],
-    ["sections", r.headings?.length ? r.headings.join(", ") + (r.headingsTruncated ? ", ..." : "") : undefined],
-  ], o);
-  const body = r.body === undefined ? undefined : stripTerminal(r.body).replace(/\n+$/, "");
-  return blocks(heading(`spec ${r.id}${title ? `: ${title}` : ""}`, o), info, issueTable(r.freshnessIssues, o), body,
-    r.bodyTruncated && r.nextOffset !== undefined && nextCommand("next", offsetCommand(context.args, r.nextOffset), o));
+  const data = r.frontmatter, out = report("spec get", o);
+  if (r.freshnessIssues.length) { out.section("Problems"); for (const issue of r.freshnessIssues) out.bullet(issue.severity === "error" ? "fail" : "warn", `${issue.code}: ${finding(issue)}`); }
+  out.section("Spec").kv([["ID", r.id], ["Title", value(data.title)], ["Type", value(data.type)], ["Status", value(data.status)], ["Parent", value(data.parent)], ["Depends on", value(data["depends-on"])], ["Covers", value(data.covers)], ["Paths", value(data.paths)], ["Path", r.path], ["Source", r.source], ["Freshness", r.freshness ? r.freshness.state === "fresh" ? r.freshness.dirty ? "fresh, uncommitted changes" : "fresh" : `stale: ${staleText(r.freshness)}` : null], ["Links", r.links.map(edge => `${edge.kind} ${edge.target}`).join(", ") + counted(r.links.length, r.totals.links)], ["Backlinks", r.backlinks.map(edge => `${edge.kind} ${edge.source}`).join(", ") + counted(r.backlinks.length, r.totals.backlinks)], ["Children", r.children.map(node => node.id).join(", ") + counted(r.children.length, r.totals.children)], ["Section", r.section], ["Offset", r.offset]]);
+  if (r.headings?.length) { out.section("Headings"); for (const heading of r.headings) out.bullet("absent", heading); if (r.headingsTruncated) out.note("more headings"); }
+  if (r.body === undefined) return done(out, o);
+  out.section("Content");
+  const body = stripTerminal(r.body).replace(/\n+$/, "");
+  if (!r.bodyTruncated || r.nextOffset === undefined) return `${done(out, o)}\n${body}`;
+  const tail = new Report(o.columns, o.ascii).section("Continuation").next(offsetCommand(context.args, r.nextOffset));
+  return `${done(out, o)}\n${body}\n\n${done(tail, o)}`;
 }
 
 /** The slice as a table in breadth-first order from the root: DEPTH and EDGE say how each node was reached. */
 export function renderSpecGraph(r: SpecGraphResult, o: TextOptions, context: SpecTextContext): string {
-  const root = r.nodes[0], direction = typeof context.values.direction === "string" ? context.values.direction : "subtree";
-  if (!root) return paragraph("spec graph: no nodes", o);
+  const root = r.nodes[0], direction = typeof context.values.direction === "string" ? context.values.direction : "subtree", out = report("spec graph", o);
+  if (!root) { out.section("Graph").note("no nodes"); return done(out, o); }
   const reached = new Map<string, { depth: number; edge?: SpecEdge }>([[root.id, { depth: 0 }]]), queue = [root.id];
-  for (let i = 0; i < queue.length; i++) {
-    const at = queue[i]!, depth = reached.get(at)!.depth + 1;
-    for (const edge of r.edges) {
-      const next = direction !== "subtree" && edge.source === at ? edge.target : direction !== "ancestors" && edge.target === at ? edge.source : undefined;
-      if (next === undefined || reached.has(next)) continue;
-      reached.set(next, { depth, edge }); queue.push(next);
-    }
-  }
-  const order = (node: SpecNode) => reached.get(node.id)?.depth ?? 9;
-  const nodes = [...r.nodes].sort((a, b) => order(a) - order(b));
-  const rows = nodes.map(node => { const how = reached.get(node.id); return [tone(node.id, "info"), node.type || "-", statusTone(node.status, o), how?.edge?.kind ?? "-", how ? how.depth : "-", node.title]; });
-  const tree = new Set([...reached.values()].flatMap(how => how.edge ? [how.edge] : []));
-  const other = r.edges.filter(edge => !tree.has(edge));
-  const edge = typeof context.values.edge === "string" ? `${context.values.edge} edges` : direction === "neighbors" ? "all edges" : "parent edges";
-  return blocks(heading(`spec graph ${root.id}: ${direction}, ${edge}, depth ${typeof context.values.depth === "number" ? context.values.depth : 1}`, o),
-    table(["ID", "TYPE", "STATUS", "EDGE", "DEPTH", "TITLE"], rows, o),
-    other.length > 0 && table(["SOURCE", "EDGE", "TARGET"], other.map(item => [item.source, item.kind, item.target]), o),
-    [paragraph(`${plural(r.nodes.length, "node")}, ${plural(r.edges.length, "edge")}`, o),
-      r.truncated && paragraph("truncated: more specs lie beyond this slice; raise --depth (up to 3) or --limit (up to 500)", o, "warn")].filter(Boolean).join("\n"));
+  for (let i = 0; i < queue.length; i++) { const at = queue[i]!, depth = reached.get(at)!.depth + 1; for (const edge of r.edges) {
+    const next = direction !== "subtree" && edge.source === at ? edge.target : direction !== "ancestors" && edge.target === at ? edge.source : undefined;
+    if (next === undefined || reached.has(next)) continue; reached.set(next, { depth, edge }); queue.push(next);
+  } }
+  out.section("Graph").kv([["Root", root.id], ["Direction", direction], ["Edge", typeof context.values.edge === "string" ? context.values.edge : direction === "neighbors" ? "all" : "parent"], ["Depth", typeof context.values.depth === "number" ? context.values.depth : 1], ["Nodes", r.nodes.length], ["Edges", r.edges.length]]);
+  const nodes = [...r.nodes].sort((a,b) => (reached.get(a.id)?.depth ?? 9) - (reached.get(b.id)?.depth ?? 9));
+  out.section("Nodes").table(["ID", "Type", "Status", "Edge", "Depth", "Title"], nodes.map(node => { const how = reached.get(node.id); return [node.id, node.type, node.status ?? "", how?.edge?.kind ?? "", how ? String(how.depth) : "", node.title]; }));
+  const tree = new Set([...reached.values()].flatMap(how => how.edge ? [how.edge] : [])), other = r.edges.filter(edge => !tree.has(edge));
+  if (other.length) out.section("Other edges").table(["Source", "Edge", "Target"], other.map(edge => [edge.source, edge.kind, edge.target]));
+  if (r.truncated) out.bullet("warn", "truncated: more specs lie beyond this slice; raise --depth (up to 3) or --limit (up to 500)");
+  return done(out, o);
 }
 
 /** One hit per row, its snippet on the next line; rows never wrap so each snippet stays under its row. */
 export function renderSpecGrep(r: SpecGrepResult, o: TextOptions, context: SpecTextContext): string {
-  if (!r.hits.length) return paragraph(r.offset ? `no more hits after offset ${r.offset}` : "no specs matched", o);
-  const lines = tableParts(["ID", "TYPE", "STATUS", "TITLE"], r.hits.map(hit => [tone(hit.id, "info"), hit.type || "-", statusTone(hit.status, o), hit.title]), { ...o, columns: undefined });
-  const body = [lines[0]!, ...r.hits.flatMap((hit, i) => [lines[i + 1]!, paragraph(stripTerminal(hit.snippet).replace(/\s+/g, " ").trim(), o, "muted", "  ")])].join("\n");
-  const range = r.offset || r.truncated ? `hits ${r.offset + 1}-${r.offset + r.hits.length}` : plural(r.hits.length, "hit");
-  return blocks(body, [paragraph(range + (r.truncated ? ", more remain" : ""), o),
-    r.truncated && r.nextOffset !== undefined && nextCommand("next", offsetCommand(context.args, r.nextOffset), o)].filter(Boolean).join("\n"));
+  const out = report("spec grep", o).section("Results").kv([["Offset", r.offset], ["Hits", r.hits.length]]);
+  if (!r.hits.length) out.note(r.offset ? `no more hits after offset ${r.offset}` : "no specs matched");
+  for (const hit of r.hits) { out.bullet("absent", `${hit.id}: ${hit.title} (${hit.type}, ${hit.status ?? "unknown"})`); const snippet = stripTerminal(hit.snippet).replace(/\s+/g, " ").trim(); if (snippet) out.note(snippet); }
+  if (r.truncated && r.nextOffset !== undefined) out.next(offsetCommand(context.args, r.nextOffset));
+  return done(out, o);
 }
 
 const finding = (item: { path: string; field?: string; target?: string; firstPath?: string; message: string }) =>
   `${item.path}${item.field ? ` ${item.field}` : ""}${item.target ?? item.firstPath ? ` -> ${item.target ?? item.firstPath}` : ""}: ${item.message}`;
-const levelCell = (severity: SpecValidationIssue["severity"], o: TextOptions) => markedCell(severity === "error" ? "fail" : "warn", severity, o);
 
 /** LEVEL/CHECK/FINDING rows per section, then a verdict line. Stale scopes are their own section unless --require-fresh made them errors. */
 export function renderSpecValidate(r: SpecValidateResult, o: TextOptions, context: SpecTextContext): string {
-  const section = (title: string, rows: CellInput[][]) => rows.length > 0 && `${heading(title, o)}\n${table(["LEVEL", "CHECK", "FINDING"], rows, o)}`;
-  const stale = r.freshness.filter(entry => entry.state === "stale");
-  const target = context.repo !== undefined ? `--repo ${context.repo}` : r.source ?? "";
-  const verdict = `${r.ok ? "ok" : "fail"}: ${plural(r.errors, "error")}, ${plural(r.warnings, "warning")}, ${plural(stale.length, "stale scope")}`;
-  return blocks(heading(`spec validate ${target}`.trim(), o),
-    section("Findings", r.items.map(item => [levelCell(item.severity, o), item.code, finding(item)])),
-    section("Discovery", r.diagnostics.map((item: SpecDiagnostic) => [tone("note", "muted"), item.code, finding(item)])),
-    context.values.requireFresh !== true && section("Freshness", stale.map(entry => [markedCell("warn", "warning", o), "stale",
-      `${entry.path}${entry.id ? ` (${entry.id})` : ""}: ${staleText(entry)}; review the scope and refresh verified-against`])),
-    [r.truncated && paragraph(`truncated: ${r.items.length} of ${r.errors + r.warnings} findings shown; raise --limit (up to 500) or fix the listed findings and rerun`, o, "warn"),
-      status(r.ok ? "ok" : "fail", verdict, o)].filter(Boolean).join("\n"));
+  const out = report("spec validate", o), stale = r.freshness.filter(entry => entry.state === "stale");
+  if (r.items.length) { out.section("Findings"); for (const item of [...r.items].sort((a,b) => Number(b.severity === "error") - Number(a.severity === "error"))) out.bullet(item.severity === "error" ? "fail" : "warn", `${item.code}: ${finding(item)}`); }
+  if (context.values.requireFresh !== true && stale.length) { out.section("Freshness"); for (const entry of stale) out.bullet("warn", `${entry.path}${entry.id ? ` (${entry.id})` : ""}: ${staleText(entry)}; review the scope and refresh verified-against`); }
+  if (r.diagnostics.length) { out.section("Discovery"); for (const item of r.diagnostics) out.bullet("unknown", `${item.code}: ${finding(item)}`); }
+  if (r.truncated) out.section("Coverage").bullet("warn", `truncated: ${r.items.length} of ${r.errors + r.warnings} findings shown; raise --limit (up to 500) or fix the listed findings and rerun`);
+  out.section("Scope").kv([["Source", context.repo !== undefined ? `--repo ${context.repo}` : r.source]]);
+  out.summary({ failed: r.errors || (r.ok ? 0 : 1), warnings: r.warnings, unknown: context.values.requireFresh === true ? 0 : stale.length, ok: r.ok && !r.errors && !r.warnings && !stale.length ? 1 : 0 });
+  return done(out, o);
 }
 
-/** A frontmatter mutation receipt shows the verdict and SHA without repeating authored content. */
-function specWriteIssues(issues: SpecWriteResult["issues"], o: TextOptions): string | undefined {
-  return issueTable(issues.map(issue => ({ ...issue, message: [issue.message,
-    issue.target !== undefined ? `target: ${issue.target}` : undefined,
-    issue.originalTarget !== undefined ? `original target: ${issue.originalTarget}` : undefined].filter(Boolean).join("; ") })), o);
+function specIssues(out: Report, issues: SpecWriteResult["issues"]): void {
+  if (!issues.length) return;
+  out.section("Problems");
+  for (const issue of [...issues].sort((a,b) => Number(b.severity === "error") - Number(a.severity === "error"))) out.bullet(issue.severity === "error" ? "fail" : "warn", `${issue.code}${issue.path ? ` ${issue.path}` : ""}: ${issue.message}${issue.target !== undefined ? `; target: ${issue.target}` : ""}${issue.originalTarget !== undefined ? `; original target: ${issue.originalTarget}` : ""}`);
 }
 export function renderSpecUpdate(r: SpecWriteResult, o: TextOptions, command: "create" | "update" = "update"): string {
-  const applied = command === "create" ? "created" : "updated";
-  const verdict = r.changed ? r.ok ? applied : `${applied} with errors` : r.ok ? "unchanged" : "refused";
-  return blocks(heading(`spec ${command} ${r.id ?? ""}: ${verdict}`.trim(), o),
-    fields([["source", r.source], ["worktree", r.worktree], ["path", r.path], ["sha256", r.sha256], ["actor", r.actor]], o),
-    specWriteIssues(r.issues, o));
+  const applied = command === "create" ? "created" : "updated", verdict = r.changed ? r.ok ? applied : `${applied} with errors` : r.ok ? "unchanged" : "refused", out = report(`spec ${command}`, o);
+  specIssues(out, r.issues);
+  out.section("Result").bullet(r.ok ? r.changed ? "ok" : "absent" : "fail", `${r.id ?? "spec"}: ${verdict}`).kv([["Source", r.source], ["Worktree", r.worktree], ["Path", r.path], ["SHA256", r.sha256], ["Actor", r.actor]]);
+  return done(out, o);
 }
 
-/** Deletion previews show every acknowledged relation and a command bound to that exact preview. */
 export function renderSpecDelete(r: SpecDeleteResult, o: TextOptions): string {
-  const verdict = r.changed ? r.ok ? "deleted" : "deleted with errors" : !r.ok ? "refused" : r.preview ? "preview" : "unchanged";
-  const backlinks = r.backlinks ?? [], children = r.children ?? [];
-  const confirm = r.ok && r.preview && r.fingerprint && r.id !== undefined
-    ? ["vmem", "spec", "delete", ...(r.source ? ["--source", r.source] : []), ...(r.worktree ? ["--worktree", r.worktree] : []), "--confirm", "--fingerprint", r.fingerprint, "--", r.id].map(shellWord).join(" ") : undefined;
-  return blocks(heading(`spec delete ${r.id ?? ""}: ${verdict}`.trim(), o),
-    fields([["source", r.source], ["worktree", r.worktree], ["path", r.path], ["sha256", r.sha256], ["actor", r.actor], ["fingerprint", r.fingerprint]], o),
-    r.preview && (backlinks.length ? blocks(heading("Backlinks", o), table(["SOURCE", "EDGE", "TARGET"], backlinks.map(edge => [edge.source, edge.kind, edge.target]), o)) : paragraph("Backlinks: none", o)),
-    r.preview && (children.length ? blocks(heading("Children", o), table(["ID", "TYPE", "PATH", "TITLE"], children.map(child => [child.id, child.type, child.path, child.title]), o)) : paragraph("Children: none", o)),
-    specWriteIssues(r.issues, o), confirm && nextCommand("confirm", confirm, o));
+  const verdict = r.changed ? r.ok ? "deleted" : "deleted with errors" : !r.ok ? "refused" : r.preview ? "preview" : "unchanged", out = report("spec delete", o);
+  specIssues(out, r.issues);
+  out.section("Result").bullet(!r.ok ? "fail" : r.preview ? "pending" : r.changed ? "ok" : "absent", `${r.id ?? "spec"}: ${verdict}`).kv([["Source", r.source], ["Worktree", r.worktree], ["Path", r.path], ["SHA256", r.sha256], ["Actor", r.actor], ["Fingerprint", r.fingerprint]]);
+  if (r.preview) {
+    out.section("Backlinks"); if (r.backlinks?.length) out.table(["Source", "Edge", "Target"], r.backlinks.map(edge => [edge.source, edge.kind, edge.target])); else out.note("none");
+    out.section("Children"); if (r.children?.length) out.table(["ID", "Type", "Path", "Title"], r.children.map(child => [child.id, child.type, child.path, child.title])); else out.note("none");
+  }
+  if (r.ok && r.preview && r.fingerprint && r.id !== undefined) out.next(["vmem", "spec", "delete", ...(r.source ? ["--source", r.source] : []), ...(r.worktree ? ["--worktree", r.worktree] : []), "--confirm", "--fingerprint", r.fingerprint, "--", r.id].map(shellWord).join(" "));
+  return done(out, o);
 }
 
 export function renderSpec(command: SpecCommand, result: unknown, o: TextOptions, context: SpecTextContext): string {

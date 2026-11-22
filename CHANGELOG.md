@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Standardize spec command human reports and validation summaries; JSON results and spec bodies are unchanged.
+
 - Standardize write, preview, promotion and sync human reports while keeping JSON receipts and exit codes unchanged.
 
 - Standardize read and analysis human reports, including brief and skills mine; JSON and stored lint reports are unchanged.
