@@ -27,15 +27,16 @@ const NO_VAULTS = "no vaults registered";
 const plainReason = (reason: string) => reason.replace(/`(vmem [^`]+)`/g, "$1");
 
 export function renderStatus(r: StatusResult, o: TextOptions): string {
-  const out = report("status", o).section("Home").kv([["Version", r.version], ["Home", r.home], ["Source", r.source], ["Health", r.healthy ? "healthy" : "unhealthy"], ["agent-mem", r.agentMem?.version], ["Host API", r.agentMem?.hostApi]]);
+  const out = report("status", o);
   const issues = r.vaults.filter(v => v.issue);
   if (issues.length) { out.section("Problems"); for (const v of issues) out.bullet("fail", `${v.id}: ${v.issue}`); }
+  out.section("Home").kv([["Version", r.version], ["Home", r.home], ["Source", r.source], ["Health", r.healthy ? "healthy" : "unhealthy"], ["agent-mem", r.agentMem?.version], ["Host API", r.agentMem?.hostApi]]);
   out.section("Vaults");
   if (r.vaults.length) out.table(["Vault", "Kind", "Write", "PII", "Health", "Path"], r.vaults.map(v => [v.id, v.kind, v.write, v.pii, v.healthy ? "ok" : "failed", v.path]));
-  else out.note(NO_VAULTS);
+  else out.note(NO_VAULTS).next("vmem help vaults add");
   out.section("Spec sources");
   if (r.specs?.length) out.table(["Source", "Write", "PII", "Path"], r.specs.map(s => [s.id, s.write, s.pii, s.path]));
-  else out.note("no spec sources registered");
+  else out.note("no spec sources registered").next("vmem help specs add");
   return render(out, o);
 }
 
@@ -101,7 +102,7 @@ export function renderRecover(r: RecoveryReport, o: TextOptions): string {
 export function renderVaultsList(vaults: VaultRow[], o: TextOptions): string {
   const out = report("vaults", o).section("Vaults");
   if (vaults.length) out.table(["Vault", "Kind", "Write", "PII", "Domains", "Path"], vaults.map(v => [v.id, v.kind, v.write, v.pii, effectiveDomains(v).join(", "), v.path]), 4);
-  else out.note(NO_VAULTS);
+  else out.note(NO_VAULTS).next("vmem help vaults add");
   return render(out, o);
 }
 export function renderVaultAdd(r: { vault: VaultSpec }, o: TextOptions): string {
@@ -110,7 +111,7 @@ export function renderVaultAdd(r: { vault: VaultSpec }, o: TextOptions): string 
 }
 export function renderSpecsList(specs: SpecSourceSpec[], o: TextOptions): string {
   const out = report("specs", o).section("Spec sources");
-  if (specs.length) out.table(["Source", "Write", "PII", "Path"], specs.map(s => [s.id, s.write, s.pii, s.path])); else out.note("no spec sources registered");
+  if (specs.length) out.table(["Source", "Write", "PII", "Path"], specs.map(s => [s.id, s.write, s.pii, s.path])); else out.note("no spec sources registered").next("vmem help specs add");
   return render(out, o);
 }
 export function renderSpecAdd(r: { spec: SpecSourceSpec }, o: TextOptions): string {
@@ -137,7 +138,7 @@ export function renderVaultPii(r: PiiResult, o: TextOptions, confirm?: string): 
 export function renderManifest(m: Manifest, o: TextOptions): string {
   const out = report("manifest", o).section("Package").kv([["Name", m.name], ["Version", m.version], ["Config format", m.configVersion]]);
   out.section("MCP").kv([["Server", m.mcp.server]]).table(["Tool", "Access"], m.mcp.tools.map(t => typeof t === "string" ? [t, "may write"] : [t.name, "read-only"]));
-  out.section("Commands"); for (const command of m.commands) out.bullet("unknown", command);
+  out.section("Commands"); for (const command of m.commands) out.bullet("absent", command);
   return render(out, o);
 }
 

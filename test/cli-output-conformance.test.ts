@@ -17,7 +17,7 @@ test("shared roles and markers render a report with and without color", () => {
 });
 test("status report is golden with color off and on", () => {
   const report = { home: "/synthetic", source: "VMEM_HOME" as const, version: "9.0.0", healthy: true, vaults: [] };
-  const expected = [" vmem status", "", "> Home", "  Version:    9.0.0", "  Home:       /synthetic", "  Source:     VMEM_HOME", "  Health:     healthy", "  agent-mem:  (unset)", "  Host API:   (unset)", "", "> Vaults", "  no vaults registered", "", "> Spec sources", "  no spec sources registered"].join("\n");
+  const expected = [" vmem status", "", "> Home", "  Version:    9.0.0", "  Home:       /synthetic", "  Source:     VMEM_HOME", "  Health:     healthy", "  agent-mem:  (unset)", "  Host API:   (unset)", "", "> Vaults", "  no vaults registered", "    -> vmem help vaults add", "", "> Spec sources", "  no spec sources registered", "    -> vmem help specs add"].join("\n");
   expect(renderStatus(report, plain)).toBe(expected);
   const colored = renderStatus(report, color);
   expect(stripTerminal(colored)).toBe(expected);

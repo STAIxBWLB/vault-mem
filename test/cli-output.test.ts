@@ -40,6 +40,7 @@ test("status and doctor report findings and sections", () => {
   expect(status).toContain("vmem status");
   expect(status).toContain("▸ Vaults");
   expect(status).toContain("▸ Spec sources");
+  expect(status.indexOf("▸ Problems")).toBeLessThan(status.indexOf("▸ Home"));
   expect(status).toContain("team: vault path or notes directory unavailable or changed");
   const doctor = renderDoctor(STATUS, PLAIN);
   expect(doctor).toContain("vmem doctor");
@@ -84,12 +85,12 @@ test("#114 AC3: help has the tagline, every section and every command with its d
 test("registry reports retain their information and complete confirmation commands", () => {
   const vault = { id: "mine", path: "/v/m", kind: "personal" as const, write: "mcp" as const, pii: "allow" as const };
   expect(renderVaultsList([vault], PLAIN)).toContain("/v/m");
-  expect(renderVaultsList([], PLAIN)).toContain("no vaults registered");
+  expect(renderVaultsList([], PLAIN)).toContain("vmem help vaults add");
   expect(renderVaultAdd({ vault }, PLAIN)).toContain("registered mine");
   expect(renderRemove("vaults", { applied: false, vault: { id: "mine", path: "/v/m" } }, PLAIN)).toContain("vmem vaults remove mine --confirm");
   expect(renderRemove("specs", { applied: true, spec: { id: "repo", path: "/r" } }, PLAIN)).toContain("the repository stays on disk");
   expect(renderSpecsList([{ id: "repo", path: "/r", write: "none", pii: "deny" }], PLAIN)).toContain("repo");
-  expect(renderSpecsList([], PLAIN)).toContain("no spec sources registered");
+  expect(renderSpecsList([], PLAIN)).toContain("vmem help specs add");
   expect(renderSpecAdd({ spec: { id: "repo", path: "/r", write: "none", pii: "deny" } }, PLAIN)).toContain("registered repo");
 });
 
@@ -135,6 +136,8 @@ test("#114 AC1: stats prints field blocks, manifest marks read-only tools and se
   const manifest = renderManifest({ name: "@staix/vault-mem", version: "9.9.9", configVersion: 2, mcp: { server: "vmem", tools: [{ name: "vmem_status", readOnly: true }, "vmem_create"] }, commands: ["status", "doctor"] }, PLAIN);
   expect(manifest).toContain("read-only");
   expect(manifest).toContain("vmem_create");
+  expect(manifest).toContain("-  status");
+  expect(manifest).not.toContain("?  status");
   const report = { mode: "dry-run" as const, applied: false, entry: { command: "/opt/bun", args: ["mcp"] }, notes: [], actions: [{ target: "claude" as const, file: "/fixture/claude", change: "add" as const }, { target: "codex" as const, file: "/fixture/codex", change: "refused" as const, reason: "unparsable TOML" }] };
   const setup = renderSetup(report, PLAIN, "vmem setup all --apply");
   expect(setup).toContain("unparsable TOML");
