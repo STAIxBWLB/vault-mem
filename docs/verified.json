@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "documents": {
     "README.md": {
-      "verifiedAgainst": "304242eda9bf87e0c115e9e9cda88b5ffc0bb4fb",
+      "verifiedAgainst": "1a26cb5fbc36fc9303b603db9ca2a9a60b4332e0",
       "paths": [
         "src/",
         "bin/",
@@ -48,7 +48,7 @@
       ]
     },
     "docs/reference/analysis.md": {
-      "verifiedAgainst": "304242eda9bf87e0c115e9e9cda88b5ffc0bb4fb",
+      "verifiedAgainst": "1a26cb5fbc36fc9303b603db9ca2a9a60b4332e0",
       "paths": [
         "src/",
         "bin/",
@@ -65,7 +65,7 @@
       ]
     },
     "docs/reference/configuration.md": {
-      "verifiedAgainst": "304242eda9bf87e0c115e9e9cda88b5ffc0bb4fb",
+      "verifiedAgainst": "1a26cb5fbc36fc9303b603db9ca2a9a60b4332e0",
       "paths": [
         "src/",
         "bin/",
@@ -82,7 +82,7 @@
       ]
     },
     "docs/reference/mcp-and-setup.md": {
-      "verifiedAgainst": "304242eda9bf87e0c115e9e9cda88b5ffc0bb4fb",
+      "verifiedAgainst": "1a26cb5fbc36fc9303b603db9ca2a9a60b4332e0",
       "paths": [
         "src/",
         "bin/",
@@ -99,7 +99,7 @@
       ]
     },
     "docs/reference/promotion-and-sync.md": {
-      "verifiedAgainst": "304242eda9bf87e0c115e9e9cda88b5ffc0bb4fb",
+      "verifiedAgainst": "1a26cb5fbc36fc9303b603db9ca2a9a60b4332e0",
       "paths": [
         "src/",
         "bin/",
@@ -116,7 +116,7 @@
       ]
     },
     "docs/reference/reads.md": {
-      "verifiedAgainst": "304242eda9bf87e0c115e9e9cda88b5ffc0bb4fb",
+      "verifiedAgainst": "1a26cb5fbc36fc9303b603db9ca2a9a60b4332e0",
       "paths": [
         "src/",
         "bin/",
@@ -133,7 +133,7 @@
       ]
     },
     "docs/reference/specs.md": {
-      "verifiedAgainst": "304242eda9bf87e0c115e9e9cda88b5ffc0bb4fb",
+      "verifiedAgainst": "1a26cb5fbc36fc9303b603db9ca2a9a60b4332e0",
       "paths": [
         "src/",
         "bin/",
@@ -150,7 +150,7 @@
       ]
     },
     "docs/reference/writes.md": {
-      "verifiedAgainst": "304242eda9bf87e0c115e9e9cda88b5ffc0bb4fb",
+      "verifiedAgainst": "1a26cb5fbc36fc9303b603db9ca2a9a60b4332e0",
       "paths": [
         "src/",
         "bin/",

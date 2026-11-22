@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-22
+
+- N-1: 0.12.1 and 0.13.0 share the note and spec index files and config format 6. The 0.13.0 CLI adds assertion coverage lines and changes skills-mine filtering and cap reporting; the 0.12.1 CLI keeps its previous behavior. MCP tool names and arguments are unchanged; `vmem_assertions` coverage and `vmem_skills_mine` dropped counts gain additive fields, which 0.12.1 clients may ignore; for an unsupported entry inside an incomplete batch, `coverage.unsupported[].seq` now identifies the first excluded batch entry rather than the unsupported line, which is retained as `failedSeq`. The 0.13.0 console provider adds the Graph panel; an older provider remains usable without it.
+
 - Fixed: assertion coverage counts excluded entries per damaged segment and partial batch, and shows the same coverage messages in CLI text and the console.
 
 - Fixed: the Graph panel says no vault is selected when none is, instead of an empty unknown-vault id, and offers First page next to a page error.

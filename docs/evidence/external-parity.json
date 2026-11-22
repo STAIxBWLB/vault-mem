@@ -10,7 +10,7 @@
     "src/frontmatter.ts": "83431907513f69864b152b0bd2f1352bef8b54f005129151bda29a6bd7300ffe",
     "src/analysis-yaml.ts": "355c308ac11a7a71051c51409ee6e7437a491e07cb1910d2f0a0b80b32c4e2d7",
     "src/vault-lint.ts": "06067b53b249a440f62020e0dbef78f4c2ae3ebb626ad16a8321c8ac9b057908",
-    "src/vault-graph.ts": "32d7f2091708f191741a7a4285d8b1295b3aa0c9d5670272cf158461895eba39",
+    "src/vault-graph.ts": "c47c0fd6e0a0850ecde05dce258fc3a93c99c3a81bd30a0830c99583717a8366",
     "test/fixtures/analysis-corpus.ts": "200232cf87fc8c77027eb8e1e1f08543d1c365556968978e732bcec48b52b5b2",
     "test/fixtures/analysis/lint-oracle.json": "d3e4cb1c009b4be44c2b6323425e54d2f0af3797c4a992bf589b47f0073c4628",
     "test/fixtures/analysis/graph-oracle.json": "2416f03f3bf4052af5320bac46264c7985f4e4c90ce7ab92151ebdb95f3a4b89",
@@ -33,8 +33,8 @@
     }
   ],
   "referencesRetired": false,
-  "measuredAt": "2026-11-21T21:50:54.976Z",
-  "runtimeDigest": "53122faca1e20f0bc3ada63a54f9d2778d04fab860981f6c491fe1d546eb8a46",
+  "measuredAt": "2026-11-22T06:23:08.371Z",
+  "runtimeDigest": "f91ba15a4940778938cafab2b910d1290228d9bbd68ed7c0909963a0a094cb37",
   "fixtureDigest": "c018376b88b57d84ebba5484dd285b80acfc4c0f60ac7728dcd124ea54edc83c",
   "frontmatter": {
     "files": 4,
@@ -54,5 +54,5 @@
     "pyyaml": "6.0.2",
     "networkx": "3.4.2"
   },
-  "candidateBase": "ef627ae8f86a38a8f39e872fd5c8a3f70848bca2"
+  "candidateBase": "1a26cb5fbc36fc9303b603db9ca2a9a60b4332e0"
 }
