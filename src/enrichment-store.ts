@@ -111,6 +111,17 @@ function readFile(loc: ReturnType<typeof location>): EnrichmentStore {
 export function readEnrichmentStore(home: string, vault: VaultSpec, roots: VaultSpec[], denyPaths: string[]): EnrichmentStore {
   return readFile(location(home, vault, roots, denyPaths, false));
 }
+/** Metadata-only identity for invalidating in-process views after an atomic sidecar replacement. */
+export function enrichmentStoreStamp(home: string, vault: VaultSpec, roots: VaultSpec[], denyPaths: string[]): string {
+  const loc = location(home, vault, roots, denyPaths, false);
+  try {
+    const stat = lstatSync(loc.file, { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw new Error("enrichment: sidecar identity cannot be read; inspect the local enrichment store", { cause: error });
+  }
+}
 /** Validate complete metadata and vector shape before any side effects. */
 export function validateEnrichmentRecord(record: EnrichmentRecord): void {
   if (!record || typeof record !== "object") fail("intake record is missing; supply a complete result");

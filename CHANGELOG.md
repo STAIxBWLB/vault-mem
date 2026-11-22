@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add Graph enrichment capability metadata, similar-note queries and opt-in paged semantic similarity edges; embeddings remain inside the provider.
+
 ## [0.13.1] - 2026-11-22
 
 - Add directed `supersedes` and `superseded_by` frontmatter edges to Graph console snapshots. CLI and MCP graph outputs keep their existing behavior.
