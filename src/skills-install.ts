@@ -208,26 +208,31 @@ export function skillRoot(target: SetupTarget, env: NodeJS.ProcessEnv): string |
 }
 
 /** Only an override profile may link its skill root to that host's real default root. */
-export function resolveHostSkillRoot(target: SetupTarget, env: NodeJS.ProcessEnv): { root: string; linkedFrom?: string; recheck?: () => void } | undefined {
+export function resolveHostSkillRoot(target: SetupTarget, env: NodeJS.ProcessEnv): { root: string; linkedFrom?: string; recheck?: () => void } | { reason: string } | undefined {
   const requested = skillRoot(target, env);
   if (!requested) return undefined;
   let info: Stats;
   try { info = lstatSync(requested); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { root: requested }; throw error; }
   if (!info.isSymbolicLink()) return { root: requested };
-  const targetText = readlinkSync(requested);
-  const refused = () => new Error(`skill root link points to ${targetText}; vmem installs only into a real directory or a link to the host's default skill root`);
+  let targetText: string;
+  try { targetText = readlinkSync(requested); }
+  catch (error) { throw new Error("skill root link cannot be inspected; check its path and permissions", { cause: error }); }
+  const skipped = () => ({ reason: `skill root links to ${targetText}, which vmem does not manage; skills not installed; use vmem skills export <dir> to install them elsewhere` });
   const vars: Partial<Record<SetupTarget, string>> = { claude: "CLAUDE_CONFIG_DIR", codex: "CODEX_HOME", kimi: "KIMI_CODE_HOME", qwen: "QWEN_HOME" };
   const variable = vars[target];
-  if (!variable || !env[variable]?.trim()) throw refused();
+  if (!variable || !env[variable]?.trim()) return skipped();
   const defaults = { ...env }; delete defaults[variable];
   const defaultRoot = skillRoot(target, defaults)!;
   let defaultInfo: Stats, actual: string;
   try {
     defaultInfo = lstatSync(defaultRoot);
-    if (!defaultInfo.isDirectory() || defaultInfo.isSymbolicLink()) throw refused();
+    if (!defaultInfo.isDirectory() || defaultInfo.isSymbolicLink()) return skipped();
     actual = realpathSync(defaultRoot);
-    if (realpathSync(requested) !== actual) throw refused();
-  } catch { throw refused(); }
+    if (realpathSync(requested) !== actual) return skipped();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return skipped();
+    throw new Error("skill root link cannot be inspected; check its path and permissions", { cause: error });
+  }
   const recheck = () => {
     try {
       const link = lstatSync(requested), current = lstatSync(defaultRoot);
