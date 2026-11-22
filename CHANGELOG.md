@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-11-23
+
 - Fixed: setup accepts an override profile skill root linked to the host's real default skill root; other links remain refused.
 
 ## [0.14.0] - 2026-11-22
