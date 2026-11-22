@@ -1,5 +1,7 @@
 /** Bounded hybrid ranking over current indexed notes and local stored vectors. */
 import { join } from "node:path";
+import { createHash } from "node:crypto";
+import type { AnalysisSnapshot } from "./analysis-types.ts";
 import { loadRegistry } from "./registry.ts";
 import { logBinding, matchesBinding } from "./vault-log.ts";
 import { canonicalPath, isDenied } from "./platform.ts";
@@ -38,6 +40,25 @@ function candidates(ctx: ReturnType<typeof queryContext>, index: VaultIndex, que
     if (!note || note.hash !== r.contentHash || !Array.isArray(r.value)) return [];
     return [{ id, score: vectorSimilarity(query.values, r.value as number[]), note }];
   }).sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+/** Internal graph inputs: only current, allowed vectors; callers must never serialize values. */
+export function graphEnrichmentInputs(home: string, vault: string, snapshot: AnalysisSnapshot) {
+  const ctx = queryContext(home, vault);
+  if (!ctx.store) { ctx.check(); return undefined; }
+  const metadata = new Map(snapshot.notes.map(note => {
+    const path = note.path.replace(/^notes\//, "");
+    return [path, createHash("sha256").update(note.source).digest("hex")] as const;
+  }));
+  const vectors = ctx.store.records.flatMap(record => {
+    if (record.kind !== "embedding" || !Array.isArray(record.value)) return [];
+    const path = record.path.slice(6);
+    if (!allowed(ctx, path) || metadata.get(path) !== record.contentHash) return [];
+    return [{ path, values: record.value as number[] }];
+  }).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const hash = createHash("sha256").update(JSON.stringify([ctx.store.model ?? null, snapshot.notes.length]));
+  for (const item of vectors) hash.update(JSON.stringify([item.path, item.values]));
+  ctx.check();
+  return { model: ctx.store.model ?? null, embedded: vectors.length, total: snapshot.notes.length, digest: hash.digest("hex"), vectors };
 }
 export function hybridSearch(home: string, vault: string, index: VaultIndex, query: string, options: SearchOptions, vector: QueryVector): SearchResult[] {
   const limit = resultLimit(options.limit), ctx = queryContext(home, vault);

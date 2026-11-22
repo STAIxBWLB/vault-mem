@@ -57,6 +57,11 @@ export interface GraphSnapshotPage {
   totals: { nodes: number; edges: number; placeholders: number; placeholdersOmitted: number };
   kind: "nodes" | "edges"; offset: number; count: number;
   columns: GraphNodeColumns | GraphEdgeColumns; next: string | null;
+  enrichment?: { model: string | null; embedded: number; total: number };
+}
+export interface SemanticGraphPage {
+  schema: 1; vault: string; revision: string; kind: "semantic"; offset: number; count: number;
+  semantic: { source: number[]; target: number[]; score: number[] }; next: string | null;
 }
 /** The provider attaches a numeric cursor for console conditional polling. */
 export type GraphPanelPage = GraphSnapshotPage & { cursor: number };

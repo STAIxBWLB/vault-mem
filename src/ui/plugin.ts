@@ -11,8 +11,11 @@ import { validArguments } from "../mcp.ts";
 import { listPromotionCandidates } from "../promote.ts";
 import { changeSettings, settingsSnapshot, loadRegistry } from "../registry.ts";
 import { createSnapshotRevision, createPromoteSnapshot, nextSnapshotCursor } from "./snapshot-cache.ts";
-import { assembleGraphSnapshot, resolveGraphPage } from "./graph-snapshot.ts";
+import { assembleGraphSnapshot, resolveGraphPage, assembleSemanticPages, resolveSemanticPage } from "./graph-snapshot.ts";
 import type { GraphSnapshotAssembly } from "./graph-snapshot.ts";
+import type { SemanticGraphPage } from "./panel-types.ts";
+import { graphEnrichmentInputs } from "../enrichment-query.ts";
+import { enrichmentStoreStamp } from "../enrichment-store.ts";
 import { assertionCoverageWarnings } from "./panel-types.ts";
 import type { AssertionsReadResult } from "../assertion-read.ts";
 import { createInboxSnapshot } from "./inbox.ts";
@@ -26,32 +29,48 @@ const VERSION = (JSON.parse(asset("../../package.json")) as { version: string })
 const LINT_ERRORS: LintCode[] = ["L01", "L02", "L13"];
 const CACHE_MS = 60_000;
 /** Revision-bound assemblies, shared between concurrent requests and bounded to two vaults. */
-export function createGraphSnapshotCache(revision: () => number, load: (vault: string) => Promise<GraphSnapshotAssembly>, now: () => number = Date.now) {
-  type Entry = { stamp: number; at: number; assembly: GraphSnapshotAssembly; cursors: Map<string, number> };
+export function createGraphSnapshotCache(revision: (vault: string) => number | string, load: (vault: string) => Promise<GraphSnapshotAssembly>, now: () => number = Date.now) {
+  type Entry = { stamp: number | string; at: number; assembly: GraphSnapshotAssembly; cursors: Map<string, number>; semantic: Map<string, SemanticGraphPage[]> };
   const cache = new Map<string, Entry>(), flights = new Map<string, Promise<Entry>>();
   return {
     async snapshot(vault: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
       let entry: Entry | undefined;
       for (let attempts = 0; attempts < 3; attempts++) {
-        const stamp = revision(), hit = cache.get(vault);
+        const stamp = revision(vault), hit = cache.get(vault);
         if (hit && hit.stamp === stamp && now() - hit.at < CACHE_MS) { entry = hit; break; }
         let flight = flights.get(vault);
         if (!flight) {
-          flight = load(vault).then(assembly => ({ stamp, at: now(), assembly, cursors: new Map<string, number>() }));
+          flight = load(vault).then(assembly => ({ stamp, at: now(), assembly, cursors: new Map<string, number>(), semantic: new Map<string, SemanticGraphPage[]>() }));
           flights.set(vault, flight);
         }
         try { entry = await flight; } finally { if (flights.get(vault) === flight) flights.delete(vault); }
-        if (entry.stamp === revision()) { cache.delete(vault); cache.set(vault, entry); while (cache.size > 2) cache.delete(cache.keys().next().value!); break; }
+        if (entry.stamp === revision(vault)) { cache.delete(vault); cache.set(vault, entry); while (cache.size > 2) cache.delete(cache.keys().next().value!); break; }
         entry = undefined;
       }
       if (!entry) throw new Error("graph changed while assembling; restart from the first page");
       cache.delete(vault); cache.set(vault, entry);
       while (cache.size > 2) cache.delete(cache.keys().next().value!);
       if (args.page !== undefined && typeof args.page !== "string") throw new Error("graph page is invalid; restart from the first page");
-      const page = resolveGraphPage(entry.assembly, args.page as string | undefined);
-      const key = `${page.kind}:${page.offset}`;
+      let page: ReturnType<typeof resolveGraphPage> | SemanticGraphPage;
+      let query = "";
+      if (args.semantic !== undefined) {
+        const options = args.semantic;
+        if (!options || typeof options !== "object" || Array.isArray(options) || Object.keys(options).some(key => key !== "k" && key !== "minScore")) throw new Error("graph semantic: supply k and minScore; correct the parameters and restart");
+        const { k, minScore } = options as Record<string, unknown>;
+        if (typeof k !== "number" || !Number.isInteger(k) || k < 1 || k > 20 || typeof minScore !== "number" || !Number.isFinite(minScore) || minScore < 0 || minScore > 1) throw new Error("graph semantic: k must be 1..20 and minScore must be 0..1; correct the parameters and restart");
+        query = JSON.stringify([k, minScore]);
+        let pages = entry.semantic.get(query);
+        if (!pages) {
+          pages = assembleSemanticPages(entry.assembly, k, minScore);
+          if (entry.stamp !== revision(vault)) throw new Error("graph changed while assembling semantic edges; restart from the first page");
+          if (entry.semantic.size >= 4) entry.semantic.delete(entry.semantic.keys().next().value!);
+          entry.semantic.set(query, pages);
+        }
+        page = resolveSemanticPage(entry.assembly, pages, k, minScore, args.page as string | undefined);
+      } else page = resolveGraphPage(entry.assembly, args.page as string | undefined);
+      const key = `${page.kind}:${query}:${page.offset}`;
       let cursor = entry.cursors.get(key);
-      if (cursor === undefined) { cursor = nextSnapshotCursor(); entry.cursors.set(key, cursor); }
+      if (cursor === undefined) { if (entry.cursors.size >= 256) entry.cursors.delete(entry.cursors.keys().next().value!); cursor = nextSnapshotCursor(); entry.cursors.set(key, cursor); }
       if (args.after === cursor) return { changed: false, cursor };
       return { ...page, cursor };
     },
@@ -192,9 +211,15 @@ export const plugin: ConsolePlugin = {
     };
 
     const promote = createPromoteSnapshot(revision.current, candidates);
-    const graph = createGraphSnapshotCache(revision.current, async id => {
+    const graphStamp = (id: string) => {
+      const config = loadRegistry(home), vault = config.vaults.find(v => v.id === id);
+      if (!vault) throw new Error("graph: vault is no longer registered; select a registered vault");
+      return `${revision.current()}:${vault.enrichment?.enabled ? enrichmentStoreStamp(home, vault, config.vaults, config.denyPaths ?? []) : "disabled"}`;
+    };
+    const graph = createGraphSnapshotCache(graphStamp, async id => {
       const spec = mcp.vaults.find(v => v.id === id)!;
-      return assembleGraphSnapshot(analysisInput(home, id, { expectedVault: spec }).snapshot, id);
+      const snapshot = analysisInput(home, id, { expectedVault: spec }).snapshot;
+      return assembleGraphSnapshot(snapshot, id, graphEnrichmentInputs(home, id, snapshot));
     });
     const inbox = createInboxSnapshot(home, mcp.vaults, ctx.log, undefined, revision.current);
     // One cursor for the whole Promote failure: a fresh one per failed scan would rebuild the panel every poll.
@@ -243,6 +268,10 @@ export const plugin: ConsolePlugin = {
           case "graph": {
             const vault = vaultOf(args);
             if (!vault) return { vault: null, error: str(args.vault) ? `unknown vault ${str(args.vault)}; pick a registered vault from Overview` : "graph: no selected vault; select a registered vault" };
+            if (args.similar !== undefined) {
+              const result = await readTool("vmem_similar", args, { vault: vault.id, path: args.similar });
+              return "error" in result ? result : { similar: result.result.hits };
+            }
             const stem = (value: unknown) => typeof value === "string" && value.startsWith("notes/") && value.endsWith(".md") ? value.slice(6, -3) : value;
             if (args.neighbors !== undefined) {
               const r = await readTool("vmem_graph_neighbors", args, { vault: vault.id, path: stem(args.neighbors) });
@@ -461,5 +490,5 @@ export const plugin: ConsolePlugin = {
 };
 
 export default plugin;
-export type { ProposalState, ProposalsSnapshot, AssertionsSnapshot, HistorySnapshot, CoverageWarning, GraphSnapshotPage, GraphPanelPage, GraphNodeColumns, GraphEdgeColumns } from "./panel-types.ts";
+export type { ProposalState, ProposalsSnapshot, AssertionsSnapshot, HistorySnapshot, CoverageWarning, GraphSnapshotPage, GraphPanelPage, GraphNodeColumns, GraphEdgeColumns, SemanticGraphPage } from "./panel-types.ts";
 export { assertionCoverageWarnings } from "./panel-types.ts";
