@@ -61,7 +61,9 @@ describe("agent-mem host API", () => {
       for (const command of ["status", "doctor"]) {
         const output = JSON.parse(run([command, "--json"], { VMEM_HOME: home }).text);
         expect(output.agentMem).toEqual(agentMemInfo);
-        expect(run([command], { VMEM_HOME: home }).text).toContain(`agent-mem ${agentMemInfo.version} (host API ${agentMemInfo.hostApi})`);
+        const text = run([command], { VMEM_HOME: home }).text;
+        expect(text).toContain(`agent-mem:  ${agentMemInfo.version}`);
+        expect(text).toContain(`Host API:   ${agentMemInfo.hostApi}`);
       }
     } finally { rmSync(home, { recursive: true, force: true }); }
   });

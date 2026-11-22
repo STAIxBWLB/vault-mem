@@ -383,7 +383,7 @@ test("setup all succeeds when a default skill root is an unfollowed link", () =>
   expect(result.code).toBe(0);
   expect(report.skills.find((s: { target: string }) => s.target === "qwen")).toEqual({ target: "qwen", reason: expect.stringContaining(foreign) });
   const plain = run(["setup", "all", "--apply"], env);
-  expect(plain.code).toBe(0); expect(plain.text).toMatch(/qwen skill\s+none/);
+  expect(plain.code).toBe(0); expect(plain.text).toMatch(/qwen skills\n\s+-\s+none:/);
   expect(plain.text).toContain(foreign); expect(plain.text).toContain("vmem skills export <dir>");
   expect(readFileSync(join(foreign, "keep"), "utf8")).toBe("synthetic");
   expect(readdirSync(foreign)).toEqual(["keep"]);
