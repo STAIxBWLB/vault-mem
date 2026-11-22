@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AnalysisSnapshot } from "../analysis-types.ts";
 import { scalarText } from "../analysis-yaml.ts";
-import { buildGraph, collectUnresolvedGraph, codePointCompare, graphFrontmatter, pythonTitle } from "../vault-graph.ts";
+import { buildGraph, collectUnresolvedGraph, collectSupersedesEdges, codePointCompare, graphFrontmatter, pythonTitle } from "../vault-graph.ts";
 import type { GraphEdge } from "../vault-graph.ts";
 import type { GraphSnapshotPage, GraphNodeColumns, GraphEdgeColumns } from "./panel-types.ts";
 
@@ -31,7 +31,10 @@ export function graphEdgeColumns(rows: GraphEdgeRow[]): GraphEdgeColumns {
   return { source: rows.map(r => r.source), target: rows.map(r => r.target), relations, relation: rows.map(r => relations.indexOf(r.relation)), field: rows.map(r => r.field), rel: rows.map(r => r.rel), confidence_tag: tags.every(t => t === tags[0]) ? tags[0] ?? [] : tags, confidence: confidence.every(c => c === confidence[0]) ? confidence[0] ?? [] : confidence };
 }
 export function assembleGraphSnapshot(snapshot: AnalysisSnapshot, vault: string): GraphSnapshotAssembly {
-  const graph = buildGraph(snapshot), unresolved = collectUnresolvedGraph(snapshot);
+  const graph = buildGraph(snapshot), ids = new Set(graph.nodes.map(node => node.id));
+  const supersedes = collectSupersedesEdges(snapshot), resolved = supersedes.filter(edge => ids.has(edge.target));
+  if (graph.edges.length + resolved.length > MAX_EDGES) throw new Error(`graph: exceeds ${MAX_EDGES} edges`);
+  const unresolved = [...collectUnresolvedGraph(snapshot), ...supersedes.filter(edge => !ids.has(edge.target))];
   const grouped = new Map<string, GraphEdge[]>();
   for (const edge of unresolved) { const list = grouped.get(edge.target) ?? []; list.push(edge); grouped.set(edge.target, list); }
   const notes = new Map(snapshot.notes.map(n => [n.path.replace(/^notes\//, "").slice(0, -3), n]));
@@ -41,14 +44,14 @@ export function assembleGraphSnapshot(snapshot: AnalysisSnapshot, vault: string)
   });
   const extra: GraphEdge[] = [];
   let omitted = 0, full = false;
-  for (const [id, edges] of grouped) {
-    if (full || nodes.length >= MAX_NODES || graph.edges.length + extra.length + edges.length > MAX_EDGES) { full = true; omitted++; continue; }
+  for (const [id, edges] of [...grouped].sort(([a], [b]) => codePointCompare(a, b))) {
+    if (full || nodes.length >= MAX_NODES || graph.edges.length + resolved.length + extra.length + edges.length > MAX_EDGES) { full = true; omitted++; continue; }
     nodes.push({ id, label: pythonTitle(id.replaceAll("-", " ")), type: null, domain: null, source_file: null, community: null, degree: edges.length, updated: null, date: null, placeholder: true, description: null, confidence: null, topics: null });
     extra.push(...edges);
   }
   extra.sort((a, b) => codePointCompare(a.source, b.source) || codePointCompare(a.target, b.target));
   const indices = new Map(nodes.map((n, i) => [n.id, i]));
-  const edges: GraphEdgeRow[] = [...graph.edges, ...extra].map(e => ({ source: indices.get(e.source)!, target: indices.get(e.target)!, relation: e.relation, field: e.field ?? null, rel: e.rel ?? null, confidence_tag: e.confidence_tag, confidence: e.confidence }));
+  const edges: GraphEdgeRow[] = [...graph.edges, ...resolved, ...extra].map(e => ({ source: indices.get(e.source)!, target: indices.get(e.target)!, relation: e.relation, field: e.field ?? null, rel: e.rel ?? null, confidence_tag: e.confidence_tag, confidence: e.confidence }));
   const metadata = { directed: graph.directed, multigraph: graph.multigraph, ...graph.graph };
   const totals = { nodes: nodes.length, edges: edges.length, placeholders: nodes.length - graph.nodes.length, placeholdersOmitted: omitted };
   const revision = createHash("sha256").update(JSON.stringify([1, vault, metadata, totals, nodes, edges])).digest("hex");
