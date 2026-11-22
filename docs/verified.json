@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "documents": {
     "README.md": {
-      "verifiedAgainst": "6ca8b51f08632ae10aceb93e98b30c223e0cf1a2",
+      "verifiedAgainst": "18cb4970b41d98a7846f726da800e094b15f18d7",
       "paths": [
         "src/",
         "bin/",
@@ -19,7 +19,7 @@
       ]
     },
     "docs/cutover-checklist.md": {
-      "verifiedAgainst": "6ca8b51f08632ae10aceb93e98b30c223e0cf1a2",
+      "verifiedAgainst": "18cb4970b41d98a7846f726da800e094b15f18d7",
       "paths": [
         "src/setup.ts",
         "src/registry.ts",
@@ -48,7 +48,7 @@
       ]
     },
     "docs/reference/analysis.md": {
-      "verifiedAgainst": "6ca8b51f08632ae10aceb93e98b30c223e0cf1a2",
+      "verifiedAgainst": "18cb4970b41d98a7846f726da800e094b15f18d7",
       "paths": [
         "src/",
         "bin/",
@@ -65,7 +65,7 @@
       ]
     },
     "docs/reference/configuration.md": {
-      "verifiedAgainst": "6ca8b51f08632ae10aceb93e98b30c223e0cf1a2",
+      "verifiedAgainst": "18cb4970b41d98a7846f726da800e094b15f18d7",
       "paths": [
         "src/",
         "bin/",
@@ -82,7 +82,7 @@
       ]
     },
     "docs/reference/mcp-and-setup.md": {
-      "verifiedAgainst": "6ca8b51f08632ae10aceb93e98b30c223e0cf1a2",
+      "verifiedAgainst": "18cb4970b41d98a7846f726da800e094b15f18d7",
       "paths": [
         "src/",
         "bin/",
@@ -99,7 +99,7 @@
       ]
     },
     "docs/reference/promotion-and-sync.md": {
-      "verifiedAgainst": "6ca8b51f08632ae10aceb93e98b30c223e0cf1a2",
+      "verifiedAgainst": "18cb4970b41d98a7846f726da800e094b15f18d7",
       "paths": [
         "src/",
         "bin/",
@@ -116,7 +116,7 @@
       ]
     },
     "docs/reference/reads.md": {
-      "verifiedAgainst": "6ca8b51f08632ae10aceb93e98b30c223e0cf1a2",
+      "verifiedAgainst": "18cb4970b41d98a7846f726da800e094b15f18d7",
       "paths": [
         "src/",
         "bin/",
@@ -133,7 +133,7 @@
       ]
     },
     "docs/reference/specs.md": {
-      "verifiedAgainst": "6ca8b51f08632ae10aceb93e98b30c223e0cf1a2",
+      "verifiedAgainst": "18cb4970b41d98a7846f726da800e094b15f18d7",
       "paths": [
         "src/",
         "bin/",
@@ -150,7 +150,7 @@
       ]
     },
     "docs/reference/writes.md": {
-      "verifiedAgainst": "6ca8b51f08632ae10aceb93e98b30c223e0cf1a2",
+      "verifiedAgainst": "18cb4970b41d98a7846f726da800e094b15f18d7",
       "paths": [
         "src/",
         "bin/",
