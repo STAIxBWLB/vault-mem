@@ -674,7 +674,7 @@ test("per-command help uses the usage table before parsing or loading a home", a
   for (const command of COMMANDS) for (const flag of ["--help", "-h"]) {
     const result = await runAsync([...command.name.split(" "), flag], { VMEM_HOME: "invalid-relative-home" });
     expect(result).toEqual({ code: 0, text: commandUsage(command.name, textOptions(undefined, { VMEM_HOME: "invalid-relative-home" }))! });
-    expect(commandUsage(command.name)).toContain(`vmem ${command.usage}`);
+    for (const form of command.usage.split(" | ")) expect(commandUsage(command.name)!.replace(/\s+/g, " ")).toContain(`vmem ${form}`);
   }
   expect(run(["check", "--help"], { VMEM_HOME: "invalid-relative-home" })).toMatchObject({ code: 0, text: expect.stringContaining("check <vault> <file|->") });
   const result = Bun.spawnSync([process.execPath, "bin/vmem.js", "check", "--help"], { env: { ...process.env, VMEM_HOME: "invalid-relative-home" }, stdout: "pipe", stderr: "pipe" });

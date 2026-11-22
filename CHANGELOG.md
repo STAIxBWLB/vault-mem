@@ -6,6 +6,8 @@
 
 - Standardize registry and setup human reports, including a readable settings view; JSON output and exit codes are unchanged.
 
+- Help (#312 T2): `vmem help` lists each command as `  <name>  <summary>` per group within 80 columns, on a pipe with or without `COLUMNS`. `vmem help <command>` and `<command> --help` show Usage (every form on its own line), Description, Flags (one line per flag), Examples and Details. Usage lines use one notation (`<required>`, `[optional]`, `a|b`, `...`, uppercase value shapes such as `FILE|-`, `A,B`, `REL`, `CURSOR`). The usage after a usage error wraps within 80 columns or shortens to `[flags]`. The Output note states the real color precedence (`NO_COLOR`, `FORCE_COLOR`, `CLICOLOR_FORCE`, `CLICOLOR`, `TERM`). A new global `--ascii` flag prints ASCII markers. A help lint (`scripts/help-lint.ts`) runs in `bun run check`. `--json`, exit codes and MCP tool descriptions are unchanged.
+
 - Adopt `@staix/cli-output` 0.1.0 for CLI output standard v1; Bun 1.4.4 is now the minimum supported version.
 
 ## [0.14.2] - 2026-11-23

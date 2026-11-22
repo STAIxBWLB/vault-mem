@@ -77,8 +77,9 @@ test("usage and operation failures have distinct process exits", () => {
   expect(failure.exitCode).toBe(1);
   expect(failure.stderr.toString()).toContain("vmem: ");
   const multi = Bun.spawnSync([process.execPath, bin, "graph", "path"], { env, stdout: "pipe", stderr: "pipe" });
-  expect(multi.stderr.toString().split("\n").slice(-3)).toEqual([
-    "Usage: vmem graph path <vault> <from> <to> [--max-hops 1..6] [--relation REL] [--via-hubs] [--json]",
+  expect(multi.stderr.toString().split("\n").slice(-4)).toEqual([
+    "Usage: vmem graph path <vault> <from> <to> [--max-hops 1..6] [--relation REL]",
+    "    [--via-hubs] [--json]",
     "Run 'vmem help graph path' for details.", "",
   ]);
   const unknown = Bun.spawnSync([process.execPath, bin, "not-a-command"], { env, stdout: "pipe", stderr: "pipe" });
