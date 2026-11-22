@@ -1,10 +1,10 @@
-import { Report } from "@staix/cli-output";
+import { Report, terminalText } from "@staix/cli-output";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { canonicalPath, isDenied } from "./platform.ts";
 import { loadRegistry } from "./registry.ts";
 import { applyProposal, confirmProposalReconciliation, listProposals, previewProposalApply, previewProposalReject, reconcileProposal, rejectProposal, showProposal, submitProposal, type ProposalContext } from "./proposal-provider.ts";
 import { MAX_PROPOSAL_RECORD_BYTES } from "./proposals.ts";
-import { PLAIN, shellWord, stripTerminal, UsageError, type TextOptions } from "./text-output.ts";
+import { PLAIN, shellWord, UsageError, type TextOptions } from "./text-output.ts";
 
 const command = (...args: string[]) => ["vmem", "proposal", ...args].map(shellWord).join(" ");
 const report = (action: string, o: TextOptions) => new Report(o.columns, o.ascii).header("vmem", `proposal ${action}`);
@@ -80,7 +80,7 @@ export function runProposalCommand(args: string[], home: string, env: NodeJS.Pro
     const result = showProposal(home, { vault, id: target!, offset: number(flags["--offset"], "--offset", 0, MAX_PROPOSAL_RECORD_BYTES), maxBytes: number(flags["--max-bytes"], "--max-bytes", 1, 16384) }, ctx);
     if (json) return { text: JSON.stringify(result), code: 0 };
     const out = report("show", text); problems(out, result.issues); out.section("Proposal").kv([["ID", result.id], ["State", result.state], ["Vault", result.vault], ["Path", result.path], ["Agent label (unverified)", result.agentLabelUnverified], ["Reason", result.decisionReason]]).section("Content");
-    const body = stripTerminal(result.content), head = done(out, text);
+    const body = terminalText(result.content), head = done(out, text);
     if (result.nextOffset === null) return { text: `${head}\n${body}`, code: 0 };
     const tail = new Report(text.columns, text.ascii).section("Continuation").next(command("show", vault, target!, "--offset", String(result.nextOffset), ...(flags["--max-bytes"] ? ["--max-bytes", String(flags["--max-bytes"])] : [])));
     return { text: `${head}\n${body}\n\n${done(tail, text)}`, code: 0 };

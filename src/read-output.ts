@@ -1,4 +1,4 @@
-import { Report } from "@staix/cli-output";
+import { Report, terminalText } from "@staix/cli-output";
 /**
  * Text views for the read, log and analysis commands (#114). Each renderer is pure, takes the same result the
  * command prints with `--json`, and never shows more than that result carries.
@@ -11,7 +11,7 @@ import type { GraphNeighborhood, GraphPath } from "./vault-graph.ts";
 import type { WriteIssue, WriteReceipt } from "./write-types.ts";
 import type { EvidenceReport } from "./evidence.ts";
 import type { GraphExplanation } from "./graph-evidence.ts";
-import { plural, shellWord, type TextOptions, stripTerminal } from "./text-output.ts";
+import { plural, shellWord, type TextOptions } from "./text-output.ts";
 
 const command = (...words: string[]) => ["vmem", ...words].map(shellWord).join(" ");
 const report = (name: string, o: TextOptions) => new Report(o.columns, o.ascii).header("vmem", name);
@@ -19,14 +19,14 @@ const done = (r: Report, o: TextOptions) => r.render(o.color).join("\n");
 
 export function searchText(hits: SearchResult[], o: TextOptions, c: { vault: string; query: string; limit: number; type?: string; domain?: string }): string {
   const out = report("search", o).section("Results").kv([["Vault", c.vault], ["Query", c.query], ["Results", hits.length]]);
-  for (const hit of hits) { out.bullet("absent", `${hit.path}: ${hit.title} (${hit.type})`); if (stripTerminal(hit.snippet).trim()) out.note(stripTerminal(hit.snippet).trim()); }
+  for (const hit of hits) { out.bullet("absent", `${hit.path}: ${hit.title} (${hit.type})`); if (terminalText(hit.snippet).trim()) out.note(terminalText(hit.snippet).trim()); }
   if (hits.length >= c.limit && c.limit < 500) out.next(command("search", c.vault, c.query, ...(c.type ? ["--type", c.type] : []), ...(c.domain ? ["--domain", c.domain] : []), "--limit", String(Math.min(500, c.limit * 2))));
   return done(out, o);
 }
 
 export function showText(r: NoteReadResult, o: TextOptions, c: { vault: string; target: string; maxBytes?: number }): string {
   const out = report("show", o).section("Note").kv([["Path", r.path], ["Section", r.section], ["SHA256", r.hash.slice(0, 12)], ["Bytes", Buffer.byteLength(r.content)], ["Offset", r.offset]]).section("Content");
-  const body = stripTerminal(r.content).replace(/\n+$/, "");
+  const body = terminalText(r.content).replace(/\n+$/, "");
   if (!r.truncated) return `${done(out, o)}\n${body}`;
   const tail = new Report(o.columns, o.ascii).section("Continuation").bullet("warn", "truncated");
   if (r.nextOffset !== undefined) tail.next(command("show", c.vault, c.target, ...(r.section ? ["--section", r.section] : []), ...(c.maxBytes !== undefined ? ["--max-bytes", String(c.maxBytes)] : []), "--offset", String(r.nextOffset)));

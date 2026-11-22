@@ -1,4 +1,4 @@
-import { stripTerminal } from "../src/text-output.ts";
+import { terminalText } from "@staix/cli-output";
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,7 +52,7 @@ test("#114 show: title line, fields, the body as is without escapes, and for a t
   expect(shown).toContain("vmem show demo alpha --section First --max-bytes 12 --offset 12");
   expect(shown).toContain("▸ H2 headings");
   expect(shown).toContain("-  First");
-  expect(stripTerminal("a\u001b[2Kb\u009b31mc\u001bcd\u0008e\tf")).toBe("abcde\tf");
+  expect(terminalText("a\u001b[2Kb\u009b31mc\u001bcd\u0008e\tf")).toBe("abcde\tf");
 });
 
 test("#114 links, log, rebuild and neighbours render tables, counts and next commands", () => {

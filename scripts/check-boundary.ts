@@ -46,6 +46,6 @@ function inspectSkills(dir: string) {
 }
 inspectSkills(join(root, "skills"));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-if (JSON.stringify(pkg.dependencies) !== JSON.stringify({ "@staix/agent-mem": ">=0.33.0 <1.0.0", "@staix/cli-output": "0.1.0" })) errors.push("runtime dependencies must be exactly @staix/agent-mem >=0.33.0 <1.0.0 and @staix/cli-output 0.1.0");
+if (JSON.stringify(pkg.dependencies) !== JSON.stringify({ "@staix/agent-mem": ">=0.33.0 <1.0.0", "@staix/cli-output": "0.1.1" })) errors.push("runtime dependencies must be exactly @staix/agent-mem >=0.33.0 <1.0.0 and @staix/cli-output 0.1.1");
 if (errors.length) { console.error(errors.join("\n")); process.exit(1); }
 console.log("boundary: ok");

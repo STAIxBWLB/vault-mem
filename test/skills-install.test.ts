@@ -197,7 +197,7 @@ test("replacement and undo restore the original when post-rename inspection fail
 
 test("export uses a human report by default and keeps JSON and color modes", async () => {
   const { runAsync } = await import("../src/cli.ts");
-  const { stripTerminal } = await import("../src/text-output.ts");
+  const { terminalText } = await import("@staix/cli-output");
   const f = fixture();
   try {
     const target = join(f.root, "export space");
@@ -209,7 +209,7 @@ test("export uses a human report by default and keeps JSON and color modes", asy
     const json = await runAsync(["skills", "export", target, "--json"], {});
     expect(JSON.parse(json.text).actions).toHaveLength(14);
     const colored = await runAsync(["skills", "export", target, "--color=always"], {});
-    expect(stripTerminal(colored.text)).not.toBe(colored.text);
+    expect(terminalText(colored.text)).not.toBe(colored.text);
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 

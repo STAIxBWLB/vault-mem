@@ -1,6 +1,7 @@
+import { terminalText } from "@staix/cli-output";
 import { expect, test } from "bun:test";
 import { offsetCommand, renderSpecGet, renderSpecValidate, type SpecGetResult, type SpecValidateResult } from "../src/spec-output.ts";
-import { stripTerminal, width } from "../src/text-output.ts";
+import { cellWidth as width } from "@staix/cli-output";
 
 const plain = { color: false, ascii: true, columns: 80 };
 test("spec validation uses section colors, problems first and one summary", () => {
@@ -8,7 +9,7 @@ test("spec validation uses section colors, problems first and one summary", () =
   const expected = [" vmem spec validate", "", "> Findings", "  x  missing: SPEC.md: synthetic finding", "", "> Discovery", "  -  skipped_path: skip.md: skipped", "", "> Scope", "  Source:  demo", "", "x 1 failed"].join("\n");
   const text = renderSpecValidate(input, plain, { args: ["validate"], values: {} });
   const color = renderSpecValidate(input, { ...plain, color: true }, { args: ["validate"], values: {} });
-  expect(text).toBe(expected); expect(stripTerminal(color)).toBe(expected); expect(color).not.toBe(expected);
+  expect(text).toBe(expected); expect(terminalText(color)).toBe(expected); expect(color).not.toBe(expected);
   for (const line of text.split("\n")) expect(width(line)).toBeLessThanOrEqual(80);
 });
 test("spec body remains intact and offset stays before a query separator", () => {

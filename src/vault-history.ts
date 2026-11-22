@@ -1,4 +1,4 @@
-import { Report } from "@staix/cli-output";
+import { Report, terminalText } from "@staix/cli-output";
 /**
  * Read-only Git snapshot history for a registered vault (#235). Git commits are snapshot boundaries; this provider
  * never writes, checks out, fetches or reads commit messages/authors. Every object id is a full SHA-1/SHA-256 commit
@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { isDenied, memoryGitArgv, memoryGitEnv } from "./platform.ts";
 import { VaultIndex, MAX_NOTE_BYTES, MAX_READ_BYTES, h2Sections, headingMetadata, readPage } from "./vault-index.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
-import { plural, shellWord, stripTerminal, type TextOptions } from "./text-output.ts";
+import { plural, shellWord, type TextOptions } from "./text-output.ts";
 import type { VaultSpec } from "./config.ts";
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
@@ -617,7 +617,7 @@ export function revisionText(result: RevisionResult, o: TextOptions, c: { vault:
   const where = result.revision ? result.revision.slice(0, 12) : c.revision.slice(0, 12), out = new Report(o.columns, o.ascii).header("vmem", "show");
   out.section("Revision").kv([["Vault", c.vault], ["Path", result.path], ["Revision", result.revision ?? c.revision], ["Blob", result.blob], ["SHA256", result.sha256?.slice(0,12)], ["Bytes", result.bytes], ["Offset", result.offset], ...basisRows(result)]);
   if (!result.found) { out.note(result.capability ? `no historical content: ${result.capability}` : `the note did not exist at ${where}`); return out.render(o.color).join("\n"); }
-  out.section("Content"); const body = stripTerminal(result.content ?? "").replace(/\n+$/, ""), head = out.render(o.color).join("\n");
+  out.section("Content"); const body = terminalText(result.content ?? "").replace(/\n+$/, ""), head = out.render(o.color).join("\n");
   if (!result.truncated) return `${head}\n${body}`;
   const tail = new Report(o.columns, o.ascii).section("Continuation").bullet("warn", result.transportLimited ? "truncated at the 48 KiB transport bound" : "truncated");
   if (result.nextOffset !== undefined) tail.next(command("show", c.vault, c.note, "--revision", result.revision ?? c.revision, ...(result.section ? ["--section", result.section] : []), ...(c.maxBytes !== undefined ? ["--max-bytes", String(c.maxBytes)] : []), "--offset", String(result.nextOffset)));

@@ -2,13 +2,13 @@ import { afterAll, expect, test } from "bun:test";
 import { closeSync, constants, mkdirSync, mkdtempSync, openSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ROLE_SGR } from "@staix/cli-output";
+import { terminalText, ROLE_SGR, Report } from "@staix/cli-output";
 import { COMMANDS } from "../src/commands-table.ts";
 import { runAsync } from "../src/cli.ts";
 import { addVault, LOCK_FILE } from "../src/registry.ts";
 import { readStoredProposal, replaceStoredProposal } from "../src/proposal-storage.ts";
 import { proposalRecordDigest } from "../src/proposals.ts";
-import { stripTerminal, width } from "../src/text-output.ts";
+import { cellWidth as width } from "@staix/cli-output";
 import { renderCandidates } from "../src/write-output.ts";
 
 // #312 T4: the five standard-v1 conformance checks and the AC3/AC4 layout and content rules over the whole command tree,
@@ -153,6 +153,30 @@ test("every command is either exercised or exempt with a reason", () => {
   for (const name of covered) expect(COMMANDS.some(c => c.name === name), name).toBe(true);
 });
 
+/** A shell word may contain quoted whitespace; only whitespace outside quotes separates tokens. */
+function oneShellToken(text: string): boolean {
+  let quote = "", escaped = false;
+  for (const char of text) {
+    if (escaped) { escaped = false; continue; }
+    if (quote !== "'" && char === "\\") { escaped = true; continue; }
+    if (quote) { if (char === quote) quote = ""; continue; }
+    if (char === "'" || char === '"') { quote = char; continue; }
+    if (/\s/.test(char)) return false;
+  }
+  return text.length > 0 && !quote && !escaped;
+}
+
+test("wrapped next commands retain every quoted token", () => {
+  const command = "vmem setup 'a path with spaces' --root " + "x".repeat(90) + " --apply";
+  const lines = new Report(80, true).next(command).render(false);
+  expect(lines.length).toBeGreaterThan(1);
+  const joined = lines.map((line, i) => (i ? line.trim() : line.replace(/^\s*->\s+/, "")).replace(/ \\$/, "")).join(" ");
+  expect(joined).toBe(command);
+  expect(oneShellToken("'a path with spaces'")).toBe(true);
+  expect(oneShellToken("two tokens")).toBe(false);
+  expect(oneShellToken("x".repeat(90))).toBe(true);
+});
+
 // Each case reaches its renderer: it prints a report (a header line) or refuses through the CLI error path with `vmem: ` text.
 for (const c of CASES) test(`conformance: ${c.name}`, () => {
   const { plain, colored } = results.get(c.name)!;
@@ -163,10 +187,19 @@ for (const c of CASES) test(`conformance: ${c.name}`, () => {
   // Check 1: color off has no ESC; --color=always paints with the standard SGR codes and strips back to the same text.
   expect(plain.text.includes("\u001b"), `${c.name}: ESC with --color=never`).toBe(false);
   // Writes run twice, so the second (colored) run may report "unchanged" or refuse; only reads must match byte for byte.
-  if (c.kind !== "other") expect(stripTerminal(colored.text), `${c.name}: colored text differs`).toBe(plain.text);
+  if (c.kind !== "other") expect(terminalText(colored.text), `${c.name}: colored text differs`).toBe(plain.text);
   if (/\S/.test(colored.text)) expect(Object.values(ROLE_SGR).some(sgr => colored.text.includes(sgr)), `${c.name}: no role color`).toBe(true);
   // Check 3: COLUMNS=80, no report line over 80 cells (a printed command to copy is never shortened, per the standard).
-  for (const line of lines) if (!/^\s*(->|→)\s/.test(line)) expect(width(line), `${c.name}: ${line}`).toBeLessThanOrEqual(80);
+  let continuation = false;
+  for (const line of lines) {
+    const startsCommand = /^\s*(->|→)\s/.test(line);
+    const commandLine: boolean = startsCommand || continuation;
+    if (width(line) > 80) {
+      const body = line.replace(/^\s*(?:(?:->|→)\s+)?/, "").replace(/ \\$/, "");
+      expect(commandLine && oneShellToken(body), `${c.name}: ${line}`).toBe(true);
+    }
+    continuation = commandLine && / \\$/.test(line);
+  }
   // Check 5: LC_ALL=C prints ASCII markers only.
   expect(/[✓✗⚠→▸]/.test(text), `${c.name}: UTF-8 marker under LC_ALL=C`).toBe(false);
   // AC3 layout: one header first; sections have one blank line before and none after; no double or trailing blank lines.
@@ -225,7 +258,7 @@ test("renderer: promote-from-amem candidates (empty and populated)", () => {
     const plain = renderCandidates(data, { color: false, columns: 80, ascii: true }, ctx), colored = renderCandidates(data, { color: true, columns: 80, ascii: true }, ctx);
     const lines = plain.split("\n");
     expect(plain.includes("\u001b")).toBe(false);
-    expect(stripTerminal(colored)).toBe(plain);
+    expect(terminalText(colored)).toBe(plain);
     expect(lines[0]).toMatch(/^ vmem promote-from-amem/);
     for (const line of lines) expect(width(line)).toBeLessThanOrEqual(80);
     for (const [i, line] of lines.entries()) if (/^> \S/.test(line)) { expect(lines[i - 1]).toBe(""); expect(lines[i + 1] ?? "x").not.toBe(""); }
