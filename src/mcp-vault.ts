@@ -92,7 +92,7 @@ export function vaultTools(ids: readonly string[], orgIds: readonly string[] = [
     tool("vmem_patch", "Replace exact strings in a note: one oldString/newString pair, or edits (1..32 pairs, each matching once in the original text, non-overlapping) applied all-or-nothing with one receipt and one log event.", object({ vault, path: note, oldString: string(8192), newString: string(8192, 0), edits: { type: "array", minItems: 1, maxItems: 32, items: object({ oldString: string(8192), newString: string(8192, 0) }, ["oldString", "newString"]) }, expectedSha: sha, log: logEvent }, ["path"]), "write"),
     tool("vmem_append", "Append markdown to a section of a note.", object({ vault, path: note, section: string(120), markdown: string(16384), expectedSha: sha, log: logEvent }, ["path", "section", "markdown"]), "write"),
     tool("vmem_set_frontmatter", "Set or unset frontmatter keys of a note.", object({ vault, path: note, set: metadata, unset: { type: "array", maxItems: 32, items: string(64) }, expectedSha: sha, log: logEvent }, ["path"]), "write"),
-    tool("vmem_link", "Add a typed relation link between two notes (bidirectional by default).", object({ vault, from: note, to: note, relation: { type: "string", enum: RELATIONS }, context: string(500), bidirectional: { type: "boolean" }, log: logEvent }, ["from", "to", "relation"]), "write"),
+    tool("vmem_link", "Add a typed relation link between two notes (bidirectional by default). One step by default. Opt-in two-step: preview=true returns the planned changes to each note, the log event and a fingerprint without writing; confirm=true with that fingerprint writes only while it still matches, otherwise a fresh preview (stale=true) is returned and nothing is written.", object({ vault, from: note, to: note, relation: { type: "string", enum: RELATIONS }, context: string(500), bidirectional: { type: "boolean" }, preview: { type: "boolean" }, ...twoStep, log: logEvent }, ["from", "to", "relation"]), "write"),
     tool("vmem_supersede", "Mark a note superseded by another.", object({ vault, old: note, next: note, log: logEvent }, ["old", "next"]), "write"),
     tool("vmem_log_append", "Append one validated event line to the vault log.", object({ vault, type: { type: "string", enum: LOG_TYPES }, project: string(64), source: string(512), dest: string(512), note: string(500) }, ["type", "project", "source", "note"]), "write"),
     tool("vmem_move", "Two-step rename with link rewrites: without confirm returns preview and fingerprint; then confirm=true with that fingerprint (pass log on the confirm call).", object({ vault, from: note, to: note, ...twoStep, log: logEvent }, ["from", "to"]), "confirm"),
@@ -313,7 +313,24 @@ export function createVaultMcp(home: string, env: NodeJS.ProcessEnv = process.en
     vmem_patch: args => write(args, { op: "patch", path: str(args.path)!, ...(args.oldString !== undefined ? { oldString: str(args.oldString) } : {}), ...(args.newString !== undefined ? { newString: str(args.newString) } : {}), ...(args.edits !== undefined ? { edits: args.edits as PatchEdit[] } : {}), expectedSha: str(args.expectedSha) }),
     vmem_append: args => write(args, { op: "append", path: str(args.path)!, section: str(args.section)!, markdown: str(args.markdown)!, expectedSha: str(args.expectedSha) }),
     vmem_set_frontmatter: args => write(args, { op: "frontmatter", path: str(args.path)!, set: (args.set as Record<string, unknown> | undefined) ?? {}, ...(args.unset ? { unset: args.unset as string[] } : {}), expectedSha: str(args.expectedSha) }),
-    vmem_link: args => write(args, { op: "link", from: str(args.from)!, to: str(args.to)!, relation: args.relation as Extract<WriteOp, { op: "link" }>["relation"], ...(str(args.context) ? { context: str(args.context) } : {}), bidirectional: args.bidirectional !== false }),
+    vmem_link: args => {
+      const operation: WriteOp = { op: "link", from: str(args.from)!, to: str(args.to)!, relation: args.relation as Extract<WriteOp, { op: "link" }>["relation"], ...(str(args.context) ? { context: str(args.context) } : {}), bidirectional: args.bidirectional !== false };
+      if (args.confirm === true && !str(args.fingerprint)) throw new Error("link: confirm requires the preview fingerprint; request a preview with preview=true");
+      if (args.confirm !== true && args.fingerprint !== undefined) throw new Error("link: fingerprint requires confirm=true; request a new preview");
+      // The default log event the write would append; a given `log` replaces it.
+      const preview = (stale: boolean) => {
+        const receipt = write(args, operation, { dryRun: true });
+        if (!receipt.ok) return receipt;
+        const event = (args.log as LogEvent | undefined) ?? { type: "CONNECT", project: "-", source: notePath(operation.from), dest: notePath(operation.to), note: "link" };
+        return { ...receipt, logEvent: event, ...(stale ? { stale: true } : {}) };
+      };
+      if (args.confirm === true) {
+        const receipt = write(args, operation, twoStep(args));
+        const staleFingerprint = !receipt.ok && !receipt.applied && receipt.issues.length === 1 && receipt.issues[0]?.code === "V09" && /fingerprint/.test(receipt.issues[0].message);
+        return staleFingerprint ? preview(true) : receipt;
+      }
+      return args.preview === true ? preview(false) : write(args, operation);
+    },
     vmem_supersede: args => write(args, { op: "supersede", old: str(args.old)!, next: str(args.next)! }),
     vmem_log_append: args => {
       const event: LogEvent = { type: str(args.type)!, project: str(args.project)!, source: str(args.source)!, note: str(args.note)!, ...(str(args.dest) ? { dest: str(args.dest) } : {}) };

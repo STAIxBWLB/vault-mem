@@ -360,7 +360,8 @@ function runWrite(home: string, request: WriteRequest, options: WriteOptions & {
       const logIssues = checkLogEvent(home, { vault: request.vault, event: request.log, channel: request.channel }, options.env);
       if (logIssues.length) throw new WriteRefusal(logIssues.map(issue => ({ ...issue, message: `log event refused, nothing written: ${issue.message}; fix the event fields (rules as for \`log append\`) or omit the event for the default line` })));
     }
-    const twoStep = ["move", "delete", "tidy", "merge"].includes(request.operation.op);
+    // link is one-step unless the caller confirms a preview fingerprint (opt-in two-step, #295).
+    const twoStep = ["move", "delete", "tidy", "merge"].includes(request.operation.op) || (request.operation.op === "link" && request.confirm === true);
     const preview = request.operation.op === "check" || request.dryRun === true || (twoStep && request.confirm !== true);
     if (options.proposal && (preview || !options.binding || !["create", "patch", "infer-link"].includes(request.operation.op))) refuse("V01", "proposal confirmation requires one supported proposal operation and a bound vault; request a new preview");
     if (!preview) {
