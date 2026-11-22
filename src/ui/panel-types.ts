@@ -72,3 +72,5 @@ export interface GraphSnapshotPage {
   kind: "nodes" | "edges"; offset: number; count: number;
   columns: GraphNodeColumns | GraphEdgeColumns; next: string | null;
 }
+/** The provider attaches a numeric cursor for console conditional polling. */
+export type GraphPanelPage = GraphSnapshotPage & { cursor: number };
