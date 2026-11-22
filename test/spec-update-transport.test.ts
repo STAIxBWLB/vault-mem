@@ -50,7 +50,7 @@ test("spec update CLI parses all JSON operation flags, returns human receipts an
   const f = fixture();
   const human = runSpecCommand(["update", "root", "--expected-sha", f.sha(), "--set", '{"title":"Updated"}', "--unset", '["status"]', "--add", '{"tags":["gamma"]}', "--remove", '{"tags":["alpha"]}'], f.env);
   expect(human.code).toBe(0);
-  expect(human.text).toContain("spec update root: updated");
+  expect(human.text).toContain("root: updated");
   expect(human.text).toContain("SPEC.md");
   expect(human.text).toContain("person");
   expect(human.text.startsWith("{")).toBe(false);

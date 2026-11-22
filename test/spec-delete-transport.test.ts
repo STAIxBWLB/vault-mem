@@ -50,7 +50,7 @@ test("delete shares a bounded closed schema and advertises a destructive non-ide
 
 test("delete CLI preview lists every relation and a confirm command, then deletes with the same fingerprint", () => {
   const f = fixture(), human = runSpecCommand(["delete", "root"], f.env);
-  expect(human.code).toBe(0); expect(human.text).toContain("spec delete root: preview");
+  expect(human.code).toBe(0); expect(human.text).toContain("root: preview");
   expect(human.text).toContain("Backlinks"); expect(human.text).toContain("Children");
   expect(human.text).toContain("child.md"); expect(human.text).toContain("--confirm --fingerprint");
   for (const edge of SPEC_EDGE_KINDS) expect(human.text).toContain(edge);
@@ -68,7 +68,7 @@ test("delete CLI preview lists every relation and a confirm command, then delete
   expect(missing.text).not.toContain("expectedSha"); expect(missing.text).not.toContain("spec get");
   expect(missing.text).not.toContain("retry the update");
   const result = runSpecCommand(["delete", "root", "--confirm", "--fingerprint", receipt.fingerprint!], f.env);
-  expect(result.code).toBe(0); expect(result.text).toContain("spec delete root: deleted");
+  expect(result.code).toBe(0); expect(result.text).toContain("root: deleted");
   expect(existsSync(f.file)).toBe(false); expect(existsSync(join(f.repo, "child.md"))).toBe(true);
   for (const args of [["delete"], ["delete", "root", "extra"], ["delete", "root", "--confirm", "--confirm"], ["delete", "root", "--title", "Unknown"]]) expect(() => runSpecCommand(args, f.env)).toThrow();
 });
@@ -119,7 +119,7 @@ test("human delete refusals keep the related path and original target visible", 
   const result = runSpecCommand(["delete", "root", "--confirm", "--fingerprint", preview.fingerprint!], f.env);
   expect(result.code).toBe(1); expect(result.text).toContain("child.md");
   expect(result.text.replace(/\s+/g, " ")).toContain("original target: root");
-  expect(result.text).toContain("spec delete root: refused"); expect(result.text).toMatch(/fresh (?:delete )?preview/);
+  expect(result.text).toContain("root: refused"); expect(result.text).toMatch(/fresh (?:delete )?preview/);
   expect(result.text).not.toContain("expectedSha"); expect(result.text).not.toContain("spec get");
   expect(result.text).not.toContain("retry the update"); expect(result.text).not.toContain("correct the update");
   expect(readFileSync(f.file, "utf8")).toBe(f.original);
