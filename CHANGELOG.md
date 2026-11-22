@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-11-23
+
 - Fixed: setup reports an unfollowed linked skill root as not installed instead of refusing the host, and points to skill export.
 
 ## [0.14.1] - 2026-11-23
