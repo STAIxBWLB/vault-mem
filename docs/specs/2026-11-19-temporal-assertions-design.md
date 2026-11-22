@@ -405,7 +405,7 @@ A purged line keeps every hashed field, drops `payload` and adds `"purged": {"at
 ```
 
 - `unsynced` counts journal files with uncommitted changes when the vault is a Git repository, and is `null` otherwise. No other paths are read or reported.
-- `untrusted` records include the first excluded `seq`, the actual `failedSeq`, the number of newline-terminated `entries` left out and the reason. `unsupported` records include those sequence and count fields. `partialBatch` records give the batch first `seq`, present `entries` and declared `size`. A torn tail is reported separately.
+- `untrusted` records include the first excluded `seq`, the actual `failedSeq`, the number of newline-terminated `entries` left out and the reason. `unsupported` records include those sequence and count fields. `partialBatch` records give the batch first `seq`, present `entries` and declared `size`. A torn tail reached by verification is reported separately.
 - Items are ordered by subject, relation, id and revision.
 - `--history` returns every revision and retraction with `recordedAt` and `replacedAt` (the `recorded_at` of the next revision or retraction, or null), plus `answer` when `at` is given.
 - `overlaps` is present only with `at`: groups of two or more assertion ids with the same subject and relation, different values, and an answer of `yes` or `unknown`. Each page includes only groups touching its items, with the ids on that page and `size` giving the total number of group members. Page the subject and relation query to collect the full membership. A group with any `unknown` member is marked `possible: true`.

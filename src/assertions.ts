@@ -255,7 +255,6 @@ export function verifySegment(segment: string, bytes: Buffer): SegmentReport {
     const failure = report.untrusted ?? report.unsupported!;
     failure.entries = entries;
     if (pending.length) failure.seq = pending[0]!.entry.seq;
-    if (bytes.length && bytes[bytes.length - 1] !== 10) report.tornTail = true;
   }
   const tail = report.entries.at(-1);
   if (tail) report.tail = { seq: tail.seq, hash: tail.hash, recordedAt: tail.recorded_at };

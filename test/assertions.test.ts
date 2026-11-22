@@ -259,6 +259,7 @@ test("T7 recovery: torn tail and partial batch are ignored, then truncated on th
   appendFileSync(path, '{"v":1,"seg":"tor');
   let answer = evaluateAssertions(f.journal(), {});
   expect(answer.coverage.tornTail).toEqual([file!.slice(0, 16)]); expect(answer.items).toHaveLength(1);
+  expect(run(["assertions", f.id], f.env).text).toContain("torn journal tail");
   const fixed = ok(f.append([{ op: "assert", subject: "s:t", relation: "r", value: "b", kind: "state", from: "2026", to: "open", source: ["mem:b"] }], "2026-01-02T00:00:00Z"));
   expect(fixed.recovery[0]).toMatch(/truncated 17 bytes after seq 2 .*torn tail/);
   expect(readFileSync(path).subarray(0, good.length).equals(good)).toBe(true);
@@ -645,11 +646,13 @@ test("damaged batches report left-out entries and consistent CLI coverage", asyn
   writeFileSync(file, damaged.join("\n") + "\n" + '{"torn":');
   const torn = readAssertions(f.home, { vault: f.id }, { env: f.env });
   expect(torn.coverage.untrusted[0]!.entries).toBe(60);
-  expect(torn.coverage.tornTail).toEqual([segment]);
-  expect(run(["assertions", f.id], f.env).text).toContain("torn journal tail");
+  expect(torn.coverage.tornTail).toEqual([]);
+  expect(run(["assertions", f.id], f.env).text).not.toContain("torn journal tail");
   const unsupported = [...lines]; unsupported[9] = unsupported[9]!.replace('"v":1', '"v":2');
-  writeFileSync(file, unsupported.join("\n") + "\n");
+  writeFileSync(file, unsupported.join("\n") + "\n" + '{"torn":');
   const newer = readAssertions(f.home, { vault: f.id }, { env: f.env });
   expect(newer.coverage.unsupported).toEqual([{ segment, seq: 2, failedSeq: 10, entries: 60 }]);
+  expect(newer.coverage.tornTail).toEqual([]);
   expect(run(["assertions", f.id], f.env).text).toContain(`${segment}#2, failed #10, 60 left out`);
+  expect(run(["assertions", f.id], f.env).text).not.toContain("torn journal tail");
 });
