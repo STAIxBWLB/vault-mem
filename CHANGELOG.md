@@ -2,9 +2,11 @@
 
 ## [Unreleased]
 
-- Update cli-output to 0.1.3 and cover its expanded package fixtures.
+## [0.15.0] - 2026-11-23
 
-- Update cli-output to 0.1.1 and use its terminal sanitization and layout helpers.
+- N-1: 0.14.2 and 0.15.0 share the note and spec index files, config format 6 and the enrichment sidecar format. `--json` output, exit codes, MCP tool names, arguments and receipts, and the console provider are unchanged. Only human CLI text and help differ, and 0.15.0 adds the global `--ascii` flag, which 0.14.2 refuses as an unknown option.
+
+- Update cli-output to 0.1.3 (from 0.1.1) and use its terminal sanitization and layout helpers; the package fixtures cover its expanded cases.
 
 - Add whole-tree CLI conformance tests: every command runs on a synthetic home under color on and off, `COLUMNS=80` and `LC_ALL=C` against the standard-v1 checks and the #312 layout rules.
 
