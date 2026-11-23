@@ -17,12 +17,12 @@ for (const item of markers) test(`package marker fixture ${item.id}`, () => {
   expect(markerCell(item.name as MarkerName, false)).toBe(item.utf8);
   expect(markerCell(item.name as MarkerName, true)).toBe(item.ascii);
 });
-for (const item of errors) test(`package error fixture ${item.id}`, () => expect(errorLine(item.tool, item.what, item.why, item.options)).toEqual(item.expected));
+for (const item of errors) test(`package error fixture ${item.id}`, () => expect(errorLine(item.tool, item.what, item.why, item.options, item.columns)).toEqual(item.expected));
 for (const file of readdirSync(join(root, "report")).filter(name => name.endsWith(".json"))) {
   const fixture = await Bun.file(join(root, "report", file)).json() as any;
   test(`package report fixture ${fixture.id}`, () => {
-    const sanitize = fixture.input.sanitizer === "quote-headers" ? (text: string) => text.replace(/^(\s*)(?=\[agent-hub\b|--- from )/gim, "$1> ") : undefined;
-    const report = new Report(fixture.input.columns ?? undefined, fixture.input.ascii, { sanitize, styles: fixture.input.styles });
+    const sanitize = fixture.input.sanitizer === "quote-headers" ? (text: string) => text.replace(/^(\s*)(?=\[agent-hub\b|--- from )/gim, "$1> ") : fixture.input.sanitizer === "drop-cr" ? (text: string) => text.replaceAll("\r", "") : undefined;
+    const report = new Report(fixture.input.columns ?? undefined, fixture.input.ascii, { ...fixture.input.reportOptions, sanitize, styles: fixture.input.styles });
     for (const op of fixture.input.operations) switch (op.op) {
       case "header": report.header(op.tool, op.name, op.context); break;
       case "section": report.section(op.name, op.count); break;
@@ -33,6 +33,7 @@ for (const file of readdirSync(join(root, "report")).filter(name => name.endsWit
       case "summary": report.summary(op.counts); break;
       case "append": report.append(op.lines); break;
       case "line": report.line(op.text); break;
+      case "note": report.note(op.text, op.role); break;
       default: throw new Error(`unknown package fixture operation ${op.op}`);
     }
     expect(report.render(false)).toEqual(fixture.plain); expect(report.render(true)).toEqual(fixture.colored);
