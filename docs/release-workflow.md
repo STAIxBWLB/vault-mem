@@ -2,7 +2,7 @@
 
 Tag pushes publish through this workflow. The `npm-production` environment (required reviewer, `v*` tag policy), `NPM_PUBLISH_ENABLED=true` and the npm trusted publisher for `@staix/vault-mem` (`release.yml`, `npm-production`) are configured; 0.1.0 was the first release published this way. Publication does not perform or authorize a live vault cutover; the README Status paragraph states that position and the [cutover checklist](cutover-checklist.md) lists its gates (issue #11).
 
-The agent-mem runtime dependency accepts `@staix/agent-mem` in `>=0.33.0 <1.0.0`, with host API 1 checked at load. The CLI output dependency is pinned to `@staix/cli-output` 0.1.0. CI tests both the lockfile resolution and the latest published version within that range. Installed copies keep their resolved version until updated. Performance and parity evidence name the measured agent-mem version; other versions are covered by the host API gate and CI, not those measurements.
+The agent-mem runtime dependency accepts `@staix/agent-mem` in `>=0.33.0 <1.0.0`, with host API 1 checked at load. The CLI output dependency is pinned to `@staix/cli-output` 0.1.3. CI tests both the lockfile resolution and the latest published version within that range. Installed copies keep their resolved version until updated. Performance and parity evidence name the measured agent-mem version; other versions are covered by the host API gate and CI, not those measurements.
 
 ## Validation and artifact
 
