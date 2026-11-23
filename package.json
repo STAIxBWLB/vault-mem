@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@staix/agent-mem": ">=0.33.0 <1.0.0",
-    "@staix/cli-output": "0.1.1"
+    "@staix/cli-output": "0.1.3"
   },
   "devDependencies": {
     "@staix/agent-console": "github:STAIxBWLB/agent-console#c978b31",

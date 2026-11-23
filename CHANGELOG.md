@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Update cli-output to 0.1.3 and cover its expanded package fixtures.
+
 - Update cli-output to 0.1.1 and use its terminal sanitization and layout helpers.
 
 - Add whole-tree CLI conformance tests: every command runs on a synthetic home under color on and off, `COLUMNS=80` and `LC_ALL=C` against the standard-v1 checks and the #312 layout rules.
