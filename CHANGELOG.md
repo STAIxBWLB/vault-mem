@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Allow Git URL rewrites that preserve the configured vault remote in `vmem doctor` and `vmem sync` (#326).
+
 ## [0.15.0] - 2026-11-23
 
 - N-1: 0.14.2 and 0.15.0 share the note and spec index files, config format 6 and the enrichment sidecar format. `--json` output, exit codes, MCP tool names, arguments and receipts, and the console provider are unchanged. Only human CLI text and help differ, and 0.15.0 adds the global `--ascii` flag, which 0.14.2 refuses as an unknown option.

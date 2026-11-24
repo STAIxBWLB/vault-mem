@@ -22,7 +22,7 @@ function git(cwd: string, ...args: string[]) {
 }
 const note = (title: string, body: string, extra = "") => `---\ntitle: ${JSON.stringify(title)}\ndescription: Synthetic evidence for navigation.\ntype: insight\ndomain: research\ntopics: ["[[research]]"]\n${extra}---\n# ${title}\n\n${body}\n\n## Relevant Notes\n\n## Topics\n\n- [[research]]\n`;
 const moc = "---\ntype: moc\ndescription: Synthetic research directory.\n---\n# Research\n";
-function fixture() {
+function fixture(configuredRemote?: string) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "vmem-org-"))); roots.push(root);
   const home = join(root, "state"), personal = join(root, "personal"), org = join(root, "org"), remote = join(root, "org-remote.git");
   for (const vault of [personal, org]) { mkdirSync(join(vault, "notes"), { recursive: true }); writeFileSync(join(vault, "notes", "research.md"), moc); }
@@ -32,7 +32,7 @@ function fixture() {
   Bun.spawnSync(["git", "init", "--bare", "--quiet", "-b", "main", remote], { env: gitEnv });
   git(org, "init", "--quiet", "-b", "main"); git(org, "add", "."); git(org, "commit", "--quiet", "-m", "init"); git(org, "remote", "add", "origin", remote); git(org, "push", "--quiet", "origin", "main");
   addVault(home, { id: "personal", path: personal, kind: "personal", write: "mcp" });
-  addVault(home, { id: "team", path: org, kind: "org", write: "cli", remote: `file://${remote}` });
+  addVault(home, { id: "team", path: org, kind: "org", write: "cli", remote: configuredRemote ?? `file://${remote}` });
   const env = { ...gitEnv, VMEM_HOME: home };
   return { root, home, personal, org, remote, env };
 }
@@ -309,7 +309,7 @@ test("sync refuses when any push URL or URL rewrite points away from the configu
   git(f.org, "config", `url.${elsewhere}.pushInsteadOf`, f.remote);
   expect(syncVault(f.home, { vault: "team" }, { env: f.env })).toMatchObject({ ok: false, issues: [{ code: "REMOTE" }] });
   git(f.org, "config", "--unset", `url.${elsewhere}.pushInsteadOf`);
-  // pushInsteadOf matching only an explicit pushurl: git does not report that rewrite, so it is refused too.
+  // The registry remote also uses file://, so its push rewrite is checked independently.
   git(f.org, "config", "remote.origin.pushurl", `file://${f.remote}`);
   git(f.org, "config", `url.${elsewhere}.pushInsteadOf`, "file://");
   expect(syncVault(f.home, { vault: "team" }, { env: f.env })).toMatchObject({ ok: false, issues: [{ code: "REMOTE", message: expect.stringContaining("pushinsteadof file://") }] });
@@ -327,6 +327,55 @@ test("sync refuses when any push URL or URL rewrite points away from the configu
   expect(git(f.remote, "rev-parse", "main")).toBe(before.remote);
   expect(git(elsewhere, "rev-parse", "--all")).toBe(before.elsewhere);
 }, 30_000);
+
+test("doctor and sync accept the longest equivalent SSH-to-HTTPS rewrite", () => {
+  const ssh = "git@vault.example.invalid:team/vault.git", https = "https://vault.example.invalid/team/vault.git";
+  const f = fixture(ssh);
+  git(f.org, "remote", "set-url", "origin", ssh);
+  git(f.org, "config", "url.https://other.example.invalid/.insteadOf", "git@");
+  git(f.org, "config", "url.https://vault.example.invalid/.insteadOf", "git@vault.example.invalid:");
+  git(f.org, "config", "url.https://vault.example.invalid/.pushInsteadOf", "git@vault.example.invalid:");
+  git(f.org, "config", "url.https://other.example.invalid/.pushInsteadOf", "https://vault.example.invalid/");
+  expect(run(["doctor", "--json"], f.env).code).toBe(0);
+  expect(originCheck(f.org, ssh, f.env)).toMatchObject({ ok: true, fetchUrls: [https], pushUrls: [https] });
+  // Disable network transport after the origin check. Sync must reach fetch.
+  expect(syncVault(f.home, { vault: "team" }, { env: { ...f.env, GIT_ALLOW_PROTOCOL: "file" } })).toMatchObject({
+    remote: { matches: true }, issues: [{ code: "FETCH", message: expect.stringContaining("transport 'https' not allowed") }],
+  });
+});
+
+test.each([
+  ["https://other.example.invalid/team/vault.git", "insteadOf"],
+  ["https://vault.example.invalid/other/vault.git", "insteadOf"],
+  ["https://other.example.invalid/team/vault.git", "pushInsteadOf"],
+])("doctor and sync refuse a rewrite to %s via %s", (destination, kind) => {
+  const ssh = "git@vault.example.invalid:team/vault.git", f = fixture(ssh);
+  git(f.org, "remote", "set-url", "origin", ssh);
+  git(f.org, "config", `url.${destination}.${kind}`, ssh);
+  const message = expect.stringContaining(`url.${destination}.${kind.toLowerCase()} ${ssh}`);
+  expect(run(["doctor", "--json"], f.env).code).toBe(1);
+  expect(originCheck(f.org, ssh, f.env)).toMatchObject({ ok: false, issue: message });
+  expect(syncVault(f.home, { vault: "team" }, { env: f.env })).toMatchObject({ issues: [{ code: "REMOTE", message }] });
+});
+
+test("sync pushes through an equivalent rewrite and ignores pushInsteadOf on explicit pushurl", () => {
+  const f = fixture();
+  git(f.org, "config", "remote.origin.pushurl", f.remote);
+  git(f.org, "config", `url.file://${f.remote}.insteadOf`, f.remote);
+  git(f.org, "config", `url.${join(f.root, "elsewhere.git")}.pushInsteadOf`, f.remote);
+  writeFileSync(join(f.org, "notes", "org-only.md"), note("Org Only", "Rewrite accepted."));
+  const preview = syncVault(f.home, { vault: "team" }, { env: f.env });
+  expect(preview).toMatchObject({ ok: true, preview: true });
+  const applied = syncVault(f.home, { vault: "team", confirm: true, fingerprint: preview.fingerprint }, { env: f.env });
+  expect(applied).toMatchObject({ ok: true, pushed: true });
+  expect(applied.commit).toBe(git(f.remote, "rev-parse", "main"));
+});
+
+test("an empty rewrite prefix still refuses", () => {
+  const f = fixture(), key = "url.https://vault.example.invalid/.insteadof";
+  git(f.org, "config", key, "");
+  expect(originCheck(f.org, `file://${f.remote}`, f.env)).toMatchObject({ ok: false, issue: expect.stringContaining(key) });
+});
 
 test("the Topics section is found outside code fences; fenced headings and content are kept", () => {
   const f = fixture();
