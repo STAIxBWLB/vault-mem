@@ -75,17 +75,49 @@ function gitIn(cwd: string, env: NodeJS.ProcessEnv, deadline?: number, context: 
     return out;
   };
 }
-/**
- * insteadOf/pushInsteadOf rules that could rewrite any of `urls` or origin's configured URLs. Git applies a rule
- * when its value is a literal prefix of the configured URL, so the raw config values are checked too; this covers
- * an explicit pushurl, whose rewrite git does not report. A rule without a value is treated as matching.
- */
-function applicableRewrites(lines: (args: string[]) => string[], urls: string[]): string[] {
-  const all = [...urls, ...lines(["config", "--get-all", "remote.origin.url"]), ...lines(["config", "--get-all", "remote.origin.pushurl"])];
-  return lines(["config", "--get-regexp", "^url\\..*\\.(insteadof|pushinsteadof)$"]).filter(line => {
-    const at = line.indexOf(" "), prefix = at < 0 ? "" : line.slice(at + 1);
-    return !prefix || all.some(url => url.startsWith(prefix));
-  });
+/** Find the winning rewrite that would move a configured URL away from the registry remote. */
+function applicableRewrites(git: Git, remote: string): string[] {
+  const config = (args: string[]) => {
+    const out = git(["config", "--null", ...args], { allowFail: true });
+    return out.status === 0 ? out.stdout.slice(0, -1).split("\0") : [];
+  };
+  const insteadOf = new Map<string, string[]>(), pushInsteadOf = new Map<string, string[]>();
+  for (const entry of config(["--get-regexp", "^url\\..*\\.(insteadof|pushinsteadof)$"])) {
+    const separator = entry.indexOf("\n");
+    const key = separator < 0 ? entry : entry.slice(0, separator);
+    const prefix = separator < 0 ? "" : entry.slice(separator + 1);
+    if (!prefix) return [key];
+    const suffix = key.endsWith(".pushinsteadof") ? ".pushinsteadof" : ".insteadof";
+    const rules = suffix === ".pushinsteadof" ? pushInsteadOf : insteadOf;
+    const base = key.slice("url.".length, -suffix.length);
+    const prefixes = rules.get(base) ?? [];
+    prefixes.push(prefix);
+    rules.set(base, prefixes);
+  }
+
+  // Git groups rules by replacement base and keeps the first match when lengths tie.
+  const match = (url: string, rules: Map<string, string[]>, suffix: string) => {
+    let winner: { base: string; prefix: string; suffix: string } | undefined;
+    for (const [base, prefixes] of rules) {
+      for (const prefix of prefixes) {
+        if (prefix.length > (winner?.prefix.length ?? 0) && url.startsWith(prefix)) winner = { base, prefix, suffix };
+      }
+    }
+    return winner;
+  };
+  const fetchUrls = config(["--get-all", "remote.origin.url"]);
+  const explicitPushUrls = config(["--get-all", "remote.origin.pushurl"]);
+  const checks = [
+    ...[remote, ...fetchUrls, ...explicitPushUrls].map(url => ({ url, push: false })),
+    ...[remote, ...(explicitPushUrls.length ? [] : fetchUrls)].map(url => ({ url, push: true })),
+  ];
+  for (const { url, push } of checks) {
+    const rule = (push ? match(url, pushInsteadOf, "pushinsteadof") : undefined) ?? match(url, insteadOf, "insteadof");
+    if (rule && !sameRemote(rule.base + url.slice(rule.prefix.length), remote)) {
+      return [`url.${rule.base}.${rule.suffix} ${rule.prefix}`];
+    }
+  }
+  return [];
 }
 /** Local-only origin validation shared by doctor and sync; never fetches or pushes. */
 export function originCheck(root: string, remote: string, env: NodeJS.ProcessEnv = process.env, context: "sync" | "doctor" = "sync"): { ok: boolean; origin: string | null; fetchUrls: string[]; pushUrls: string[]; issue?: string } {
@@ -93,10 +125,10 @@ export function originCheck(root: string, remote: string, env: NodeJS.ProcessEnv
   if (realpathSync(git(["rev-parse", "--show-toplevel"]).stdout.trim()) !== root) throw new Error("vault path is not the root of its git repository");
   const origin = git(["remote", "get-url", "origin"], { allowFail: true });
   const originUrl = origin.status === 0 ? origin.stdout.trim() : null;
-  // Every effective fetch and push URL must be the configured remote, and no URL rewrite may apply to it.
+  // Every effective fetch and push URL must be the configured remote, and each applicable rewrite must preserve that destination.
   const lines = (args: string[]) => { const out = git(args, { allowFail: true }); return out.status === 0 ? out.stdout.split("\n").map(line => line.trim()).filter(Boolean) : []; };
   const fetchUrls = lines(["remote", "get-url", "--all", "origin"]), pushUrls = lines(["remote", "get-url", "--push", "--all", "origin"]);
-  const rewrites = applicableRewrites(lines, [remote, ...fetchUrls, ...pushUrls]);
+  const rewrites = applicableRewrites(git, remote);
   const ok = originUrl !== null && rewrites.length === 0 && fetchUrls.length > 0 && pushUrls.length > 0 && [...fetchUrls, ...pushUrls].every(url => sameRemote(url, remote));
   return { ok, origin: originUrl, fetchUrls, pushUrls, ...(!ok ? { issue: originUrl === null ? "repository has no origin remote" : rewrites.length ? `git url rewrite ${rewrites[0]} applies to the vault remote; refusing because the push destination cannot be verified` : "an origin fetch or push URL does not match the configured remote; nothing was fetched or pushed" } : {}) };
 }
@@ -204,7 +236,7 @@ export function syncVault(home: string, request: { vault: string; confirm?: bool
     }
     if (!result.commit && (!hasUpstream ? false : git(["rev-list", "--count", `${upstream}..HEAD`]).stdout.trim() === "0")) return { ...result, ok: true, applied: false, pushed: false };
     const pushNow = lines(["remote", "get-url", "--push", "--all", "origin"]);
-    if (pushNow.some(url => !sameRemote(url, spec.remote!)) || applicableRewrites(lines, [spec.remote, ...fetchUrls, ...pushNow]).length) return { ...result, applied: Boolean(result.commit), pushed: false, issues: [issue("REMOTE", "push destination changed before push; nothing was pushed")] };
+    if (pushNow.some(url => !sameRemote(url, spec.remote!)) || applicableRewrites(git, spec.remote).length) return { ...result, applied: Boolean(result.commit), pushed: false, issues: [issue("REMOTE", "push destination changed before push; nothing was pushed")] };
     const push = git(["push", "--quiet", "--porcelain", "origin", `HEAD:refs/heads/${result.branch}`], { allowFail: true });
     if (push.status !== 0) return { ...result, applied: Boolean(result.commit), pushed: false, issues: [issue("PUSH", `push failed: ${push.cause}; the local commit was kept; check the network and push access for origin, then rerun vmem sync`)] };
     // Verify the remote really has our head before reporting success.
