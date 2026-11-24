@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-24
+
 - Allow Git URL rewrites that preserve the configured vault remote in `vmem doctor` and `vmem sync` (#326).
 
 ## [0.15.0] - 2026-11-23
